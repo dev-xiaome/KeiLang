@@ -5471,9 +5471,9 @@ def execmain(code, env=None, compile:str|bool=False, fromjson:bool=False):
         for arg in (sys.argv[2:] if not ((sys.argv[2] == '-j' or sys.argv[2] == '--json') and fromjson) else sys.argv[3:]):
             cmd_args.append(f'{arg}')
 
-        code += f"\nmain({[','.join(cmd_args)]})"
+        code += f"\nmain({[','.join(cmd_args)]});"
     else:
-        code += f"\nmain()"
+        code += f"\nmain();"
 
     env, ret = exec(code, env, compile, fromjson)
 
