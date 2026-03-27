@@ -5507,9 +5507,9 @@ def main():
             sys.exit(0)
 
         if len(sys.argv) >= 2:
-            if os.path.isfile(sys.argv[1]):
-                globals()['file'] = sys.argv[1]
+            globals()['file'] = sys.argv[1]
 
+            if os.path.isfile(sys.argv[1]):
                 with open(sys.argv[1], "r", encoding="utf-8") as f:
                     filecontent = f.read()
 
