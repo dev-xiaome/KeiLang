@@ -1297,7 +1297,7 @@ class KeiFunction(KeiBase):
         KeiFunction.__kei__['stack'].append(self.__name__)
 
         params     = self.func_obj['params']  # ['a', 'b', '*rest'] 或 ['a', 'b', '**kw']
-        typeassert = self.func_obj['typeassert']
+        typeassert = self.func_obj.get('typeassert', None)
 
         # ===== 1. 分离参数类型 =====
         regular_params = []      # 普通参数名

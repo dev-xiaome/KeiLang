@@ -7,7 +7,7 @@ import sys
 import os
 
 __kei__ = {}
-__version__ = "0.1"
+__version__ = "1.3-4"
 
 try:
     __import__('readline')
@@ -58,7 +58,7 @@ keywords = [
    'merge'
 ]
 
-sys.setrecursionlimit(30 if DEBUG else 1024)
+sys.setrecursionlimit(1024)
 
 def debug_print(*args, **kwargs):
     if DEBUG:
@@ -94,8 +94,8 @@ def error(info: str|object, stack: list=[], code:str|None=None, linenum=None, fi
 
     print(f"{space} ·")
 
-    # import traceback
-    # traceback.print_exc()
+    import traceback
+    traceback.print_exc()
 
     sys.exit(1)
 
@@ -1034,64 +1034,14 @@ def parse_atom(tokens: list, pos: int, in_call=False) -> tuple:
     # 处理括号、列表、字典
     if t["type"] == "symbol" and t["value"] == "(":
         pos += 1
-        saved_pos = pos
-        try:
-            expr, new_pos = parse_expr(tokens, pos, in_call)
-            if new_pos < len(tokens) and tokens[new_pos]["type"] == "symbol" and tokens[new_pos]["value"] == ")":
-                pos = new_pos + 1
-                node = expr
+        # 直接解析表达式，不要 try-except
 
-                while pos < len(tokens):
-                    if tokens[pos]["type"] == "symbol" and tokens[pos]["value"] == ".":
-                        pos += 1
-                        if pos >= len(tokens) or tokens[pos]["type"] != "name":
-                            raise KeiError("SyntaxError", "属性访问语法错误")
-                        attr = tokens[pos]["value"]
-                        pos += 1
-
-                        if pos < len(tokens) and tokens[pos]["type"] == "symbol" and tokens[pos]["value"] == "(":
-                            node = {
-                                'type': 'attr',
-                                'obj': node,
-                                'attr': attr
-                            }
-                            return parse_call_attr(node, tokens, pos, in_call)
-                        else:
-                            node = {"type": "attr", "obj": node, "attr": attr}
-                    else:
-                        break
-                return node, pos
-        except:
-            pass
-
-        pos = saved_pos
-        stmt, new_pos, _ = parse_stmt(tokens, pos, None, 0)
+        expr, new_pos = parse_expr(tokens, pos, in_call)
 
         if new_pos >= len(tokens) or tokens[new_pos]["type"] != "symbol" or tokens[new_pos]["value"] != ")":
-            raise KeiError("SyntaxError", "括号不匹配")
-
-        node = stmt
+            raise KeiError("SyntaxError", "缺少右括号")
         pos = new_pos + 1
-
-        while pos < len(tokens):
-            if tokens[pos]["type"] == "symbol" and tokens[pos]["value"] == ".":
-                pos += 1
-                if pos >= len(tokens) or tokens[pos]["type"] != "name":
-                    raise KeiError("SyntaxError", "属性访问语法错误")
-                attr = tokens[pos]["value"]
-                pos += 1
-
-                if pos < len(tokens) and tokens[pos]["type"] == "symbol" and tokens[pos]["value"] == "(":
-                    node = {
-                        'type': 'attr',
-                        'obj': node,
-                        'attr': attr
-                    }
-                    return parse_call_attr(node, tokens, pos, in_call)
-                else:
-                    node = {"type": "attr", "obj": node, "attr": attr}
-            else:
-                break
+        node = expr
 
         return node, pos
 
@@ -1253,6 +1203,8 @@ def parse_assign(tokens: list, pos: int) -> tuple:
     return node, pos
 
 def parse_term(tokens, pos, in_call=False):
+    debug_print(f"parse_term: pos={pos}, token={tokens[pos] if pos < len(tokens) else 'EOF'}")
+
     left, pos = parse_unary(tokens, pos, in_call)
 
     while pos < len(tokens):
@@ -1273,6 +1225,8 @@ def parse_term(tokens, pos, in_call=False):
 
 def parse_expr(tokens: list, pos: int, in_call=False, allow_assign=False, in_comp=False) -> tuple:
     """新的 parse_expr：正确处理优先级（兼容旧接口）"""
+
+    debug_print(f"parse_expr: pos={pos}, token={tokens[pos] if pos < len(tokens) else 'EOF'}")
 
     # 先处理三目运算符（优先级最低中的最低）
     left, pos = parse_logic(tokens, pos, in_call, allow_assign, in_comp)
@@ -1330,6 +1284,8 @@ def parse_expr(tokens: list, pos: int, in_call=False, allow_assign=False, in_com
     return left, pos
 
 def parse_logic(tokens: list, pos: int, in_call=False, allow_assign=False, in_comp=False) -> tuple:
+    debug_print(f"parse_logic: pos={pos}, token={tokens[pos] if pos < len(tokens) else 'EOF'}")
+
     """解析逻辑运算符 and/or"""
     left, pos = parse_compare(tokens, pos, in_call, allow_assign, in_comp)
 
@@ -1351,6 +1307,8 @@ def parse_logic(tokens: list, pos: int, in_call=False, allow_assign=False, in_co
 
 def parse_compare(tokens: list, pos: int, in_call=False, allow_assign=False, in_comp=False) -> tuple:
     """解析比较运算符 == != < > <= >= in is"""
+
+    debug_print(f"parse_compare: pos={pos}, token={tokens[pos] if pos < len(tokens) else 'EOF'}")
     left, pos = parse_addsub(tokens, pos, in_call, allow_assign, in_comp)
 
     while pos < len(tokens):
@@ -1371,6 +1329,9 @@ def parse_compare(tokens: list, pos: int, in_call=False, allow_assign=False, in_
 
 def parse_addsub(tokens: list, pos: int, in_call=False, allow_assign=False, in_comp=False) -> tuple:
     """解析加减法 + - 和范围 .."""
+
+    debug_print(f"parse_addsub: pos={pos}, token={tokens[pos] if pos < len(tokens) else 'EOF'}")
+
     left, pos = parse_term(tokens, pos, in_call)
 
     while pos < len(tokens):
@@ -3061,9 +3022,15 @@ def parse_unary(tokens: list, pos: int, in_call=False) -> tuple:
     # 1. 先解析前缀一元（not, -, ++, --）和原子
     left, pos = parse_unary_prefix(tokens, pos, in_call)
 
+    debug_print(f"parse_unary: pos={pos}, token={tokens[pos] if pos < len(tokens) else 'EOF'}")
+
     # 2. 处理后缀操作符（优先级从高到低）
     while pos < len(tokens):
         t = tokens[pos]
+
+        if t.get('type') == 'symbol' and t.get('value') == '(':
+            left, pos = parse_call_attr(left, tokens, pos, in_call)
+            continue
 
         # 处理 ->（类型断言，优先级最高）
         if t.get('type') == 'op' and t.get('value') == '->':
@@ -3093,6 +3060,9 @@ def parse_unary(tokens: list, pos: int, in_call=False) -> tuple:
 
 def parse_unary_prefix(tokens, pos, in_call=False):
     """处理前缀和后缀一元运算符"""
+
+    debug_print(f"parse_unary_prefix: pos={pos}, token={tokens[pos] if pos < len(tokens) else 'EOF'}")
+
     if pos >= len(tokens):
         return None, pos
 
@@ -4484,7 +4454,12 @@ def runtoken(node, env) -> tuple:
                 if obj is None:
                     raise KeiError("NameError", "对象未定义")
                 if method_name is None:
-                    raise KeiError("NameError", "方法名未定义")
+                    # 直接调用 obj
+                    if callable(obj):
+                        result = obj(*args, **kwargs)
+                        return result, False
+                    else:
+                        raise KeiError("TypeError", f"{obj} 不可调用")
 
                 # 获取并调用方法
                 method = obj[method_name] if isinstance(obj, KeiBase) else getattr(obj, method_name, None)
