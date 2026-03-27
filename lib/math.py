@@ -170,6 +170,18 @@ def isnan(x):
     x = to_float(x)
     return _math.isnan(x)
 
+def pibbp(terms):
+    if isinstance(terms, KeiFloat):
+        terms = terms.value
+
+    pi = 0
+    for k in range(terms):
+        term = 1 / (16 ** k) * (
+            4/(8*k+1) - 2/(8*k+4) - 1/(8*k+5) - 1/(8*k+6)
+        )
+        pi += term
+    return pi
+
 __all__ = [
     'pi', 'e',
     'abs', 'sqrt', 'sin', 'cos', 'tan',

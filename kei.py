@@ -2,14 +2,54 @@
 """KeiLang"""
 
 from decimal import getcontext
-from typing import Any
+from typing import List, Any, Optional
 import platform
 import copy
 import sys
 import os
 
-__kei__: dict[Any, Any] = {'stack':[], 'catch': False}
-__version__ = "1.3-5"
+if __name__ == '__main__':
+    sys.modules['kei'] = sys.modules['__main__']
+
+__version__ = "1.4"
+
+class KeiState:
+    stack: List[Any]  # 添加类型提示
+    catch: bool
+    code: Optional[List[str]]
+
+    _instance: Optional['KeiState'] = None
+
+    def __new__(cls) -> 'KeiState':
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            # 在 __new__ 中初始化属性
+            cls._instance.stack = []
+            cls._instance.catch = False
+            cls._instance.code = None
+        return cls._instance
+
+    def __init__(self) -> None:
+        # __init__ 会被多次调用，但我们已经初始化过了
+        pass
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        super().__setattr__(name, value)
+
+    def __getitem__(self, key: str) -> Any:
+        return getattr(self, key)
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        setattr(self, key, value)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return getattr(self, key, default)
+
+    def __repr__(self) -> str:
+        return f"{{'stack': {self.stack}, 'catch': {self.catch}, 'code': {self.code}}}"
+
+# 创建单例
+__kei__: KeiState = KeiState()
 
 try:
     __import__('readline')
@@ -30,8 +70,6 @@ __py_exec__ = exec
 
 import lib.stdlib as stdlib
 from lib.object import *
-
-KeiFunction.__kei__ = __kei__
 
 DEBUG = False
 
@@ -66,7 +104,7 @@ def debug_print(*args, **kwargs):
     if DEBUG:
         print("[DEBUG]", *args, **kwargs)
 
-def error(info: str|object, stack: list=[], code:str|None=None, linenum=None, filename='未知文件') -> None:
+def error(errtype: str | None, info: str, stack: list=[], code:str|None=None, linenum=None, filename='未知文件') -> None:
     linenum = linenum if linenum is not None else "??"
     space   = ' ' * len(str(linenum) if linenum is not None else "")
 
@@ -91,20 +129,20 @@ def error(info: str|object, stack: list=[], code:str|None=None, linenum=None, fi
 
     print(f"{space} | \033[31;1m" + ('^' * stdlib.kei.cnlen(KeiString(code))) + "\033[0m")
 
-    if isinstance(info, KeiError):
-        print(f"{space} | \033[36m>>>\033[0m \033[33;1m[{info.types}] {info.value}\033[0m")
+    if errtype is not None:
+        print(f"{space} | \033[36m>>>\033[0m \033[33;1m[{errtype}] {info}\033[0m")
     else:
         print(f"{space} | \033[36m>>>\033[0m \033[33;1m{info}\033[0m")
 
     print(f"{space} ·")
 
-    import traceback
-    traceback.print_exc()
+    #import traceback
+    #traceback.print_exc()
 
     sys.exit(1)
 
 def token(original: str) -> list:
-    __kei__['code'] = original.splitlines()
+    __kei__.code = original.splitlines()
 
     result = []
     lines = original.splitlines()
@@ -1807,10 +1845,7 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                 func_name = tokens[pos]['value']
                 pos += 1
 
-                if __kei__.get('stack') is None:
-                    __kei__['stack'] = []
-
-                __kei__['stack'].append(func_name)
+                __kei__.stack.append(func_name)
 
                 try:
                     # 参数列表
@@ -1878,7 +1913,8 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                             'value': expr
                         }]
 
-                        __kei__['stack'].pop()
+                        __kei__.stack.pop()
+
                         return {
                             'type': 'function',
                             'name': func_name,
@@ -1893,7 +1929,7 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                         raise KeiError("SyntaxError", "期待 {")
 
                 except:
-                    __kei__['stack'].pop()
+                    __kei__.stack.pop()
                     raise
 
                 try:
@@ -1935,7 +1971,7 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                             if new_pos == current_pos:
                                 current_pos += 1
 
-                    __kei__['stack'].pop()
+                    __kei__.stack.pop()
 
                     return {
                         'type': 'function',
@@ -2858,11 +2894,54 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
         else:
             return None, new_pos, new_line
 
-    except KeiError as e:
-        raise KeiError(e.types, e.value, globals()['code'], globals()['linenum'])
-
     except Exception as e:
-        raise KeiError(type(e).__name__, str(e), globals()['code'], globals()['linenum'])
+        # 错误类型映射
+        error_config = {
+            ZeroDivisionError: ("ZeroDivisionError", "无法对 0 进行除法"),
+            OverflowError: ("OverflowError", f"数值过大, 无法处理: {e}"),
+            FloatingPointError: ("FloatingPointError", f"浮点运算错误: {e}"),
+            ArithmeticError: ("ArithmeticError", f"运算错误: {e}"),
+            IndexError: ("IndexError", f"索引超出范围: {e}"),
+            KeyError: ("KeyError", f"键不存在: {e}"),
+            LookupError: ("LookupError", f"查找错误: {e}"),
+            TypeError: ("TypeError", f"类型错误: {e}"),
+            ValueError: ("ValueError", f"值错误: {e}"),
+            AttributeError: ("AttributeError", f"属性不存在: {e}"),
+            UnboundLocalError: ("UnboundLocalError", f"局部变量未绑定: {e}"),
+            NameError: ("NameError", f"名称未定义: {e}"),
+            FileNotFoundError: ("NotFoundError", f"文件未找到: {e}"),
+            PermissionError: ("PermissionError", f"权限不足无法访问文件: {e}"),
+            IsADirectoryError: ("IsDirError", f"预期文件但得到目录: {e}"),
+            NotADirectoryError: ("NotDirError", f"预期目录但得到文件: {e}"),
+            FileExistsError: ("FileExistsError", f"文件已存在: {e}"),
+            TimeoutError: ("TimeoutError", f"操作超时: {e}"),
+            OSError: ("OSError", f"操作系统错误: {e}"),
+            RecursionError: ("RecursionError", f"递归深度超过限制"),
+            KeiError: (e.types, e.value) if isinstance(e, KeiError) else ()
+        }
+
+        # 获取错误类型
+        for exc_type, (err_name, err_msg) in error_config.items():
+            if isinstance(e, exc_type):
+                error(
+                    err_name if err_name is not err_msg else None,  # info
+                    err_msg,
+                    __kei__.stack.copy(),  # stack - 直接用 __kei__.stack
+                    globals()['code'],
+                    globals()['linenum']+1 if globals()['linenum'] is not None else node.get('linenum', -1),
+                    globals().get('file', '未知文件')
+                )
+                sys.exit(1)
+        else:
+            error(
+                type(e).__name__,
+                str(e),
+                __kei__.stack.copy(),  # stack
+                globals()['code'],
+                globals()['linenum']+1 if globals()['linenum'] is not None else node.get('linenum', -1),
+                globals().get('file', '未知文件')
+            )
+            sys.exit(1)
 
 def parse_index(tokens: list, pos: int) -> tuple:
     """解析索引访问, 递归解析整个链条"""
@@ -5089,11 +5168,9 @@ def runtoken(node, env) -> tuple:
 
                             if is_wildcard:
                                 for name, value in module_dict.items():
-                                    print(name)
                                     env[name] = value
                             else:
                                 name = alias or full_module_name
-                                print(name)
                                 env[name] = KeiNamespace(name, module_dict)
 
                             return None, False
@@ -5235,8 +5312,6 @@ def runtoken(node, env) -> tuple:
         # ========== try/catch/finally 语句 ==========
         if node['type'] == 'try':
             try:
-                __kei__['catch'] = True
-
                 for stmt in node['body']:
                     val, is_return = runtoken(stmt, env)
                     if is_return:
@@ -5248,8 +5323,6 @@ def runtoken(node, env) -> tuple:
                         return val, True
 
             except Exception as e:
-                KeiFunction.__kei__ = __kei__
-
                 try:
                     if node['catchbody'] is not None:
                         old_e = env.get(node['var']) if node['var'] else None
@@ -5293,8 +5366,6 @@ def runtoken(node, env) -> tuple:
                                 return f_val, True
                 except:
                     raise
-                finally:
-                    __kei__['catch'] = False
 
             else:
                 if node['finallybody']:
@@ -5346,155 +5417,54 @@ def runtoken(node, env) -> tuple:
     try:
         return runtokentemp()
 
-    except ZeroDivisionError:
-        raise KeiError("ZeroDivisionError",
-                       "无法对 0 进行除法",
-                       (globals()['source']
-                       if globals()['source'] is not None
-                       else node.get('source', None)),
-                       (globals()['linenum']
-                       if globals()['linenum'] is not None
-                       else node.get('linenum', None))
-        )
-
-    except OverflowError as e:
-        raise KeiError("OverflowError",
-                       f"数值过大, 无法处理: {e}",
-                       (globals()['source'] if globals()['source'] is not None else node.get('source', None)),
-                       (globals()['linenum'] if globals()['linenum'] is not None else node.get('linenum', -1)))
-
-    except FloatingPointError as e:
-        raise KeiError("FloatingPointError",
-                       f"浮点运算错误: {e}",
-                       (globals()['source'] if globals()['source'] is not None else node.get('source', None)),
-                       (globals()['linenum'] if globals()['linenum'] is not None else node.get('linenum', -1)))
-
-    except ArithmeticError as e:
-        raise KeiError("ArithmeticError",
-                       f"运算错误: {e}",
-                       (globals()['source'] if globals()['source'] is not None else node.get('source', None)),
-                       (globals()['linenum'] if globals()['linenum'] is not None else node.get('linenum', -1)))
-
-    except IndexError as e:
-        raise KeiError("IndexError",
-                       f"索引超出范围: {e}",
-                       (globals()['source'] if globals()['source'] is not None else node.get('source', None)),
-                       (globals()['linenum'] if globals()['linenum'] is not None else node.get('linenum', -1)))
-
-    except KeyError as e:
-        raise KeiError("KeyError",
-                       f"键不存在: {e}",
-                       (globals()['source'] if globals()['source'] is not None else node.get('source', None)),
-                       (globals()['linenum'] if globals()['linenum'] is not None else node.get('linenum', -1)))
-
-    except LookupError as e:
-        raise KeiError("LookupError",
-                       f"查找错误: {e}",
-                       (globals()['source'] if globals()['source'] is not None else node.get('source', None)),
-                       (globals()['linenum'] if globals()['linenum'] is not None else node.get('linenum', -1)))
-
-    except TypeError as e:
-        raise KeiError("TypeError",
-                       f"类型错误: {e}",
-                       (globals()['source'] if globals()['source'] is not None else node.get('source', None)),
-                       (globals()['linenum'] if globals()['linenum'] is not None else node.get('linenum', -1)))
-
-    except ValueError as e:
-        raise KeiError("ValueError",
-                       f"值错误: {e}",
-                       (globals()['source'] if globals()['source'] is not None else node.get('source', None)),
-                       (globals()['linenum'] if globals()['linenum'] is not None else node.get('linenum', -1)))
-
-    except AttributeError as e:
-        raise KeiError("AttributeError",
-                       f"属性不存在: {e}",
-                       (globals()['source'] if globals()['source'] is not None else node.get('source', None)),
-                       (globals()['linenum'] if globals()['linenum'] is not None else node.get('linenum', -1)))
-
-    except UnboundLocalError as e:
-        raise KeiError("UnboundLocalError",
-                       f"局部变量未绑定: {e}",
-                       (globals()['source'] if globals()['source'] is not None else node.get('source', None)),
-                       (globals()['linenum'] if globals()['linenum'] is not None else node.get('linenum', -1)))
-
-    except NameError as e:
-        raise KeiError("NameError",
-                       f"名称未定义: {e}",
-                       (globals()['source'] if globals()['source'] is not None else node.get('source', None)),
-                       (globals()['linenum'] if globals()['linenum'] is not None else node.get('linenum', -1)))
-
-    except FileNotFoundError as e:
-        raise KeiError("NotFoundError",
-                       f"文件未找到: {e}",
-                       (globals()['source'] if globals()['source'] is not None else node.get('source', None)),
-                       (globals()['linenum'] if globals()['linenum'] is not None else node.get('linenum', -1)))
-
-    except PermissionError as e:
-        raise KeiError("PermissionError",
-                       f"权限不足无法访问文件: {e}",
-                       (globals()['source'] if globals()['source'] is not None else node.get('source', None)),
-                       (globals()['linenum'] if globals()['linenum'] is not None else node.get('linenum', -1)))
-
-    except IsADirectoryError as e:
-        raise KeiError("IsDirError",
-                       f"预期文件但得到目录: {e}",
-                       (globals()['source'] if globals()['source'] is not None else node.get('source', None)),
-                       (globals()['linenum'] if globals()['linenum'] is not None else node.get('linenum', -1)))
-
-    except NotADirectoryError as e:
-        raise KeiError("NotDirError",
-                       f"预期目录但得到文件: {e}",
-                       (globals()['source'] if globals()['source'] is not None else node.get('source', None)),
-                       (globals()['linenum'] if globals()['linenum'] is not None else node.get('linenum', -1)))
-
-    except FileExistsError as e:
-        raise KeiError("FileExistsError",
-                       f"文件已存在: {e}",
-                       (globals()['source'] if globals()['source'] is not None else node.get('source', None)),
-                       (globals()['linenum'] if globals()['linenum'] is not None else node.get('linenum', -1)))
-
-    except TimeoutError as e:
-        raise KeiError("TimeoutError",
-                       f"操作超时: {e}",
-                       (globals()['source'] if globals()['source'] is not None else node.get('source', None)),
-                       (globals()['linenum'] if globals()['linenum'] is not None else node.get('linenum', -1)))
-
-    except OSError as e:
-        raise KeiError("OSError",
-                       f"操作系统错误: {e}",
-                       (globals()['source'] if globals()['source'] is not None else node.get('source', None)),
-                       (globals()['linenum'] if globals()['linenum'] is not None else node.get('linenum', -1)))
-
-    except RecursionError:
-        raise KeiError("RecursionError",
-                       f"递归超过{f" {env['__maxrecursion__']} " if env.get('__maxrecursion__', False) else ''}限制",
-                       (globals()['source']
-                       if globals()['source'] is not None
-                       else node.get('source', None)),
-                       (globals()['linenum']
-                       if globals()['linenum'] is not None
-                       else node.get('linenum', None))
-        )
-
-    except KeiError as e:
-        if e.code is None:
-            e.code = globals()['source'] if globals()['source'] is not None else node.get('source', None)
-
-        if e.linenum == -1:
-            e.linenum = globals()['linenum'] if globals()['linenum'] is not None else node.get('linenum', -1)
-
-        raise
-
     except Exception as e:
-        raise KeiError(type(e).__name__,
-                       str(e),
-                       (globals()['source']
-                       if globals()['source'] is not None
-                       else node.get('source', None)),
-                       (globals()['linenum']
-                       if globals()['linenum'] is not None
-                       else node.get('linenum', None))
-        )
+        # 错误类型映射
+        error_config = {
+            ZeroDivisionError: ("ZeroDivisionError", "无法对 0 进行除法"),
+            OverflowError: ("OverflowError", f"数值过大, 无法处理: {e}"),
+            FloatingPointError: ("FloatingPointError", f"浮点运算错误: {e}"),
+            ArithmeticError: ("ArithmeticError", f"运算错误: {e}"),
+            IndexError: ("IndexError", f"索引超出范围: {e}"),
+            KeyError: ("KeyError", f"键不存在: {e}"),
+            LookupError: ("LookupError", f"查找错误: {e}"),
+            TypeError: ("TypeError", f"类型错误: {e}"),
+            ValueError: ("ValueError", f"值错误: {e}"),
+            AttributeError: ("AttributeError", f"属性不存在: {e}"),
+            UnboundLocalError: ("UnboundLocalError", f"局部变量未绑定: {e}"),
+            NameError: ("NameError", f"名称未定义: {e}"),
+            FileNotFoundError: ("NotFoundError", f"文件未找到: {e}"),
+            PermissionError: ("PermissionError", f"权限不足无法访问文件: {e}"),
+            IsADirectoryError: ("IsDirError", f"预期文件但得到目录: {e}"),
+            NotADirectoryError: ("NotDirError", f"预期目录但得到文件: {e}"),
+            FileExistsError: ("FileExistsError", f"文件已存在: {e}"),
+            TimeoutError: ("TimeoutError", f"操作超时: {e}"),
+            OSError: ("OSError", f"操作系统错误: {e}"),
+            RecursionError: ("RecursionError", f"递归深度超过限制"),
+            KeiError: (e.types, e.value) if isinstance(e, KeiError) else ()
+        }
+
+        # 获取错误类型
+        for exc_type, (err_name, err_msg) in error_config.items():
+            if isinstance(e, exc_type):
+                error(
+                    err_name if err_name is not err_msg else None,  # info
+                    err_msg,
+                    __kei__.stack.copy(),  # stack - 直接用 __kei__.stack
+                    globals()['source'] if globals()['source'] is not None else node.get('source', None),
+                    globals()['linenum']+1 if globals()['linenum'] is not None else node.get('linenum', -1),
+                    globals().get('file', '未知文件')
+                )
+                sys.exit(1)
+        else:
+            error(
+                type(e).__name__,
+                str(e),
+                __kei__.stack.copy(),  # stack
+                globals()['source'] if globals()['source'] is not None else node.get('source', None),
+                globals()['linenum']+1 if globals()['linenum'] is not None else node.get('linenum', -1),
+                globals().get('file', '未知文件')
+            )
+            sys.exit(1)
 
 def exec(code, env=None):
     if isinstance(code, KeiString):
@@ -5592,54 +5562,6 @@ def main():
 
     except KeyboardInterrupt:
         exit()
-    except ZeroDivisionError as e:
-        error(f"除数不能为零: {e}")
-    except OverflowError as e:
-        error(f"数值过大, 无法处理: {e}")
-    except FloatingPointError as e:
-        error(f"浮点运算错误: {e}")
-    except ArithmeticError as e:
-        error(f"运算错误: {e}")
-    except IndexError as e:
-        error(f"索引超出范围: {e}")
-    except KeyError as e:
-        error(f"键不存在: {e}")
-    except LookupError as e:
-        error(f"查找错误: {e}")
-    except TypeError as e:
-        error(f"类型错误: {e}")
-    except ValueError as e:
-        error(f"值错误: {e}")
-    except AttributeError as e:
-        error(f"属性不存在: {e}")
-    except UnboundLocalError as e:
-        error(f"局部变量未绑定: {e}")
-    except NameError as e:
-        error(f"名称未定义: {e}")
-    except FileNotFoundError as e:
-        error(f"文件未找到: {e}")
-    except PermissionError as e:
-        error(f"权限不足无法访问文件: {e}")
-    except IsADirectoryError as e:
-        error(f"预期文件但找到目录: {e}")
-    except NotADirectoryError as e:
-        error(f"预期目录但找到文件: {e}")
-    except FileExistsError as e:
-        error(f"文件已存在: {e}")
-    except TimeoutError as e:
-        error(f"操作超时: {e}")
-    except OSError as e:
-        error(f"操作系统错误: {e}")
-    except RecursionError as e:
-        error(f"递归深度超过限制: {e}")
-    except KeiError as e:
-        if not __kei__.get('stack') is None:
-            error(e, stack=__kei__['stack'], code=e.code, linenum=e.linenum+1, filename=globals()['file'])
-        else:
-            error(e, code=e.code, linenum=e.linenum+1, filename=globals()['file'])
-
-    except Exception as e:
-        error(f"{e}")
 
 if __name__ == "__main__":
     sys.exit(main())

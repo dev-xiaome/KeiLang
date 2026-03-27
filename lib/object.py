@@ -1277,8 +1277,6 @@ class KeiDict(KeiBase):
 # ========== 函数类型 ==========
 
 class KeiFunction(KeiBase):
-    __kei__ = {}
-
     def __init__(self, func_obj: dict, env: dict):
         super().__init__("function")
         self.func_obj = func_obj
@@ -1290,12 +1288,9 @@ class KeiFunction(KeiBase):
 
     def __call__(self, *args, **kwargs):
         """调用 KeiLang 函数"""
-        from kei import runtoken
+        from kei import runtoken, __kei__
 
-        if KeiFunction.__kei__.get('stack') is None:
-            KeiFunction.__kei__['stack'] = []
-
-        KeiFunction.__kei__['stack'].append(self.__name__)
+        __kei__.stack.append(self.__name__)
 
         params     = self.func_obj['params']  # ['a', 'b', '*rest'] 或 ['a', 'b', '**kw']
         typeassert = self.func_obj.get('typeassert', None)
@@ -1418,13 +1413,12 @@ class KeiFunction(KeiBase):
                     if not (isinstance(result, hint) or (isinstance(result, type) and issubclass(result, hint))):
                         raise KeiError("TypeError", f"类型错误: 期望 {content(hint)}, 得到 {content(type(result))}")
 
-            print(id(KeiFunction.__kei__))
-            if not KeiFunction.__kei__['catch']:
-                KeiFunction.__kei__['stack'].pop()
             return result
 
         except:
             raise
+        finally:
+            __kei__.stack.pop()
 
     def __repr__(self) -> str:
         return f"<function {self.__name__}>"

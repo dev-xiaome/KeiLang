@@ -2,7 +2,6 @@
 
 from lib.object import *
 from lib.kei2py import *
-import kei as k
 
 env = {}
 
@@ -658,13 +657,15 @@ class kei:
 
     @s
     def exec(codes):
-        new_env = k.exec(codes, kei.getenv())[0]
+        from kei import exec as keiexec
+        new_env = keiexec(codes, kei.getenv())[0]
 
         return KeiNamespace("__exec__", new_env)
 
     @s
     def eval(codes):
-        ret = k.exec(codes, kei.getenv())[1]
+        from kei import exec as keiexec
+        ret = keiexec(codes, kei.getenv())[1]
 
         return ret
 
