@@ -3,7 +3,7 @@
 import copy
 import math
 from typing import Any, Dict, Union, Callable
-from decimal import Decimal, getcontext
+from decimal import Decimal, InvalidOperation
 
 # ========== 基础值类型 ==========
 
@@ -287,10 +287,8 @@ class KeiInt(KeiBase):
         return f"{self.value}"
 
 class KeiFloat(KeiBase):
-    def __init__(self, _value, prec=28):
+    def __init__(self, _value):
         super().__init__("float")
-
-        getcontext().prec = prec
 
         # 统一转成 Decimal
         if isinstance(_value, KeiInt):
@@ -354,7 +352,10 @@ class KeiFloat(KeiBase):
             d = int(digits)
         # 保留 d 位小数
         quant = Decimal('1.' + '0' * d)
-        return KeiFloat(self.value.quantize(quant))
+        try:
+            return KeiFloat(self.value.quantize(quant))
+        except InvalidOperation:
+            raise KeiError("ArithmeticError", "浮点数精度错误: 精度不足")
 
     def places(self):
         """返回小数位数"""
@@ -1381,42 +1382,49 @@ class KeiFunction(KeiBase):
 
         # ===== 7. 执行函数体 =====
 
-        result = null
-        for stmt in self.func_obj['body']:
-            val, is_return = runtoken(stmt, new_env)
-            if is_return:
-                result = val
-                break
+        try:
+            result = null
+            for stmt in self.func_obj['body']:
+                val, is_return = runtoken(stmt, new_env)
+                if is_return:
+                    result = val
+                    break
 
-        if bool(new_env.get('__typeassert__', False)) and typeassert is not None:
-            from kei import runtoken
+            if bool(new_env.get('__typeassert__', False)) and typeassert is not None:
+                from kei import runtoken
 
-            hint = runtoken(typeassert, new_env)[0]
+                hint = runtoken(typeassert, new_env)[0]
 
-            if isinstance(hint, KeiList):
-                for h in hint.items:
-                    if type(result) is KeiInt and h is KeiFloat:
-                        break
+                if isinstance(hint, KeiList):
+                    for h in hint.items:
+                        if type(result) is KeiInt and h is KeiFloat:
+                            break
 
-                    if not isinstance(h, type):
-                        h = type(h)
+                        if not isinstance(h, type):
+                            h = type(h)
 
-                    if (isinstance(result, h) or (isinstance(result, type) and issubclass(result, h))):
-                        break
+                        if (isinstance(result, h) or (isinstance(result, type) and issubclass(result, h))):
+                            break
+                    else:
+                        raise KeiError("TypeError", f"类型错误: 期望 {content(hint)}, 得到 {content(type(result))}")
+
                 else:
-                    raise KeiError("TypeError", f"类型错误: 期望 {content(hint)}, 得到 {content(type(result))}")
+                    if type(result) is KeiInt and hint is KeiFloat:
+                        return result
 
-            else:
-                if type(result) is KeiInt and hint is KeiFloat:
-                    return result
+                    if not isinstance(hint, type):
+                        hint = type(hint)
 
-                if not isinstance(hint, type):
-                    hint = type(hint)
+                    if not (isinstance(result, hint) or (isinstance(result, type) and issubclass(result, hint))):
+                        raise KeiError("TypeError", f"类型错误: 期望 {content(hint)}, 得到 {content(type(result))}")
 
-                if not (isinstance(result, hint) or (isinstance(result, type) and issubclass(result, hint))):
-                    raise KeiError("TypeError", f"类型错误: 期望 {content(hint)}, 得到 {content(type(result))}")
+            print(id(KeiFunction.__kei__))
+            if not KeiFunction.__kei__['catch']:
+                KeiFunction.__kei__['stack'].pop()
+            return result
 
-        return result
+        except:
+            raise
 
     def __repr__(self) -> str:
         return f"<function {self.__name__}>"
@@ -2076,6 +2084,7 @@ def content(obj, _seen=None, _depth=0, _in_container=False):
         if isinstance(obj, KeiNamespace): return f"<namespace {obj.__name__}>"
         if isinstance(obj, (KeiMethod, KeiBoundMethod)): return f"<method {obj.__name__}>"
         if isinstance(obj, KeiRef): return f"{obj}"
+        if isinstance(obj, KeiError): return f"{obj.value}"
 
         # ===== 处理 Kei 类型本身（类对象） =====
         if isinstance(obj, type):

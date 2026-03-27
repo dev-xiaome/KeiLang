@@ -1,13 +1,15 @@
 #!/usr/bin/env python
 """KeiLang"""
 
+from decimal import getcontext
+from typing import Any
 import platform
 import copy
 import sys
 import os
 
-__kei__ = {}
-__version__ = "1.3-4"
+__kei__: dict[Any, Any] = {'stack':[], 'catch': False}
+__version__ = "1.3-5"
 
 try:
     __import__('readline')
@@ -75,8 +77,10 @@ def error(info: str|object, stack: list=[], code:str|None=None, linenum=None, fi
     for s in stack:
         print(f"{space} | in \033[36;1m{s}\033[0m")
 
-    if stack:
-        print(f"{space} |")
+    if not stack:
+        print(f"{space} | in \033[36;1mglobal\033[0m")
+
+    print(f"{space} |")
 
     if code is None:
         code = "未知行"
@@ -1034,14 +1038,41 @@ def parse_atom(tokens: list, pos: int, in_call=False) -> tuple:
     # 处理括号、列表、字典
     if t["type"] == "symbol" and t["value"] == "(":
         pos += 1
-        # 直接解析表达式，不要 try-except
-
         expr, new_pos = parse_expr(tokens, pos, in_call)
-
         if new_pos >= len(tokens) or tokens[new_pos]["type"] != "symbol" or tokens[new_pos]["value"] != ")":
             raise KeiError("SyntaxError", "缺少右括号")
         pos = new_pos + 1
         node = expr
+
+        # 🔥 关键：处理后缀操作（属性访问、方法调用、索引）
+        while pos < len(tokens):
+            # 属性访问 .attr
+            if tokens[pos]["type"] == "symbol" and tokens[pos]["value"] == ".":
+                pos += 1
+                if pos >= len(tokens) or tokens[pos]["type"] != "name":
+                    raise KeiError("SyntaxError", "属性访问语法错误")
+                attr = tokens[pos]["value"]
+                pos += 1
+
+                if pos < len(tokens) and tokens[pos]["type"] == "symbol" and tokens[pos]["value"] == "(":
+                    node = {'type': 'attr', 'obj': node, 'attr': attr}
+                    node, pos = parse_call_attr(node, tokens, pos, in_call)
+                else:
+                    node = {"type": "attr", "obj": node, "attr": attr}
+                continue
+
+            # 函数调用 ()
+            if tokens[pos]["type"] == "symbol" and tokens[pos]["value"] == "(":
+                node, pos = parse_call_attr(node, tokens, pos, in_call)
+                continue
+
+            # 索引访问 []
+            if tokens[pos]["type"] == "symbol" and tokens[pos]["value"] == "[":
+                node, new_pos = parse_index_with_obj(node, tokens, pos)
+                pos = new_pos
+                continue
+
+            break
 
         return node, pos
 
@@ -3368,6 +3399,19 @@ def runtoken(node, env) -> tuple:
             else:
                 raise KeiError("ValueError", "__maxrecursion__ 必须是整数")
 
+        if env.get("__precision__"):
+            if type(env["__precision__"]) is KeiInt:
+                __precision__ = env["__precision__"].value
+
+                if __precision__ > 0:
+                    getcontext().prec = __precision__
+                elif __precision__ == 0:
+                    getcontext().prec = 28
+                else:
+                    raise KeiError("ValueError", "__precision__ 不能是负数")
+            else:
+                raise KeiError("ValueError", "__precision__ 必须是整数")
+
         if node is None:
             return None, False
 
@@ -3376,29 +3420,30 @@ def runtoken(node, env) -> tuple:
             def temp() -> tuple:
                 if node['type'] == 'null':
                     return null, False
+
                 if node['type'] == 'int':
                     return KeiInt(int(node['value'])), False
+
                 if node['type'] == 'float':
-                    prec = env.get("__precision__", KeiInt(28))
-                    if not isinstance(prec, KeiInt):
-                        prec = KeiInt(28)
-                    if prec.value <= 0:
-                        raise KeiError("ValueError", "浮点数精度不能小于或等于 0")
-                    return KeiFloat(node['value'], prec.value), False
+                    return KeiFloat(node['value']), False
+
                 if node['type'] == 'str':
                     if node.get('mark') == 'f':
                         result = process_fstring(node['value'], env)
                         return KeiString(result), False
                     else:
                         return KeiString(node['value']), False
+
                 if node['type'] == 'bool':
                     return KeiBool(node['value'] == 'true'), False
+
                 if node['type'] == 'list':
                     elements = []
                     for elem in node['elements']:
                         val, _ = runtoken(elem, env)
                         elements.append(val)
                     return KeiList(elements), False
+
                 if node['type'] == 'dict':
                     pairs = {}
                     for pair in node['pairs']:
@@ -5190,6 +5235,8 @@ def runtoken(node, env) -> tuple:
         # ========== try/catch/finally 语句 ==========
         if node['type'] == 'try':
             try:
+                __kei__['catch'] = True
+
                 for stmt in node['body']:
                     val, is_return = runtoken(stmt, env)
                     if is_return:
@@ -5201,46 +5248,54 @@ def runtoken(node, env) -> tuple:
                         return val, True
 
             except Exception as e:
-                if node['catchbody'] is not None:
-                    old_e = env.get(node['var']) if node['var'] else None
-                    if isinstance(e, KeiError):
-                        err_obj = Error(e.types, e.value)
-                    else:
-                        err_obj = Error(type(e).__name__, str(e))
+                KeiFunction.__kei__ = __kei__
 
-                    if node['var']:
-                        env[node['var']] = err_obj
-
-                    env.setdefault('__error__', []).append(err_obj)
-
-                    for stmt in node['catchbody']:
-                        val, is_return = runtoken(stmt, env)
-                        if is_return:
-                            if node['var']:
-                                if old_e is not None:
-                                    env[node['var']] = old_e
-                                else:
-                                    del env[node['var']]
-                            if node['finallybody']:
-                                for f_stmt in node['finallybody']:
-                                    f_val, f_is_return = runtoken(f_stmt, env)
-                                    if f_is_return:
-                                        return f_val, True
-                            return val, True
-
-                    env['__error__'].pop()
-
-                    if node['var']:
-                        if old_e is not None:
-                            env[node['var']] = old_e
+                try:
+                    if node['catchbody'] is not None:
+                        old_e = env.get(node['var']) if node['var'] else None
+                        if isinstance(e, KeiError):
+                            err_obj = Error(e.types, e.value)
                         else:
-                            del env[node['var']]
+                            err_obj = Error(type(e).__name__, str(e))
 
-                if node['finallybody']:
-                    for f_stmt in node['finallybody']:
-                        f_val, f_is_return = runtoken(f_stmt, env)
-                        if f_is_return:
-                            return f_val, True
+                        if node['var']:
+                            env[node['var']] = err_obj
+
+                        env.setdefault('__error__', []).append(err_obj)
+
+                        for stmt in node['catchbody']:
+                            val, is_return = runtoken(stmt, env)
+                            if is_return:
+                                if node['var']:
+                                    if old_e is not None:
+                                        env[node['var']] = old_e
+                                    else:
+                                        del env[node['var']]
+                                if node['finallybody']:
+                                    for f_stmt in node['finallybody']:
+                                        f_val, f_is_return = runtoken(f_stmt, env)
+                                        if f_is_return:
+                                            return f_val, True
+                                return val, True
+
+                        env['__error__'].pop()
+
+                        if node['var']:
+                            if old_e is not None:
+                                env[node['var']] = old_e
+                            else:
+                                del env[node['var']]
+
+                    if node['finallybody']:
+                        for f_stmt in node['finallybody']:
+                            f_val, f_is_return = runtoken(f_stmt, env)
+                            if f_is_return:
+                                return f_val, True
+                except:
+                    raise
+                finally:
+                    __kei__['catch'] = False
+
             else:
                 if node['finallybody']:
                     for f_stmt in node['finallybody']:
