@@ -3625,9 +3625,13 @@ def runtoken(node, env) -> tuple:
         # ========== 后缀运算 ++/-- ==========
         if node['type'] == 'postfix':
             val, flag = runtoken(node['expr'], env)
+            if flag:
+                return val, True
+
             if node['op'] == '++':
                 if isinstance(val, (KeiInt, KeiFloat)):
                     new_val = val.value + 1
+
                     if node['expr']['type'] == 'name':
                         if isinstance(val, KeiInt):
                             env[node['expr']['value']] = KeiInt(new_val)
@@ -3641,12 +3645,19 @@ def runtoken(node, env) -> tuple:
                                 obj[attr] = KeiInt(new_val)
                             else:
                                 obj[attr] = KeiFloat(new_val)
-                    return val, flag
+
+                    # 返回新值！
+                    if isinstance(val, KeiInt):
+                        return KeiInt(new_val), flag
+                    else:
+                        return KeiFloat(new_val), flag
                 else:
                     raise KeiError("TypeError", f"无法对 {val} 进行 ++ 运算")
+
             elif node['op'] == '--':
                 if isinstance(val, (KeiInt, KeiFloat)):
                     new_val = val.value - 1
+
                     if node['expr']['type'] == 'name':
                         if isinstance(val, KeiInt):
                             env[node['expr']['value']] = KeiInt(new_val)
@@ -3660,10 +3671,14 @@ def runtoken(node, env) -> tuple:
                                 obj[attr] = KeiInt(new_val)
                             else:
                                 obj[attr] = KeiFloat(new_val)
-                    return val, flag
+
+                    # 返回新值！
+                    if isinstance(val, KeiInt):
+                        return KeiInt(new_val), flag
+                    else:
+                        return KeiFloat(new_val), flag
                 else:
                     raise KeiError("TypeError", f"无法对 {type(val)} 进行 -- 运算")
-
         # ========== 复合赋值处理 ==========
         if node['type'] == 'compound_assign':
             def compound_assign():

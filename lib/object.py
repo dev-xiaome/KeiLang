@@ -2051,14 +2051,14 @@ def content(obj, _seen=None, _depth=0, _in_container=False):
         if isinstance(obj, KeiBool): return "true" if obj.value else "false"
 
         if isinstance(obj, KeiList):
-            items = [content(item, _seen, _depth + 1, True) for item in obj.items]
+            items = [content(item, _seen, _depth + 1, _in_container=True) for item in obj.items]
             return "[" + ", ".join(items) + "]"
 
         if isinstance(obj, KeiDict):
             items = []
             for k, v in obj.items.items():
-                k_str = content(k, _seen, _depth + 1, True)
-                v_str = content(v, _seen, _depth + 1, True)
+                k_str = content(k, _seen, _depth + 1, _in_container=True)
+                v_str = content(v, _seen, _depth + 1, _in_container=True)
                 items.append(f"{k_str}: {v_str}")
             return "{" + ", ".join(items) + "}"
 
@@ -2131,13 +2131,12 @@ def content(obj, _seen=None, _depth=0, _in_container=False):
         if isinstance(obj, str):
             # Python 字符串：在容器里加引号
             if _in_container:
-                if '"' in obj:
-                    if "'" in obj:
-                        obj = obj.replace("'", "\\'")
+                if "'" in obj:
+                    obj = obj.replace("'", "\\'")
 
-                        return f"'{obj}'"
-                    else:
-                        return f'"{obj}"'
+                    return f"'{obj}'"
+                else:
+                    return f'"{obj}"'
 
             return obj
 
