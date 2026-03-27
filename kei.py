@@ -20,7 +20,7 @@ paths = path.split(os.pathsep)
 
 modulenames = []
 
-for f in os.listdir(os.path.join(keidir, 'lib')):
+for f in os.listdir(os.path.join('/usr/local/lib/keilang')):
     if os.path.isfile(f) and f.endswith('.py'):
         modulenames.append(f)
 

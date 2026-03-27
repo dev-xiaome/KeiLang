@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 # repl.py - KeiLang REPL
 
-import sys
 import os
 import atexit
 

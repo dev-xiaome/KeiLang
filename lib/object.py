@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 
-import sys
 import copy
 import math
 from typing import Any, Dict, Union, Callable
