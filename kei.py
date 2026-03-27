@@ -24,6 +24,9 @@ for f in os.listdir(os.path.join(keidir, 'lib')):
     if os.path.isfile(f) and f.endswith('.py'):
         modulenames.append(f)
 
+sys.path.append('/usr/local/lib/keilang')
+paths.append('/usr/local/lib/keilang')
+
 __py_exec__ = exec
 
 import lib.stdlib as stdlib
