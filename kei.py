@@ -5466,7 +5466,7 @@ def runtoken(node, env) -> tuple:
                        else node.get('linenum', None))
         )
 
-def exec(code, env=None, compile:str|bool=False, fromjson:bool=False):
+def exec(code, env=None):
     if isinstance(code, KeiString):
         code = code.value
 
@@ -5486,36 +5486,25 @@ def exec(code, env=None, compile:str|bool=False, fromjson:bool=False):
     for name, func in stdlib.func.items():
         env[name] = func
 
-    if not fromjson:
-        tokens = token(code)
-        tokens = ast(tokens)
-    else:
-        import json
-        tokens = json.loads(code)
+    tokens = token(code)
+    tokens = ast(tokens)
 
-    if not compile:
-        for node in tokens:
-            ret = runtoken(node, env)[0]
+    for node in tokens:
+        ret = runtoken(node, env)[0]
 
-        return env, ret
+    return env, ret
 
-    else:
-        import json
-        json.dump(tokens, open(compile, "w"), indent=4, ensure_ascii=False)
-
-        return {}, KeiInt(0)
-
-def execmain(code, env=None, compile:str|bool=False, fromjson:bool=False):
+def execmain(code, env=None):
     if len(sys.argv) >= 3:
         cmd_args = []
-        for arg in (sys.argv[2:] if not ((sys.argv[2] == '-j' or sys.argv[2] == '--json') and fromjson) else sys.argv[3:]):
+        for arg in sys.argv[2:]:
             cmd_args.append(f'{arg}')
 
         code += f"\nmain({[','.join(cmd_args)]});"
     else:
         code += f"\nmain([]);"
 
-    env, ret = exec(code, env, compile, fromjson)
+    env, ret = exec(code, env)
 
     if compile:
         return 0
@@ -5542,7 +5531,7 @@ def main():
             print()
             print("\033[1m参数:\033[0m")
             print("  \033[33m-h/--help\033[0m  - \033[36m显示此帮助\033[0m")
-            print("  \033[33m-c\033[0m         - \033[36m将AST编译为json\033[0m")
+            print("  \033[33m-c/--compile\033[0m         - \033[36m打印AST\033[0m")
             print()
             sys.exit(0)
 
@@ -5558,13 +5547,11 @@ def main():
                     # print("========== AST ==========") #DEBUG
                     # print()                            #DEBUG
 
-                    if not ("-c" in sys.argv or "--compile" in sys.argv):
-                        execmain(filecontent, fromjson=True if (sys.argv[1].endswith(".json") or "-j" in sys.argv or "--json" in sys.argv) else False)
+                    if "-c" or "--compile" in sys.argv:
+                        import json
+                        print(json.dumps(ast(token(filecontent)), indent=4, ensure_ascii=False))
                     else:
-                        if len(sys.argv) >= 4:
-                            execmain(filecontent, compile=sys.argv[2])
-                        else:
-                            print("格式: kei <输入文件> <输出文件> -c")
+                        execmain(filecontent)
             else:
                 raise KeiError("NotFoundError", f"未找到 {sys.argv[1]}")
 
