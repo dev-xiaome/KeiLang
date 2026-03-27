@@ -94,8 +94,8 @@ def error(info: str|object, stack: list=[], code:str|None=None, linenum=None, fi
 
     print(f"{space} ·")
 
-    import traceback
-    traceback.print_exc()
+    # import traceback
+    # traceback.print_exc()
 
     sys.exit(1)
 
@@ -5459,11 +5459,13 @@ def exec(code, env=None, compile:str|bool=False, fromjson:bool=False):
         for node in tokens:
             ret = runtoken(node, env)[0]
 
+        return env, ret
+
     else:
         import json
         json.dump(tokens, open(compile, "w"), indent=4, ensure_ascii=False)
 
-    return env, ret
+        return {}, KeiInt(0)
 
 def execmain(code, env=None, compile:str|bool=False, fromjson:bool=False):
     if len(sys.argv) >= 3:
