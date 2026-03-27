@@ -5547,11 +5547,12 @@ def main():
                     # print("========== AST ==========") #DEBUG
                     # print()                            #DEBUG
 
-                    if "-c" or "--compile" in sys.argv:
+                    if "-c" in sys.argv or "--compile" in sys.argv:
                         import json
                         print(json.dumps(ast(token(filecontent)), indent=4, ensure_ascii=False))
                     else:
                         execmain(filecontent)
+
             else:
                 raise KeiError("NotFoundError", f"未找到 {sys.argv[1]}")
 
