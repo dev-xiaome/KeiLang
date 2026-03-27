@@ -11,7 +11,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.4"
+__version__ = "1.4-1"
 
 class KeiState:
     stack: List[Any]  # 添加类型提示
@@ -826,9 +826,7 @@ def parse_call(name: str, tokens: list, pos: int) -> tuple:
             pos += 1
             break
         else:
-            if pos >= len(tokens):
-                raise KeiError("SyntaxError", "缺少右括号 ')'")
-            raise KeiError("SyntaxError", f"参数列表后有多余的 token: {tokens[pos]['value']}")
+            break
 
     return {
         'type': 'call',
@@ -3189,7 +3187,6 @@ def parse_unary_prefix(tokens, pos, in_call=False):
     if t["type"] == "op" and t["value"] == "-":
         pos += 1
         expr, pos = parse_unary_prefix(tokens, pos, in_call)
-        # 如果是数字字面量，直接取负值优化
         if expr and expr.get('type') in ('int', 'float'):
             if expr['type'] == 'int':
                 expr['value'] = str(-int(expr['value']))
@@ -3216,6 +3213,33 @@ def parse_unary_prefix(tokens, pos, in_call=False):
             op = t['value']
             pos += 1
             expr = {"type": "postfix", "op": op, "expr": expr}
+            continue
+
+        # 🔥 新增：处理 . 属性访问
+        if t.get('type') == 'symbol' and t.get('value') == '.':
+            pos += 1
+            if pos >= len(tokens) or tokens[pos]['type'] != 'name':
+                raise KeiError("SyntaxError", "属性访问语法错误")
+            attr = tokens[pos]['value']
+            pos += 1
+
+            # 如果是方法调用
+            if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '(':
+                expr = {'type': 'attr', 'obj': expr, 'attr': attr}
+                expr, pos = parse_call_attr(expr, tokens, pos, in_call)
+            else:
+                expr = {'type': 'attr', 'obj': expr, 'attr': attr}
+            continue
+
+        # 🔥 新增：处理 ( 函数调用
+        if t.get('type') == 'symbol' and t.get('value') == '(':
+            expr, pos = parse_call_attr(expr, tokens, pos, in_call)
+            continue
+
+        # 🔥 新增：处理 [ 索引访问
+        if t.get('type') == 'symbol' and t.get('value') == '[':
+            expr, new_pos = parse_index_with_obj(expr, tokens, pos)
+            pos = new_pos
             continue
 
         break
