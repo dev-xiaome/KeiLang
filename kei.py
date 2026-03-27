@@ -20,12 +20,9 @@ paths = path.split(os.pathsep)
 
 modulenames = []
 
-for f in os.listdir(os.path.join('/usr/local/lib/keilang')):
+for f in os.listdir(os.path.join(keidir, 'lib')):
     if os.path.isfile(f) and f.endswith('.py'):
         modulenames.append(f)
-
-sys.path.append('/usr/local/lib/keilang')
-paths.append('/usr/local/lib/keilang')
 
 __py_exec__ = exec
 
