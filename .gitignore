@@ -3,7 +3,7 @@
 !.gitignore
 !kei.py
 !repl.py
-!README
+!README.md
 !LICENSE
 !lib/
 !lib/*.py
