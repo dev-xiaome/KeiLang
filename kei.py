@@ -3679,6 +3679,7 @@ def runtoken(node, env) -> tuple:
                         return KeiFloat(new_val), flag
                 else:
                     raise KeiError("TypeError", f"无法对 {type(val)} 进行 -- 运算")
+
         # ========== 复合赋值处理 ==========
         if node['type'] == 'compound_assign':
             def compound_assign():

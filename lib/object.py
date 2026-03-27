@@ -201,20 +201,26 @@ class KeiInt(KeiBase):
     def sqrt(self):
         return KeiFloat(math.sqrt(self.value))
 
-    # 运算符重载
+    # 🔥 修复后的运算符重载 🔥
     def __add__(self, other):
-        if isinstance(other, (KeiInt, KeiFloat)):
+        if isinstance(other, KeiInt):
             return KeiInt(self.value + other.value)
+        if isinstance(other, KeiFloat):
+            return KeiFloat(self.value + other.value)
         return KeiInt(self.value + other)
 
     def __sub__(self, other):
-        if isinstance(other, (KeiInt, KeiFloat)):
+        if isinstance(other, KeiInt):
             return KeiInt(self.value - other.value)
+        if isinstance(other, KeiFloat):
+            return KeiFloat(self.value - other.value)
         return KeiInt(self.value - other)
 
     def __mul__(self, other):
-        if isinstance(other, (KeiInt, KeiFloat)):
+        if isinstance(other, KeiInt):
             return KeiInt(self.value * other.value)
+        if isinstance(other, KeiFloat):
+            return KeiFloat(self.value * other.value)
         return KeiInt(self.value * other)
 
     def __truediv__(self, other):
@@ -236,11 +242,13 @@ class KeiInt(KeiBase):
         return KeiInt(self.value % other)
 
     def __pow__(self, other):
-        if isinstance(other, (KeiInt, KeiFloat)):
+        if isinstance(other, KeiInt):
             return KeiInt(self.value ** other.value)
+        if isinstance(other, KeiFloat):
+            return KeiFloat(self.value ** other.value)
         return KeiInt(self.value ** other)
 
-    # 比较运算符
+    # 比较运算符（不用改，已经正确）
     def __eq__(self, other):
         if isinstance(other, KeiInt):
             return true if self.value == other.value else false
