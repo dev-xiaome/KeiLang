@@ -42,3 +42,14 @@ fn main() {
     print(a -> string); # 报错, 因为42不是string对象
 };
 ```
+## **安装**
+### 克隆仓库
+#### $ git clone https://github.com/dev-xiaome/KeiLang.git
+#### $ cd KeiLang
+#### $ python3 kei.py --help
+### 可选: 添加path
+#### 在.bashrc中添加(或你的shell配置文件中)
+#### export PATH="$PATH:/path/to/kei/" # bash/zsh
+#### set -gx PATH $PATH /path/to/kei/ # fish
+## **使用**
+### $ kei.py --help # 不需要python kei.py!
