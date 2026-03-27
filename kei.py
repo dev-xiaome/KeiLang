@@ -3091,34 +3091,56 @@ def parse_unary(tokens: list, pos: int, in_call=False) -> tuple:
 
     return left, pos
 
-def parse_unary_prefix(tokens: list, pos: int, in_call=False) -> tuple:
-    """旧的 parse_unary：处理前缀一元运算符"""
+def parse_unary_prefix(tokens, pos, in_call=False):
+    """处理前缀和后缀一元运算符"""
     if pos >= len(tokens):
         return None, pos
 
     t = tokens[pos]
 
-    # 处理前缀 ++
-    if t["type"] == "op" and t["value"] in {"++", "--"}:
-        op = t["value"]
-        pos += 1
-        expr, pos = parse_unary_prefix(tokens, pos, in_call)
-        return {"type": "prefix", "op": op, "expr": expr}, pos
-
-    # 处理 not
+    # ========== 处理前缀运算符 ==========
+    # 前缀 not
     if t["type"] == "op" and t["value"] == "not":
         pos += 1
         expr, pos = parse_unary_prefix(tokens, pos, in_call)
         return {"type": "unary", "op": "not", "expr": expr}, pos
 
-    # 处理一元负号
+    # 前缀负号
     if t["type"] == "op" and t["value"] == "-":
         pos += 1
         expr, pos = parse_unary_prefix(tokens, pos, in_call)
+        # 如果是数字字面量，直接取负值优化
+        if expr and expr.get('type') in ('int', 'float'):
+            if expr['type'] == 'int':
+                expr['value'] = str(-int(expr['value']))
+            else:
+                expr['value'] = str(-float(expr['value']))
+            return expr, pos
         return {"type": "unary", "op": "-", "expr": expr}, pos
 
-    # 原子
-    return parse_atom(tokens, pos, in_call)
+    # 前缀 +
+    if t["type"] == "op" and t["value"] == "+":
+        pos += 1
+        expr, pos = parse_unary_prefix(tokens, pos, in_call)
+        return expr, pos  # + 直接忽略
+
+    # ========== 解析原子 ==========
+    expr, pos = parse_atom(tokens, pos, in_call)
+
+    # ========== 处理后缀运算符 ==========
+    while pos < len(tokens):
+        t = tokens[pos]
+
+        # 后缀 ++/--
+        if t.get('type') == 'op' and t.get('value') in {"++", "--"}:
+            op = t['value']
+            pos += 1
+            expr = {"type": "postfix", "op": op, "expr": expr}
+            continue
+
+        break
+
+    return expr, pos
 
 def parse_methodcall(parts: list, tokens: list, pos: int) -> tuple:
     """解析方法调用（处理链式调用）"""
