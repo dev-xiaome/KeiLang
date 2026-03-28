@@ -11,7 +11,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.4-1"
+__version__ = "1.4-2"
 
 class KeiState:
     stack: List[Any]  # 添加类型提示
@@ -1270,8 +1270,24 @@ def parse_assign(tokens: list, pos: int) -> tuple:
     return node, pos
 
 def parse_term(tokens, pos, in_call=False):
-    debug_print(f"parse_term: pos={pos}, token={tokens[pos] if pos < len(tokens) else 'EOF'}")
+    left, pos = parse_pow(tokens, pos, in_call)  # 先处理幂
 
+    while pos < len(tokens):
+        t = tokens[pos]
+        if t["type"] != "op":
+            break
+
+        if t["value"] in {"*", "/", "//", "%", "|"}:
+            op = t["value"]
+            pos += 1
+            right, pos = parse_pow(tokens, pos)  # 右边也要处理幂
+            left = {"type": "binop", "op": op, "left": left, "right": right}
+        else:
+            break
+
+    return left, pos
+
+def parse_pow(tokens, pos, in_call=False):
     left, pos = parse_unary(tokens, pos, in_call)
 
     while pos < len(tokens):
@@ -1279,11 +1295,10 @@ def parse_term(tokens, pos, in_call=False):
         if t["type"] != "op":
             break
 
-        # 处理 * / 等
-        if t["value"] in {"*", "**", "/", "//", "%", "|"}:
+        if t["value"] == "**":
             op = t["value"]
             pos += 1
-            right, pos = parse_unary(tokens, pos)
+            right, pos = parse_unary(tokens, pos)  # 幂是右结合
             left = {"type": "binop", "op": op, "left": left, "right": right}
         else:
             break
