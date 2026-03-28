@@ -11,7 +11,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.4-2"
+__version__ = "1.4-3"
 
 class KeiState:
     stack: List[Any]  # 添加类型提示
@@ -1463,6 +1463,8 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
     globals()['code']      = __kei__.get('code', '未知行')[tokens[pos]['linenum']]
     globals()['linenum']   = tokens[pos]['linenum']
 
+    code = __kei__.get('code', '未知行')[tokens[pos]['linenum']]
+
     try:
         def stmt():
             all_lines = globals()['all_lines']
@@ -2903,7 +2905,7 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
 
         node, new_pos, new_line = stmt()
         if node is not None:
-            return node | {'source':globals()['code'],'linenum':globals()['linenum']}, new_pos, new_line
+            return node | {'source':code,'linenum':globals()['linenum']}, new_pos, new_line
         else:
             return None, new_pos, new_line
 

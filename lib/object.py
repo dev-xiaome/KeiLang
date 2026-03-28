@@ -172,7 +172,11 @@ class KeiInt(KeiBase):
             "abs": self.abs,
             "pow": self.pow,
             "sqrt": self.sqrt,
+            "take": self.take
         }
+
+    def take(self, digits):
+        return KeiFloat(self.value).take(digits)
 
     def __setitem__(self, key, value):
         raise KeiError("IndexError", "整数不支持索引赋值")
