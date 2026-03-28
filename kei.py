@@ -11,7 +11,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.4-7"
+__version__ = "1.5"
 
 class KeiState:
     stack: List[Any]  # 添加类型提示
@@ -19,6 +19,7 @@ class KeiState:
     code: Optional[List[str]]
     repl: bool
     file: str
+    step: bool
 
     _instance: Optional['KeiState'] = None
 
@@ -31,6 +32,7 @@ class KeiState:
             cls._instance.code = None
             cls._instance.repl = False
             cls._instance.file = "未知文件"
+            cls._instance.step = False
 
         return cls._instance
 
@@ -143,6 +145,62 @@ def error(errtype: str | None, info: str, stack: list=[], code:str|None=None, li
 
     if not __kei__.repl:
         sys.exit(1)
+
+def dict_diff(d1, d2, path="", seen=None):
+    if seen is None:
+        seen = set()
+
+    # 跳过自引用键
+    skip_keys = {'__env__', '__parent__', '__builtins__'}
+
+    added = []
+    removed = []
+    changed = []
+
+    # 处理 d1
+    for key in d1.keys():
+        key_str = str(key)
+
+        # 跳过特殊键
+        if key_str in skip_keys:
+            continue
+
+        full_path = f"{path}.{key_str}" if path else key_str
+
+        # 防止循环引用
+        obj_id = id(d1[key])
+        if obj_id in seen:
+            continue
+        seen.add(obj_id)
+
+        if key not in d2:
+            removed.append(full_path)
+        else:
+            v1 = d1[key]
+            v2 = d2[key]
+
+            if isinstance(v1, dict) and isinstance(v2, dict):
+                sub_added, sub_removed, sub_changed = dict_diff(v1, v2, full_path, seen)
+                added.extend(sub_added)
+                removed.extend(sub_removed)
+                changed.extend(sub_changed)
+            elif v1 != v2:
+                changed.append(f"{full_path}: {content(v1)} -> {content(v2)}")
+
+        seen.remove(obj_id)
+
+    # 处理 d2 新增
+    for key in d2.keys():
+        key_str = str(key)
+        if key_str in skip_keys:
+            continue
+
+        full_path = f"{path}.{key_str}" if path else key_str
+
+        if key not in d1:
+            added.append(full_path)
+
+    return added, removed, changed
 
 def token(original: str) -> list:
     __kei__.code = original.splitlines()
@@ -5516,7 +5574,35 @@ def runtoken(node, env) -> tuple:
         raise KeiError("RuntimeError", f"未知的节点: {node['type']}")
 
     try:
-        return runtokentemp()
+        if __kei__.step and node.get('source', None) is not None:
+            input(f"{f"--> 调用栈: {'->'.join(__kei__.stack) or '<global>'}":<30}{f"| {node.get('source').strip()}"}")
+
+            import copy
+
+            try:
+                oldenv = copy.deepcopy(env)
+            except:
+                try:
+                    oldenv = copy.copy(env)
+                except:
+                    oldenv = env.copy()
+
+            result = runtokentemp()
+            try:
+                newenv = copy.deepcopy(env)
+            except:
+                try:
+                    newenv = copy.copy(env)
+                except:
+                    newenv = env.copy()
+
+            rmvar, addvar, changevar = dict_diff(newenv, oldenv)
+            if rmvar or addvar or changevar:
+                print(f"--> {f"+ {' '.join(addvar)}" if addvar else ""} {f"| - {' '.join(rmvar)}" if rmvar else ""} {f"| & {' '.join(changevar)} |" if changevar else ""}")
+        else:
+            result = runtokentemp()
+
+        return result
 
     except Exception as e:
         if __kei__.catch:
@@ -5604,7 +5690,7 @@ def exec(code, env=None):
 
     return env, ret
 
-def execmain(code, env=None):
+def execmain(code, env=None, step=False):
     if len(sys.argv) >= 3:
         cmd_args = []
         for arg in sys.argv[2:]:
@@ -5613,6 +5699,8 @@ def execmain(code, env=None):
         code += f"\nmain({content(cmd_args)});"
     else:
         code += f"\nmain([]);"
+
+    __kei__.step = step
 
     env, ret = exec(code, env)
 
@@ -5646,6 +5734,11 @@ def main():
             sys.exit(0)
 
         if len(sys.argv) >= 2:
+            step = False
+            if sys.argv[1] == "-s" or sys.argv[1] == "--step":
+                step = True
+                sys.argv = [sys.argv[0]] + sys.argv[2:]
+
             __kei__.file = sys.argv[1]
 
             if os.path.isfile(sys.argv[1]):
@@ -5661,7 +5754,7 @@ def main():
                         import json
                         print(json.dumps(ast(token(filecontent)), indent=4, ensure_ascii=False))
                     else:
-                        execmain(filecontent)
+                        execmain(filecontent, step=step)
 
             else:
                 raise KeiError("NotFoundError", f"未找到 {sys.argv[1]}")
