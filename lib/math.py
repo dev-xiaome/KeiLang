@@ -170,7 +170,7 @@ def isnan(x):
     x = to_float(x)
     return _math.isnan(x)
 
-def pibbp(terms, prec=28):
+def pibbp(terms):
     from decimal import Decimal
     if isinstance(terms, KeiFloat):
         terms = terms.value

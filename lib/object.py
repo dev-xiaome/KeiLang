@@ -105,7 +105,7 @@ class KeiException(Exception, KeiBase):
 
 class KeiError(Exception, KeiBase):
     def __init__(self, types="", value="", code=None, linenum=-1):
-        Exception.__init__(self, f"{types}: {value}" if value else types)
+        Exception.__init__(self, f"[{types}] {value}" if value else types)
         KeiBase.__init__(self, "error")
         if isinstance(types, KeiString):
             self.types = types.value
@@ -123,50 +123,47 @@ class KeiError(Exception, KeiBase):
         self.code    = code
         self.linenum = linenum
 
+        self._methods = {
+            "message": self.message,
+            "type": self.type
+        }
     def __repr__(self):
         return f"{self.types}"
 
-class Error(KeiError):
-    def __init__(self, types="", value=""):
-        super().__init__(types, value)
+    def message(self, new=None):
+        if new is not None:
+            if isinstance(new, HASVALUE):
+                self.value = str(new.value)
+            else:
+                raise KeiError("TypeError", f"无法修改message为{content(type(new))}")
 
-        if isinstance(types, KeiString):
-            self.types = types.value
+            return self
         else:
-            self.types = types
+            return KeiString(self.value)
 
-        self._methods = {
-            'type': self.type,
-            'message': self.message,
-            'value': self.value
-        }
+    def type(self, new=None):
+        if new is not None:
+            if isinstance(new, HASVALUE):
+                self.types = str(new.value)
+            else:
+                raise KeiError("TypeError", f"无法修改message为{content(type(new))}")
 
-        if isinstance(value, KeiString):
-            self.value = value.value
+            return self
         else:
-            self.value = value
-
-    def type(self):
-        """返回错误类型"""
-        return KeiString(self.types)
-
-    def message(self):
-        """返回错误信息"""
-        return KeiString(self.value)
-
-    # 删除 __getitem__ 或者保留但不影响
-    def __getitem__(self, key):
-        return super().__getitem__(key)
+            return KeiString(self.types)
 
 # ========== 数值类型 ==========
 
 class KeiInt(KeiBase):
     def __init__(self, _value):
         super().__init__("int")
-        if isinstance(_value, (KeiInt, KeiFloat)):
-            self.value = int(_value.value)
-        else:
-            self.value = int(_value)
+        try:
+            if isinstance(_value, HASVALUE):
+                self.value = int(_value.value)
+            else:
+                self.value = int(_value)
+        except:
+            raise KeiError("TypeError", f"无法把 {content(_value)} 转为 int")
 
         self._methods = {
             "abs": self.abs,
@@ -295,19 +292,22 @@ class KeiFloat(KeiBase):
         super().__init__("float")
 
         # 统一转成 Decimal
-        if isinstance(_value, KeiInt):
-            self.value = Decimal(_value.value)
-        elif isinstance(_value, KeiFloat):
-            self.value = Decimal(str(_value.value))  # 避免精度丢失
-        elif isinstance(_value, (int, float)):
-            # 关键！用字符串转，避免 float 精度问题
-            self.value = Decimal(str(_value))
-        elif isinstance(_value, str):
-            self.value = Decimal(_value)
-        elif isinstance(_value, Decimal):
-            self.value = _value
-        else:
-            self.value = Decimal(str(_value))
+        try:
+            if isinstance(_value, KeiInt):
+                self.value = Decimal(_value.value)
+            elif isinstance(_value, KeiFloat):
+                self.value = Decimal(str(_value.value))  # 避免精度丢失
+            elif isinstance(_value, (int, float)):
+                # 关键！用字符串转，避免 float 精度问题
+                self.value = Decimal(str(_value))
+            elif isinstance(_value, str):
+                self.value = Decimal(_value)
+            elif isinstance(_value, Decimal):
+                self.value = _value
+            else:
+                self.value = Decimal(str(_value))
+        except:
+            raise KeiError("TypeError", f"无法把 {content(_value)} 转为 float")
 
         self._methods = {
             "abs": self.abs,
@@ -449,14 +449,17 @@ class KeiBool(KeiBase):
     _instance_false = None
 
     def __new__(cls, value):
-        if value:
-            if cls._instance_true is None:
-                cls._instance_true = super().__new__(cls)
-            return cls._instance_true
-        else:
-            if cls._instance_false is None:
-                cls._instance_false = super().__new__(cls)
-            return cls._instance_false
+        try:
+            if value:
+                if cls._instance_true is None:
+                    cls._instance_true = super().__new__(cls)
+                return cls._instance_true
+            else:
+                if cls._instance_false is None:
+                    cls._instance_false = super().__new__(cls)
+                return cls._instance_false
+        except:
+            raise KeiError("TypeError", f"无法把 {content(value)} 转为 bool")
 
     def __init__(self, value):
         if not hasattr(self, '_initialized'):
@@ -508,10 +511,13 @@ false = KeiBool(False)
 class KeiString(KeiBase):
     def __init__(self, _value):
         super().__init__("string")
-        if isinstance(_value, KeiString):
-            self.value = _value.value
-        else:
-            self.value = str(_value)
+        try:
+            if isinstance(_value, HASVALUE):
+                self.value = _value.value
+            else:
+                self.value = str(_value)
+        except:
+            raise KeiError("TypeError", f"无法把 {content(_value)} 转为 string")
 
         self._methods = {
             "upper": self.upper,
@@ -526,8 +532,28 @@ class KeiString(KeiBase):
             "length": self.length,
             "char_at": self.char_at,
             "index_of": self.index_of,
-            "center": self.center
+            "center": self.center,
+            "append": self.append,
+            "push": self.push
         }
+
+    def append(self, *values):
+        for value in values:
+            if isinstance(value, HASVALUE):
+                self.value = self.value + str(value.value)
+            else:
+                self.value = self.value + str(value)
+
+        return KeiString(self.value)
+
+    def push(self, *values):
+        for value in values:
+            if isinstance(value, HASVALUE):
+                self.value = self.value + str(value.value)
+            else:
+                self.value = self.value + str(value)
+
+        return KeiString(self.value)
 
     def __setitem__(self, key, value):
         """支持 str[index] = new_str，可以插入任意长度"""
@@ -2178,18 +2204,18 @@ def content(obj, _seen=None, _depth=0, _in_container=False):
 
 # ========== 常量 ==========
 
-HASVALUE = [
+HASVALUE = (
     KeiInt,
     KeiFloat,
     KeiString,
     KeiBool,
     KeiRef
-]
+)
 
-HASITMES = [
+HASITMES = (
     KeiList,
     KeiDict
-]
+)
 
 # ========== 导出 ==========
 
@@ -2201,6 +2227,6 @@ __all__ = [
     'KeiInstance', 'KeiMethod', 'KeiBoundMethod',
     'content', 'KeiRef',
     '_undefined', '_null',
-    'KeiException', 'KeiError', 'Error',
+    'KeiException', 'KeiError',
     'HASVALUE', 'HASITMES'
 ]

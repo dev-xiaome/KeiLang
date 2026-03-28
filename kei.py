@@ -11,11 +11,11 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.4-4"
+__version__ = "1.4-5"
 
 class KeiState:
     stack: List[Any]  # 添加类型提示
-    catch: bool
+    catch: list
     code: Optional[List[str]]
     repl: bool
     file: str
@@ -27,7 +27,7 @@ class KeiState:
             cls._instance = super().__new__(cls)
             # 在 __new__ 中初始化属性
             cls._instance.stack = []
-            cls._instance.catch = False
+            cls._instance.catch = []
             cls._instance.code = None
             cls._instance.repl = False
             cls._instance.file = "未知文件"
@@ -118,7 +118,7 @@ def error(errtype: str | None, info: str, stack: list=[], code:str|None=None, li
         print(f"{space} | in \033[36;1m{s}\033[0m")
 
     if not stack:
-        print(f"{space} | in \033[36;1mglobal\033[0m")
+        print(f"{space} | in \033[36;1m<global>\033[0m")
 
     print(f"{space} |")
 
@@ -482,6 +482,11 @@ def ast(tokenlines: list) -> list:
 
         if thetoken in {"++", "--"}:
             result.append({"type":"op", "value":thetoken, 'linenum':linetokens[pos][1]})
+            pos += 1
+            continue
+
+        if thetoken == "!":
+            result.append({"type":"op", "value":"!", 'linenum':linetokens[pos][1]})
             pos += 1
             continue
 
@@ -1364,6 +1369,14 @@ def parse_expr(tokens: list, pos: int, in_call=False, allow_assign=False, in_com
 
     # 处理 ?
     if pos < len(tokens) and tokens[pos].get('type') == 'op' and tokens[pos].get('value') == '?':
+        pos += 1
+        return {
+            'type': 'trysingle',
+            'expr': left
+        }, pos
+
+    # 处理 !（非空断言后缀）
+    if pos < len(tokens) and tokens[pos].get('type') == 'op' and tokens[pos].get('value') == '!':
         pos += 1
         return {
             'type': 'trysingle',
@@ -3245,6 +3258,11 @@ def parse_unary_prefix(tokens, pos, in_call=False):
             expr = {"type": "postfix", "op": op, "expr": expr}
             continue
 
+        # 处理 !（非空断言后缀）
+        if t.get('type') == 'op' and t.get('value') == '!':
+            pos += 1
+            expr = {"type": "notnullassert", "expr": expr}
+
         # 🔥 新增：处理 . 属性访问
         if t.get('type') == 'symbol' and t.get('value') == '.':
             pos += 1
@@ -3683,11 +3701,22 @@ def runtoken(node, env) -> tuple:
             if left_flag:
                 return left_val, True
 
-            if left_val:
+            if not (left_val is undefined or left_val is null):
                 return left_val, left_flag
 
             right_val, right_flag = runtoken(node['right'], env)
             return right_val, right_flag
+
+        if node['type'] == 'notnullassert':
+            val, flag = runtoken(node['expr'], env)
+
+            if flag:
+                return val, True
+
+            if val is undefined or val is null:
+                raise KeiError("TypeError", f"非空断言失败: {val} 是空的")
+
+            return val, flag
 
         # ========== 索引访问 ==========
         if node['type'] == 'index':
@@ -3719,10 +3748,13 @@ def runtoken(node, env) -> tuple:
 
         if node['type'] == 'trysingle':
             try:
+                __kei__.catch.append(True)
                 val, flag = runtoken(node['expr'], env)
                 return val, flag
             except:
                 return null, False
+            finally:
+                __kei__.catch.pop()
 
         # ========== 切片访问 ==========
         if node['type'] == 'slice':
@@ -4427,7 +4459,7 @@ def runtoken(node, env) -> tuple:
                 elif isinstance(val, KeiFloat):
                     return KeiFloat(-val.value), flag
                 else:
-                    raise KeiError("TypeError", f"无法对 {val} 进行取负运算")
+                    raise KeiError("TypeError", f"无法对 {content(val)} 进行取负运算")
 
         # ========== 范围操作符 .. ==========
         if node['type'] == 'listscope':
@@ -5287,6 +5319,11 @@ def runtoken(node, env) -> tuple:
                 if env.get("__error__", None) is not None:
                     if isinstance(env['__error__'], (KeiList, list)):
                         err = env['__error__'][0]
+                        if not isinstance(err, KeiError):
+                            if isinstance(err, HASVALUE):
+                                err = KeiError(err.value)
+                            else:
+                                raise KeiError("TypeError", f"无法使用{content(type(err))}抛出异常")
 
                         raise err
                     else:
@@ -5366,6 +5403,7 @@ def runtoken(node, env) -> tuple:
         # ========== try/catch/finally 语句 ==========
         if node['type'] == 'try':
             try:
+                __kei__.catch.append(True)
                 for stmt in node['body']:
                     val, is_return = runtoken(stmt, env)
                     if is_return:
@@ -5380,10 +5418,11 @@ def runtoken(node, env) -> tuple:
                 try:
                     if node['catchbody'] is not None:
                         old_e = env.get(node['var']) if node['var'] else None
+
                         if isinstance(e, KeiError):
-                            err_obj = Error(e.types, e.value)
+                            err_obj = KeiError(e.types, e.value)
                         else:
-                            err_obj = Error(type(e).__name__, str(e))
+                            err_obj = KeiError(type(e).__name__, str(e))
 
                         if node['var']:
                             env[node['var']] = err_obj
@@ -5392,17 +5431,22 @@ def runtoken(node, env) -> tuple:
 
                         for stmt in node['catchbody']:
                             val, is_return = runtoken(stmt, env)
+                            if env[node['var']]:
+                                env['__error__'][-1] = env[node['var']]
+
                             if is_return:
                                 if node['var']:
                                     if old_e is not None:
                                         env[node['var']] = old_e
                                     else:
                                         del env[node['var']]
+
                                 if node['finallybody']:
                                     for f_stmt in node['finallybody']:
                                         f_val, f_is_return = runtoken(f_stmt, env)
                                         if f_is_return:
                                             return f_val, True
+
                                 return val, True
 
                         env['__error__'].pop()
@@ -5427,6 +5471,9 @@ def runtoken(node, env) -> tuple:
                         f_val, f_is_return = runtoken(f_stmt, env)
                         if f_is_return:
                             return f_val, True
+
+            finally:
+                __kei__.catch.pop()
 
             return None, False
 
@@ -5472,6 +5519,9 @@ def runtoken(node, env) -> tuple:
         return runtokentemp()
 
     except Exception as e:
+        if __kei__.catch:
+            raise
+
         # 错误类型映射
         error_config = {
             ZeroDivisionError: ("ZeroDivisionError", "无法对 0 进行除法"),
@@ -5511,7 +5561,7 @@ def runtoken(node, env) -> tuple:
                 if not __kei__.repl:
                     sys.exit(1)
                 else:
-                    return None, env
+                    raise
         else:
             error(
                 type(e).__name__,
@@ -5524,7 +5574,7 @@ def runtoken(node, env) -> tuple:
             if not __kei__.repl:
                 sys.exit(1)
             else:
-                return None, env
+                raise
 
 def exec(code, env=None):
     if isinstance(code, KeiString):
