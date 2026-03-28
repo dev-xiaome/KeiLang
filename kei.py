@@ -11,7 +11,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.4-5"
+__version__ = "1.4-6"
 
 class KeiState:
     stack: List[Any]  # 添加类型提示

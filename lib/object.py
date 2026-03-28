@@ -2078,16 +2078,12 @@ def content(obj, _seen=None, _depth=0, _in_container=False):
         if isinstance(obj, KeiString):
             # 字符串：在容器里加引号，否则不加
             if _in_container:
-                value = obj.value
-                if '"' in obj.value:
-                    if "'" in obj.value:
-                        value = value.replace("'", "\\'")
+                value = repr(obj.value)
 
-                    return f"'{value}'"
-                else:
-                    return f'"{value}"'
+                return f"{value}".replace('\\\\', '\\')
 
             return obj.value
+
         if isinstance(obj, KeiBool): return "true" if obj.value else "false"
 
         if isinstance(obj, KeiList):
@@ -2172,12 +2168,9 @@ def content(obj, _seen=None, _depth=0, _in_container=False):
         if isinstance(obj, str):
             # Python 字符串：在容器里加引号
             if _in_container:
-                if "'" in obj:
-                    obj = obj.replace("'", "\\'")
+                value = repr(obj)
 
-                    return f"'{obj}'"
-                else:
-                    return f'"{obj}"'
+                return f"{value}".replace('\\\\', '\\')
 
             return obj
 
