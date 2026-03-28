@@ -10,7 +10,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.5-4"
+__version__ = "1.5-5"
 
 class KeiState:
     stack: List[Any]  # 添加类型提示
@@ -2997,7 +2997,7 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
 
         node, new_pos, new_line = stmt()
         if node is not None:
-            return node | {'source':code,'linenum':globals()['linenum']}, new_pos, new_line
+            return node | {'source':code,'linenum':tokens[pos]['linenum']}, new_pos, new_line
         else:
             return None, new_pos, new_line
 
@@ -3603,13 +3603,13 @@ def runtoken(node, env) -> tuple:
     if 'linenum' not in globals():
         globals()['linenum'] = None
 
+    if node.get('source', None) is not None:
+        globals()['source']  = node.get('source')
+
+    if node.get('linenum', None) is not None:
+        globals()['linenum'] = node.get('linenum')
+
     def runtokentemp() -> tuple:
-        if node.get('source', None) is not None:
-            globals()['source']  = node.get('source')
-
-        if node.get('linenum', None) is not None:
-            globals()['linenum'] = node.get('linenum')
-
         if env.get("__maxrecursion__"):
             if type(env["__maxrecursion__"]) is KeiInt:
                 __maxrecursion__ = env["__maxrecursion__"].value
@@ -5592,7 +5592,7 @@ def runtoken(node, env) -> tuple:
             while True:
                 maxline = stdlib.kei.cnlen(max(__kei__.code, key=len) if __kei__.code is not None else None)
 
-                prompt = f"--> \033[94m{node.get('source').strip()}\033[0m"
+                prompt = f"--> {globals()['linenum']+1 if globals()['linenum'] is not None else node.get('linenum', -1)+1} \033[94m{node.get('source').strip()}\033[0m"
                 prompt = prompt + ((maxline + 5) - stdlib.kei.cnlen(node.get('source').strip())) * " " + ":"
                 cmd = input(prompt)
 
