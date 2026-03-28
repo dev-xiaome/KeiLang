@@ -11,7 +11,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.5-1"
+__version__ = "1.5-2"
 
 class KeiState:
     stack: List[Any]  # 添加类型提示
@@ -5728,8 +5728,9 @@ def main():
             print("  \033[33m<文件名>\033[0m   - \033[36m运行Kei脚本\033[0m")
             print()
             print("\033[1m参数:\033[0m")
-            print("  \033[33m-h/--help\033[0m  - \033[36m显示此帮助\033[0m")
-            print("  \033[33m-c/--compile\033[0m         - \033[36m打印AST\033[0m")
+            print("  \033[33m-h/--help\033[0m    - \033[36m显示此帮助\033[0m")
+            print("  \033[33m-c/--compile\033[0m - \033[36m打印AST\033[0m")
+            print("  \033[33m-s/--step\033[0m    - \033[36m单步执行代码\033[0m")
             print()
             sys.exit(0)
 
