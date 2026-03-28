@@ -11,7 +11,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.4-6"
+__version__ = "1.4-7"
 
 class KeiState:
     stack: List[Any]  # 添加类型提示
@@ -5608,9 +5608,9 @@ def execmain(code, env=None):
     if len(sys.argv) >= 3:
         cmd_args = []
         for arg in sys.argv[2:]:
-            cmd_args.append(f'{arg}')
+            cmd_args.append(f"{arg}")
 
-        code += f"\nmain({[','.join(cmd_args)]});"
+        code += f"\nmain({content(cmd_args)});"
     else:
         code += f"\nmain([]);"
 
