@@ -530,6 +530,14 @@ class kei:
         return max_item
 
     @s
+    def breakpoint():
+        from kei import __kei__
+        if __kei__.step is None:
+            __kei__.step = True
+
+        return __kei__.step
+
+    @s
     def min(*args):
         """返回最小值，支持多个参数或列表"""
         if len(args) == 0:
@@ -813,6 +821,10 @@ class kei:
         return null
 
     @s
+    def repr(value):
+        return KeiString(content(value, _in_container=True))
+
+    @s
     def _wrap_module(module):
         """把 Python 模块包装成 KeiDict"""
         result = {}
@@ -855,6 +867,8 @@ func = {
     "eval": kei.eval,
     "read": kei.read,
     "write": kei.write,
+    "breakpoint": kei.breakpoint,
+    "repr": kei.repr,
     "open": kei.open,
     "any": KeiBase,
     "int": KeiInt,

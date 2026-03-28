@@ -4,14 +4,13 @@
 from decimal import getcontext
 from typing import List, Any, Optional
 import platform
-import copy
 import sys
 import os
 
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.5-2"
+__version__ = "1.5-3"
 
 class KeiState:
     stack: List[Any]  # 添加类型提示
@@ -19,7 +18,8 @@ class KeiState:
     code: Optional[List[str]]
     repl: bool
     file: str
-    step: bool
+    step: bool | None
+    error: bool
 
     _instance: Optional['KeiState'] = None
 
@@ -33,6 +33,7 @@ class KeiState:
             cls._instance.repl = False
             cls._instance.file = "未知文件"
             cls._instance.step = False
+            cls._instance.error = True
 
         return cls._instance
 
@@ -174,7 +175,7 @@ def dict_diff(d1, d2, path="", seen=None):
         seen.add(obj_id)
 
         if key not in d2:
-            removed.append(full_path)
+            removed.append(f"{full_path} = {content(d1[key], _in_container=True)}")
         else:
             v1 = d1[key]
             v2 = d2[key]
@@ -185,7 +186,7 @@ def dict_diff(d1, d2, path="", seen=None):
                 removed.extend(sub_removed)
                 changed.extend(sub_changed)
             elif v1 != v2:
-                changed.append(f"{full_path}: {content(v2)} -> {content(v1)}")
+                changed.append(f"{full_path}: {content(v2, _in_container=True)} -> {content(v1, _in_container=True)}")
 
         seen.remove(obj_id)
 
@@ -203,305 +204,318 @@ def dict_diff(d1, d2, path="", seen=None):
     return added, removed, changed
 
 def token(original: str) -> list:
-    __kei__.code = original.splitlines()
+    try:
+        if __kei__.code is None:
+            __kei__.code = original.splitlines()
 
-    result = []
-    lines = original.splitlines()
-    i = 0
-    while i < len(lines):
-        codes = lines[i].rstrip()
-        if not codes:
-            result.append([])
-            i += 1
-            continue
-
-        tokens = []
-        pos = 0
-        length = len(codes)
-
-        while pos < length:
-            if pos >= length:
-                break
-
-            c = codes[pos]
-
-            if c == '.' and pos + 2 < length and codes[pos+1] == '.' and codes[pos+2] == '.':
-                tokens.append("...")
-                pos += 3
+        result = []
+        lines = original.splitlines()
+        i = 0
+        while i < len(lines):
+            codes = lines[i].rstrip()
+            if not codes:
+                result.append([])
+                i += 1
                 continue
 
-            # 重要：先检查 ** 操作符
-            if c == '*' and pos + 1 < length and codes[pos+1] == '*':
-                tokens.append("**")
-                pos += 2
-                continue
+            tokens = []
+            pos = 0
+            length = len(codes)
 
-            # 检查逗号
-            if c == ',':
-                tokens.append(",")
-                pos += 1
-                continue
+            while pos < length:
+                if pos >= length:
+                    break
 
-            if c == "?" and pos + 1 < length and codes[pos+1] == '?':
-                tokens.append("??")
-                pos += 2
-                continue
+                c = codes[pos]
 
-            if c == '+' and pos + 1 < length and codes[pos+1] == '+':
-                tokens.append("++")
-                pos += 2
-                continue
-
-            if c == '-' and pos + 1 < length and codes[pos+1] == '-':
-                tokens.append("--")
-                pos += 2
-                continue
-
-            if c == '=' and pos + 1 < length and codes[pos+1] == '>':
-                tokens.append("=>")
-                pos += 2
-                continue
-
-            # 检查 +=
-            if c == '+' and pos + 1 < length and codes[pos+1] == '=':
-                tokens.append("+=")
-                pos += 2
-                continue
-
-            # 检查 -=
-            if c == '-' and pos + 1 < length and codes[pos+1] == '=':
-                tokens.append("-=")
-                pos += 2
-                continue
-
-            # 检查 *=
-            if c == '*' and pos + 1 < length and codes[pos+1] == '=':
-                tokens.append("*=")
-                pos += 2
-                continue
-
-            # 检查 /=
-            if c == '/' and pos + 1 < length and codes[pos+1] == '=':
-                tokens.append("/=")
-                pos += 2
-                continue
-
-            # 检查 :=
-            if c == ':' and pos + 1 < length and codes[pos+1] == '=':
-                tokens.append(":=")
-                pos += 2
-                continue
-
-            # 检查冒号
-            if c == ':':
-                tokens.append(":")
-                pos += 1
-                continue
-
-            # 检查大括号
-            if c == '{':
-                tokens.append("{")
-                pos += 1
-                continue
-            if c == '}':
-                tokens.append("}")
-                pos += 1
-                continue
-
-            # 检查中括号
-            if c == '[':
-                tokens.append("[")
-                pos += 1
-                continue
-            if c == ']':
-                tokens.append("]")
-                pos += 1
-                continue
-
-            # 检查小括号
-            if c == '(':
-                tokens.append("(")
-                pos += 1
-                continue
-            if c == ')':
-                tokens.append(")")
-                pos += 1
-                continue
-
-            # 普通单行字符串
-            if c in '"\'':
-                # 普通单行字符串
-                start = pos
-                quote = c
-                pos += 1
-                while pos < length and codes[pos] != quote:
-                    if codes[pos] == '\\' and pos + 1 < length:
-                        pos += 2
-                    else:
-                        pos += 1
-                if pos < length and codes[pos] == quote:
-                    pos += 1
-                string = codes[start:pos]
-                tokens.append(('string', escape(string)))
-                continue
-
-            # r-string 单行
-            if c == 'r':
-                # 先跳过可能的空格
-                temp_pos = pos + 1
-                while temp_pos < length and codes[temp_pos] in ' \n\t':
-                    temp_pos += 1
-
-                if temp_pos < length and codes[temp_pos] in '"\'':
-                    # r-string 单行
-                    quote = codes[temp_pos]
-                    pos = temp_pos + 1
-                    start = pos
-                    while pos < length and codes[pos] != quote:
-                        pos += 1
-                    if pos < length and codes[pos] == quote:
-                        pos += 1
-                    string = codes[start:pos]
-                    tokens.append(('rstring', '"' + string))
+                if c == '.' and pos + 2 < length and codes[pos+1] == '.' and codes[pos+2] == '.':
+                    tokens.append("...")
+                    pos += 3
                     continue
 
-            # f-string 单行
-            if c == 'f':
-                # 先跳过可能的空格
-                temp_pos = pos + 1
-                while temp_pos < length and codes[temp_pos] in ' \n\t':
-                    temp_pos += 1
+                # 重要：先检查 ** 操作符
+                if c == '*' and pos + 1 < length and codes[pos+1] == '*':
+                    tokens.append("**")
+                    pos += 2
+                    continue
 
-                if temp_pos < length and codes[temp_pos] in '"\'':
-                    # f-string 单行
-                    quote = codes[temp_pos]
-                    pos = temp_pos + 1
+                # 检查逗号
+                if c == ',':
+                    tokens.append(",")
+                    pos += 1
+                    continue
+
+                if c == "?" and pos + 1 < length and codes[pos+1] == '?':
+                    tokens.append("??")
+                    pos += 2
+                    continue
+
+                if c == '+' and pos + 1 < length and codes[pos+1] == '+':
+                    tokens.append("++")
+                    pos += 2
+                    continue
+
+                if c == '-' and pos + 1 < length and codes[pos+1] == '-':
+                    tokens.append("--")
+                    pos += 2
+                    continue
+
+                if c == '=' and pos + 1 < length and codes[pos+1] == '>':
+                    tokens.append("=>")
+                    pos += 2
+                    continue
+
+                # 检查 +=
+                if c == '+' and pos + 1 < length and codes[pos+1] == '=':
+                    tokens.append("+=")
+                    pos += 2
+                    continue
+
+                # 检查 -=
+                if c == '-' and pos + 1 < length and codes[pos+1] == '=':
+                    tokens.append("-=")
+                    pos += 2
+                    continue
+
+                # 检查 *=
+                if c == '*' and pos + 1 < length and codes[pos+1] == '=':
+                    tokens.append("*=")
+                    pos += 2
+                    continue
+
+                # 检查 /=
+                if c == '/' and pos + 1 < length and codes[pos+1] == '=':
+                    tokens.append("/=")
+                    pos += 2
+                    continue
+
+                # 检查 :=
+                if c == ':' and pos + 1 < length and codes[pos+1] == '=':
+                    tokens.append(":=")
+                    pos += 2
+                    continue
+
+                # 检查冒号
+                if c == ':':
+                    tokens.append(":")
+                    pos += 1
+                    continue
+
+                # 检查大括号
+                if c == '{':
+                    tokens.append("{")
+                    pos += 1
+                    continue
+                if c == '}':
+                    tokens.append("}")
+                    pos += 1
+                    continue
+
+                # 检查中括号
+                if c == '[':
+                    tokens.append("[")
+                    pos += 1
+                    continue
+                if c == ']':
+                    tokens.append("]")
+                    pos += 1
+                    continue
+
+                # 检查小括号
+                if c == '(':
+                    tokens.append("(")
+                    pos += 1
+                    continue
+                if c == ')':
+                    tokens.append(")")
+                    pos += 1
+                    continue
+
+                # 普通单行字符串
+                if c in '"\'':
                     start = pos
+                    quote = c
+                    pos += 1
                     while pos < length and codes[pos] != quote:
                         if codes[pos] == '\\' and pos + 1 < length:
                             pos += 2
                         else:
                             pos += 1
-                    if pos < length and codes[pos] == quote:
-                        pos += 1
+
+                    # 检查未闭合
+                    if pos >= length:
+                        raise KeiError("SyntaxError", f"未闭合的字符串: {codes[start:]}")
+
+                    pos += 1  # 跳过结束引号
                     string = codes[start:pos]
-                    tokens.append(('fstring', '"' + escape(string)))
+                    tokens.append(('string', escape(string)))
                     continue
 
-            # 检查 .. 操作符
-            if c == '.' and pos + 1 < length and codes[pos+1] == '.':
-                tokens.append("..")
-                pos += 2
-                continue
+                # r-string 单行
+                if c == 'r':
+                    temp_pos = pos + 1
+                    while temp_pos < length and codes[temp_pos] in ' \n\t':
+                        temp_pos += 1
 
-            if c == ".":
-                tokens.append(".")
-                pos += 1
-                continue
+                    if temp_pos < length and codes[temp_pos] in '"\'':
+                        quote = codes[temp_pos]
+                        pos = temp_pos + 1
+                        start = pos
+                        while pos < length and codes[pos] != quote:
+                            pos += 1
 
-            if c == '/' and pos + 1 < length and codes[pos+1] == '/':
-                tokens.append("//")
-                pos += 2
-                continue
+                        # 检查未闭合
+                        if pos >= length:
+                            raise KeiError("SyntaxError", f"未闭合的r-string: {codes[start-2:]}")
 
-            if c == "#":
-                tokens.append("#")
-                break
-
-            if c == "-" and pos + 1 < length and codes[pos+1] == ">":
-                tokens.append("->")
-                pos += 2
-                continue
-
-            # 处理数字
-            if "0" <= c <= "9":
-                start = pos
-                has_dot = False
-                while pos < length:
-                    if "0" <= codes[pos] <= "9" or codes[pos] == "_":
                         pos += 1
-                    elif codes[pos] == "." and not has_dot:
-                        if pos + 1 < length and codes[pos+1] == '.':
-                            break
-                        has_dot = True
+                        string = codes[start-2:pos]  # 包含 r 和引号
+                        tokens.append(('rstring', string[1:]))  # 去掉 r" 和 "
+                        continue
+
+                # f-string 单行
+                if c == 'f':
+                    temp_pos = pos + 1
+                    while temp_pos < length and codes[temp_pos] in ' \n\t':
+                        temp_pos += 1
+
+                    if temp_pos < length and codes[temp_pos] in '"\'':
+                        quote = codes[temp_pos]
+                        pos = temp_pos + 1
+                        start = pos
+                        while pos < length and codes[pos] != quote:
+                            if codes[pos] == '\\' and pos + 1 < length:
+                                pos += 2
+                            else:
+                                pos += 1
+
+                        # 检查未闭合
+                        if pos >= length:
+                            raise KeiError("SyntaxError", f"未闭合的f-string: {codes[start-2:]}")
+
                         pos += 1
-                    else:
-                        break
-                number = codes[start:pos]
-                tokens.append(number)
-                continue
+                        string = codes[start-2:pos]
+                        tokens.append(('fstring', escape(string[1:])))
+                        continue
 
-            # 检查比较运算符
-            if c in "<>!" and pos + 1 < length and codes[pos+1] == "=":
-                tokens.append(c + "=")
-                pos += 2
-                continue
-
-            if c == "=" and pos + 1 < length and codes[pos+1] == "=":
-                tokens.append("==")
-                pos += 2
-                continue
-
-            # 检查关键字
-            if c == "i" and pos + 2 < length and codes[pos+1] in ["s", "n"] and (pos + 2 >= length or codes[pos+2] in ' \n\t'):
-                if codes[pos+1] == 's':
-                    tokens.append("is")
+                # 检查 .. 操作符
+                if c == '.' and pos + 1 < length and codes[pos+1] == '.':
+                    tokens.append("..")
                     pos += 2
-                elif codes[pos+1] == 'n':
-                    tokens.append("in")
-                    pos += 2
-                continue
+                    continue
 
-            # 基本运算符
-            if c == "+":
-                tokens.append("+")
-                pos += 1
-                continue
-            if c == "-":
-                tokens.append("-")
-                pos += 1
-                continue
-            if c == "*":
-                tokens.append("*")
-                pos += 1
-                continue
-            if c == "/":
-                tokens.append("/")
-                pos += 1
-                continue
-            if c == '%':
-                tokens.append("%")
-                pos += 1
-                continue
-            if c == '=':
-                tokens.append("=")
-                pos += 1
-                continue
-
-            # 标识符
-            if c.isalpha() or c == '_':
-                start = pos
-                while pos < length and (codes[pos].isalnum() or codes[pos] == '_'):
+                if c == ".":
+                    tokens.append(".")
                     pos += 1
-                word = codes[start:pos]
-                tokens.append(word)
-                continue
+                    continue
 
-            # 空白字符
-            if c in ' \n\t':
+                if c == '/' and pos + 1 < length and codes[pos+1] == '/':
+                    tokens.append("//")
+                    pos += 2
+                    continue
+
+                if c == "#":
+                    tokens.append("#")
+                    break
+
+                if c == "-" and pos + 1 < length and codes[pos+1] == ">":
+                    tokens.append("->")
+                    pos += 2
+                    continue
+
+                # 处理数字
+                if "0" <= c <= "9":
+                    start = pos
+                    has_dot = False
+                    while pos < length:
+                        if "0" <= codes[pos] <= "9" or codes[pos] == "_":
+                            pos += 1
+                        elif codes[pos] == "." and not has_dot:
+                            if pos + 1 < length and codes[pos+1] == '.':
+                                break
+                            has_dot = True
+                            pos += 1
+                        else:
+                            break
+                    number = codes[start:pos]
+                    tokens.append(number)
+                    continue
+
+                # 检查比较运算符
+                if c in "<>!" and pos + 1 < length and codes[pos+1] == "=":
+                    tokens.append(c + "=")
+                    pos += 2
+                    continue
+
+                if c == "=" and pos + 1 < length and codes[pos+1] == "=":
+                    tokens.append("==")
+                    pos += 2
+                    continue
+
+                # 检查关键字
+                if c == "i" and pos + 2 < length and codes[pos+1] in ["s", "n"] and (pos + 2 >= length or codes[pos+2] in ' \n\t'):
+                    if codes[pos+1] == 's':
+                        tokens.append("is")
+                        pos += 2
+                    elif codes[pos+1] == 'n':
+                        tokens.append("in")
+                        pos += 2
+                    continue
+
+                # 基本运算符
+                if c == "+":
+                    tokens.append("+")
+                    pos += 1
+                    continue
+                if c == "-":
+                    tokens.append("-")
+                    pos += 1
+                    continue
+                if c == "*":
+                    tokens.append("*")
+                    pos += 1
+                    continue
+                if c == "/":
+                    tokens.append("/")
+                    pos += 1
+                    continue
+                if c == '%':
+                    tokens.append("%")
+                    pos += 1
+                    continue
+                if c == '=':
+                    tokens.append("=")
+                    pos += 1
+                    continue
+
+                # 标识符
+                if c.isalpha() or c == '_':
+                    start = pos
+                    while pos < length and (codes[pos].isalnum() or codes[pos] == '_'):
+                        pos += 1
+                    word = codes[start:pos]
+                    tokens.append(word)
+                    continue
+
+                # 空白字符
+                if c in ' \n\t':
+                    pos += 1
+                    continue
+
+                # 其他单个字符
+                tokens.append(c)
                 pos += 1
-                continue
 
-            # 其他单个字符
-            tokens.append(c)
-            pos += 1
+            if tokens:
+                result.append(tokens)
 
-        if tokens:
-            result.append(tokens)
+            i += 1
 
-        i += 1
+        return result
 
-    return result
+    except KeiError as e:
+        error(e.types, e.value, [], __kei__.code[i] if __kei__.code else "未知行", i, __kei__.file)
+        sys.exit(1)
 
 def ast(tokenlines: list) -> list:
     global mapping
@@ -3020,8 +3034,8 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                     err_name if err_name is not err_msg else None,  # info
                     err_msg,
                     __kei__.stack.copy(),  # stack - 直接用 __kei__.stack
-                    globals()['source'] if globals()['source'] is not None else node.get('source', None),
-                    globals()['linenum']+1 if globals()['linenum'] is not None else node.get('linenum', -1),
+                    globals()['source'],
+                    globals()['linenum']+1,
                     __kei__.get('file', '未知文件')
                 )
                 if not __kei__.repl:
@@ -3033,8 +3047,8 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                 type(e).__name__,
                 str(e),
                 __kei__.stack.copy(),  # stack
-                globals()['source'] if globals()['source'] is not None else node.get('source', None),
-                globals()['linenum']+1 if globals()['linenum'] is not None else node.get('linenum', -1),
+                globals()['source'],
+                globals()['linenum']+1,
                 __kei__.get('file', '未知文件')
             )
             if not __kei__.repl:
@@ -5575,7 +5589,76 @@ def runtoken(node, env) -> tuple:
 
     try:
         if __kei__.step and node.get('source', None) is not None:
-            input(f"{f"--> {node.get('source').strip()}":<50}{f"| 调用栈: {'->'.join(__kei__.stack) or '<global>'}"}")
+            while True:
+                maxline = stdlib.kei.cnlen(max(__kei__.code, key=len) if __kei__.code is not None else None)
+
+                prompt = f"--> \033[94m{node.get('source').strip()}\033[0m"
+                prompt = prompt + ((maxline + 5) - stdlib.kei.cnlen(node.get('source').strip())) * " " + ":"
+                cmd = input(prompt)
+
+                if not cmd:
+                    break
+
+                elif cmd == "c":
+                    import repl
+                    __kei__.step = False
+
+                    try:
+                        __kei__.error = False
+                        repl.main(True)
+                    except KeiError as e:
+                        __kei__.error = True
+                        __kei__.repl = False
+                        globals()['source'] = e.code
+                        raise
+                    finally:
+                        __kei__.error = True
+                        __kei__.repl = False
+                        __kei__.step = True
+
+                elif cmd == "s":
+                    print('->'.join(__kei__.stack) or '<global>')
+
+                elif cmd == "e":
+                    sys.exit(0)
+
+                elif cmd == "v":
+                    # 获取所有用户变量
+                    vars_to_show = {k: v for k, v in env.items()
+                                   if not str(k).startswith('__')}
+
+                    if vars_to_show:
+                        # 找出最长的变量名
+                        max_name_len = max(len(str(k)) for k in vars_to_show.keys())
+
+                        # 对齐打印
+                        for k, v in vars_to_show.items():
+                            name = str(k)
+                            value = content(v, _in_container=True)
+                            # 格式化：变量名左对齐，值用颜色
+                            print(f"  \033[36m{name:<{max_name_len}}\033[0m = \033[33m{value}\033[0m")
+                    else:
+                        print("  (无变量)")
+
+                elif cmd == "n":
+                    __kei__.step = None
+                    break
+
+                elif cmd == "k":
+                    return None, False
+
+                elif cmd == "h":
+                    print("KDB")
+                    print("  c - 执行一行代码")
+                    print("  s - 查看调用栈")
+                    print("  e - 退出")
+                    print("  v - 查看全部变量(除了下划线开头的变量)")
+                    print("  n - 执行代码到下一个breakpoint()")
+                    print("  h - 显示此帮助")
+                    print()
+
+                else:
+                    print(f"--> \033[31m未知的指令: {cmd}, 尝试使用\"h\"获取帮助\033[0m")
 
             import copy
 
@@ -5597,15 +5680,20 @@ def runtoken(node, env) -> tuple:
                     newenv = env.copy()
 
             rmvar, addvar, changevar = dict_diff(newenv, oldenv)
-            if rmvar or addvar or changevar:
-                print(f"{f"--> {f"+ {' '.join(addvar)} " if addvar else ""}{f"- {' '.join(rmvar)} " if rmvar else ""}{f"& {' '.join(changevar)}" if changevar else ""}":<50}|")
+            if addvar:
+                print(f"  \033[32m+ {' and '.join(addvar)}\033[0m")
+            if rmvar:
+                print(f"  \033[31m- {' and '.join(rmvar)}\033[0m")
+            if changevar:
+                print(f"  \033[33m& {' and '.join(changevar)}\033[0m")
+
         else:
             result = runtokentemp()
 
         return result
 
     except Exception as e:
-        if __kei__.catch:
+        if __kei__.catch or not __kei__.error:
             raise
 
         # 错误类型映射
@@ -5641,7 +5729,7 @@ def runtoken(node, env) -> tuple:
                     err_msg,
                     __kei__.stack.copy(),  # stack - 直接用 __kei__.stack
                     globals()['source'] if globals()['source'] is not None else node.get('source', None),
-                    globals()['linenum']+1 if globals()['linenum'] is not None else node.get('linenum', -1),
+                    globals()['linenum']+1 if globals()['linenum'] is not None else node.get('linenum', -1)+1,
                     __kei__.get('file', '未知文件')
                 )
                 if not __kei__.repl:
@@ -5654,7 +5742,7 @@ def runtoken(node, env) -> tuple:
                 str(e),
                 __kei__.stack.copy(),  # stack
                 globals()['source'] if globals()['source'] is not None else node.get('source', None),
-                globals()['linenum']+1 if globals()['linenum'] is not None else node.get('linenum', -1),
+                globals()['linenum']+1 if globals()['linenum'] is not None else node.get('linenum', -1)+1,
                 __kei__.get('file', '未知文件')
             )
             if not __kei__.repl:
