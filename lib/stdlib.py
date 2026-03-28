@@ -487,6 +487,7 @@ class kei:
                 return KeiFloat(-x.value)
         else:
             return x  # 直接返回原值
+
     @s
     def max(*args, key=None):
         """返回最大值，支持多个参数或列表，支持 key 函数"""
@@ -532,8 +533,9 @@ class kei:
     @s
     def breakpoint():
         from kei import __kei__
+
         if __kei__.step is None:
-            __kei__.step = True
+            __kei__.step = "breakpoint"
 
         return __kei__.step
 

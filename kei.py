@@ -10,7 +10,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.5-5"
+__version__ = "1.5-6"
 
 class KeiState:
     stack: List[Any]  # 添加类型提示
@@ -18,7 +18,7 @@ class KeiState:
     code: Optional[List[str]]
     repl: bool
     file: str
-    step: bool | None
+    step: bool | None | str
     error: bool
 
     _instance: Optional['KeiState'] = None
@@ -113,7 +113,7 @@ def error(errtype: str | None, info: str, stack: list=[], code:str|None=None, li
     linenum = linenum if linenum is not None else "??"
     space   = ' ' * len(str(linenum) if linenum is not None else "")
 
-    print(f"File \033[33;1m{filename}\033[0m")
+    print(f"File \033[33;1m{os.path.abspath(filename)}\033[0m")
 
     print(f"{space} ·")
 
@@ -4699,11 +4699,6 @@ def runtoken(node, env) -> tuple:
                     if callable(func_obj):
                         return func_obj(*args, **kwargs), False
 
-                # 标准库函数
-                if name in stdlib.func:
-                    result = stdlib.func[name](*args, **kwargs)
-                    return result, False
-
                 raise KeiError("NameError", f"未知函数: {name}")
 
             # ----- 3. 处理 methodcall -----
@@ -5363,6 +5358,7 @@ def runtoken(node, env) -> tuple:
                     if isinstance(obj, KeiBase):
                         if attr in obj._props:
                             del obj._props[attr]
+
             return None, False
 
         if node['type'] == 'raise':
@@ -5590,11 +5586,24 @@ def runtoken(node, env) -> tuple:
     try:
         if __kei__.step and node.get('source', None) is not None:
             while True:
-                maxline = stdlib.kei.cnlen(max(__kei__.code, key=len) if __kei__.code is not None else None)
+                maxline = stdlib.kei.cnlen(max([i.strip() for i in __kei__.code], key=stdlib.kei.cnlen) if __kei__.code is not None else None)
 
-                prompt = f"--> {globals()['linenum']+1 if globals()['linenum'] is not None else node.get('linenum', -1)+1} \033[94m{node.get('source').strip()}\033[0m"
-                prompt = prompt + ((maxline + 5) - stdlib.kei.cnlen(node.get('source').strip())) * " " + ":"
-                cmd = input(prompt)
+                prompt = f"--> \033[94m{node.get('source').strip()}\033[0m"
+                prompt = (prompt +
+                          ((maxline + 3) - stdlib.kei.cnlen(node.get('source').strip())) * " " +
+                          (f"[{globals()['linenum']+1 if globals()['linenum'] is not None else node.get('linenum', -1)+1}]"
+                          if __kei__.step != "breakpoint" else
+                          f"{{{globals()['linenum']+1 if globals()['linenum'] is not None else node.get('linenum', -1)+1}}}") +
+                          (" \033[95m" + (' / '.join(__kei__.stack) or '<global>') + "\033[0m") +
+                          "\n:")
+
+                print(prompt, end='')
+
+                if __kei__.step == "breakpoint": __kei__.step = True
+
+                cmd = sys.stdin.readline().rstrip('\n')
+
+                print("\033[1A\033[2K\033[1A\r")
 
                 if not cmd:
                     break
@@ -5616,10 +5625,7 @@ def runtoken(node, env) -> tuple:
                         __kei__.repl = False
                         __kei__.step = True
 
-                elif cmd == "s":
-                    print('->'.join(__kei__.stack) or '<global>')
-
-                elif cmd == "e":
+                elif cmd == "q":
                     sys.exit(0)
 
                 elif cmd == "v":
@@ -5648,18 +5654,17 @@ def runtoken(node, env) -> tuple:
                     return None, False
 
                 elif cmd == "h":
-                    print("KDB")
-                    print("  c - 执行一行代码")
-                    print("  s - 查看调用栈")
-                    print("  e - 退出")
-                    print("  v - 查看全部变量(除了下划线开头的变量)")
-                    print("  n - 执行代码到下一个breakpoint()")
-                    print("  k - 跳过当前行")
-                    print("  h - 显示此帮助")
+                    print("Kei Debugger (KDB)")
+                    print("  \033[33mc\033[0m - \033[36m执行一行代码\033[0m")
+                    print("  \033[33mq\033[0m - \033[36m退出\033[0m")
+                    print("  \033[33mv\033[0m - \033[36m查看全部变量(除了下划线开头的变量)\033[0m")
+                    print("  \033[33mn\033[0m - \033[36m执行代码到下一个breakpoint()\033[0m")
+                    print("  \033[33mk\033[0m - \033[36m跳过当前行\033[0m")
+                    print("  \033[33mh\033[0m - \033[36m显示此帮助\033[0m")
                     print()
 
                 else:
-                    print(f"--> \033[31m未知的指令: {cmd}, 尝试使用\"h\"获取帮助\033[0m")
+                    print(f"  % \033[31m未知的指令: {cmd}, 尝试使用\"h\"获取帮助\033[0m")
 
             import copy
 
@@ -5817,22 +5822,27 @@ def main():
             print("  \033[33m<文件名>\033[0m   - \033[36m运行Kei脚本\033[0m")
             print()
             print("\033[1m参数:\033[0m")
-            print("  \033[33m-h/--help\033[0m - \033[36m显示此帮助\033[0m")
-            print("  \033[33m-s/--step\033[0m - \033[36m单步执行代码\033[0m")
-            print("  \033[33m-c/--code\033[0m - \033[36m直接执行代码\033[0m")
-            print("  \033[33m--compile\033[0m - \033[36m打印AST\033[0m")
+            print("  \033[33m-h/--help\033[0m  - \033[36m显示此帮助\033[0m")
+            print("  \033[33m-d/--debug\033[0m - \033[36mDebug代码\033[0m")
+            print("  \033[33m-c/--code\033[0m  - \033[36m直接执行代码\033[0m")
+            print("  \033[33m--compile\033[0m  - \033[36m打印AST\033[0m")
             print()
             sys.exit(0)
 
         if len(sys.argv) >= 2:
             step       = False
             singlecode = False
-            if sys.argv[1] == "-s" or sys.argv[1] == "--step":
+            compile    = False
+            if sys.argv[1] == "-d" or sys.argv[1] == "--debug":
                 step = True
                 sys.argv = [sys.argv[0]] + sys.argv[2:]
 
             if sys.argv[1] == "-c" or sys.argv[1] == "--code":
                 singlecode = sys.argv[2:]
+
+            if sys.argv[1] == "--complie":
+                compile = True
+                sys.argv = [sys.argv[0]] + sys.argv[2:]
 
             __kei__.file = sys.argv[1]
 
@@ -5844,10 +5854,13 @@ def main():
                     with open(sys.argv[1], "r", encoding="utf-8") as f:
                         filecontent = f.read()
 
-                        if "--compile" in sys.argv:
+                        if compile:
                             import json
                             print(json.dumps(ast(token(filecontent)), indent=4, ensure_ascii=False))
                         else:
+                            if step:
+                                print(f"\033[36mKei Debugger\033[0m for \033[33;1m{os.path.abspath(sys.argv[1])}\033[0m")
+
                             execmain(filecontent, step=step)
 
                 else:

@@ -106,7 +106,7 @@ class KeiREPL:
         if self.single:
             return
         banner = f"""\033[36m=========================================
-      KeiLang REPL 交互式解释器 {kei.__version__}
+    KeiLang REPL 交互式解释器 {kei.__version__}
 =========================================
 \033[0m输入 .help 查看帮助
 """
