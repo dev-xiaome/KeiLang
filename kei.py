@@ -11,7 +11,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.5"
+__version__ = "1.5-1"
 
 class KeiState:
     stack: List[Any]  # 添加类型提示
@@ -185,7 +185,7 @@ def dict_diff(d1, d2, path="", seen=None):
                 removed.extend(sub_removed)
                 changed.extend(sub_changed)
             elif v1 != v2:
-                changed.append(f"{full_path}: {content(v1)} -> {content(v2)}")
+                changed.append(f"{full_path}: {content(v2)} -> {content(v1)}")
 
         seen.remove(obj_id)
 
@@ -5575,7 +5575,7 @@ def runtoken(node, env) -> tuple:
 
     try:
         if __kei__.step and node.get('source', None) is not None:
-            input(f"{f"--> 调用栈: {'->'.join(__kei__.stack) or '<global>'}":<30}{f"| {node.get('source').strip()}"}")
+            input(f"{f"--> {node.get('source').strip()}":<50}{f"| 调用栈: {'->'.join(__kei__.stack) or '<global>'}"}")
 
             import copy
 
@@ -5598,7 +5598,7 @@ def runtoken(node, env) -> tuple:
 
             rmvar, addvar, changevar = dict_diff(newenv, oldenv)
             if rmvar or addvar or changevar:
-                print(f"--> {f"+ {' '.join(addvar)}" if addvar else ""} {f"| - {' '.join(rmvar)}" if rmvar else ""} {f"| & {' '.join(changevar)} |" if changevar else ""}")
+                print(f"{f"--> {f"+ {' '.join(addvar)} " if addvar else ""}{f"- {' '.join(rmvar)} " if rmvar else ""}{f"& {' '.join(changevar)}" if changevar else ""}":<50}|")
         else:
             result = runtokentemp()
 
