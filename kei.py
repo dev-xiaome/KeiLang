@@ -10,7 +10,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.5-3"
+__version__ = "1.5-4"
 
 class KeiState:
     stack: List[Any]  # 添加类型提示
@@ -5654,6 +5654,7 @@ def runtoken(node, env) -> tuple:
                     print("  e - 退出")
                     print("  v - 查看全部变量(除了下划线开头的变量)")
                     print("  n - 执行代码到下一个breakpoint()")
+                    print("  k - 跳过当前行")
                     print("  h - 显示此帮助")
                     print()
 
@@ -5817,36 +5818,39 @@ def main():
             print()
             print("\033[1m参数:\033[0m")
             print("  \033[33m-h/--help\033[0m    - \033[36m显示此帮助\033[0m")
-            print("  \033[33m-c/--compile\033[0m - \033[36m打印AST\033[0m")
             print("  \033[33m-s/--step\033[0m    - \033[36m单步执行代码\033[0m")
+            print("  \033[33m--compile\033[0m    - \033[36m打印AST\033[0m")
             print()
             sys.exit(0)
 
         if len(sys.argv) >= 2:
-            step = False
+            step       = False
+            singlecode = False
             if sys.argv[1] == "-s" or sys.argv[1] == "--step":
                 step = True
                 sys.argv = [sys.argv[0]] + sys.argv[2:]
 
+            if sys.argv[1] == "-c" or sys.argv[1] == "--code":
+                singlecode = sys.argv[2:]
+
             __kei__.file = sys.argv[1]
 
-            if os.path.isfile(sys.argv[1]):
-                with open(sys.argv[1], "r", encoding="utf-8") as f:
-                    filecontent = f.read()
-
-                    # print("========== AST ==========") #DEBUG
-                    # print(ast(token(filecontent)))     #DEBUG
-                    # print("========== AST ==========") #DEBUG
-                    # print()                            #DEBUG
-
-                    if "-c" in sys.argv or "--compile" in sys.argv:
-                        import json
-                        print(json.dumps(ast(token(filecontent)), indent=4, ensure_ascii=False))
-                    else:
-                        execmain(filecontent, step=step)
-
+            if singlecode:
+                for code in singlecode:
+                    exec(code)
             else:
-                raise KeiError("NotFoundError", f"未找到 {sys.argv[1]}")
+                if os.path.isfile(sys.argv[1]):
+                    with open(sys.argv[1], "r", encoding="utf-8") as f:
+                        filecontent = f.read()
+
+                        if "--compile" in sys.argv:
+                            import json
+                            print(json.dumps(ast(token(filecontent)), indent=4, ensure_ascii=False))
+                        else:
+                            execmain(filecontent, step=step)
+
+                else:
+                    raise KeiError("NotFoundError", f"未找到 {sys.argv[1]}")
 
         else:
             import repl

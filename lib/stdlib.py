@@ -538,6 +538,22 @@ class kei:
         return __kei__.step
 
     @s
+    def step(value=None):
+        from kei import __kei__
+
+        if value is not None:
+            if isinstance(value, KeiBool):
+                value = value.value
+            elif type(value) is null:
+                value = None
+            else:
+                raise KeiError("TypeError", "step需要bool或null")
+
+            __kei__.step = value
+
+        return __kei__.step
+
+    @s
     def min(*args):
         """返回最小值，支持多个参数或列表"""
         if len(args) == 0:
@@ -869,6 +885,7 @@ func = {
     "write": kei.write,
     "breakpoint": kei.breakpoint,
     "repr": kei.repr,
+    "step": kei.step,
     "open": kei.open,
     "any": KeiBase,
     "int": KeiInt,
