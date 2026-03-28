@@ -14,6 +14,8 @@ except:
 
 import kei
 
+kei.__kei__.repl = True
+
 class KeiREPL:
     def __init__(self):
         self.env = None
@@ -170,7 +172,13 @@ class KeiREPL:
                 self.env = {}
 
             # 执行代码
-            self.env = kei.exec(line, self.env)[0]
+            try:
+                tokens   = kei.ast(kei.token(line))
+            except:
+                return True
+
+            for t in tokens:
+                self.env = kei.runtoken(t, self.env)[0]
 
         except KeyboardInterrupt:
             pass
@@ -191,19 +199,26 @@ class KeiREPL:
                     readline.redisplay()
 
                 # 处理多行输入（检测花括号）
-                if line.strip() and '{' in line and line.count('{') > line.count('}'):
-                    lines = [line]
-                    brace_count = line.count('{') - line.count('}')
+                paren_count = line.count('(') - line.count(')')
+                brace_count = line.count('{') - line.count('}')
+                bracket_count = line.count('[') - line.count(']')
 
-                    while brace_count > 0:
+                # 如果括号不匹配，继续读取
+                if paren_count > 0 or brace_count > 0 or bracket_count > 0:
+                    lines = [line]
+                    while paren_count > 0 or brace_count > 0 or bracket_count > 0:
                         try:
                             next_line = input("\033[32m... \033[0m")
-                            if not next_line.strip():
+                            if not next_line.strip() and (paren_count > 0 or brace_count > 0 or bracket_count > 0):
+                                # 空行但括号没闭合，退出
                                 break
                             lines.append(next_line)
+                            paren_count += next_line.count('(') - next_line.count(')')
                             brace_count += next_line.count('{') - next_line.count('}')
+                            bracket_count += next_line.count('[') - next_line.count(']')
+
                         except KeyboardInterrupt:
-                            break
+                            return True
 
                     line = '\n'.join(lines)
 

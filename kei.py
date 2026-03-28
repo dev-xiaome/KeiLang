@@ -11,12 +11,14 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.4-3"
+__version__ = "1.4-4"
 
 class KeiState:
     stack: List[Any]  # 添加类型提示
     catch: bool
     code: Optional[List[str]]
+    repl: bool
+    file: str
 
     _instance: Optional['KeiState'] = None
 
@@ -27,6 +29,9 @@ class KeiState:
             cls._instance.stack = []
             cls._instance.catch = False
             cls._instance.code = None
+            cls._instance.repl = False
+            cls._instance.file = "未知文件"
+
         return cls._instance
 
     def __init__(self) -> None:
@@ -44,9 +49,6 @@ class KeiState:
 
     def get(self, key: str, default: Any = None) -> Any:
         return getattr(self, key, default)
-
-    def __repr__(self) -> str:
-        return f"{{'stack': {self.stack}, 'catch': {self.catch}, 'code': {self.code}}}"
 
 # 创建单例
 __kei__: KeiState = KeiState()
@@ -139,7 +141,8 @@ def error(errtype: str | None, info: str, stack: list=[], code:str|None=None, li
     #import traceback
     #traceback.print_exc()
 
-    sys.exit(1)
+    if not __kei__.repl:
+        sys.exit(1)
 
 def token(original: str) -> list:
     __kei__.code = original.splitlines()
@@ -825,6 +828,10 @@ def parse_call(name: str, tokens: list, pos: int) -> tuple:
         elif pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ')':
             pos += 1
             break
+        elif pos < len(tokens) and tokens[pos]['type'] == 'name':
+            raise KeiError("SyntaxError", f"非预期的名称: {tokens[pos]['value']}")
+        elif pos >= len(tokens):
+            raise KeiError("SyntaxError", "缺少右括号 ')'")
         else:
             break
 
@@ -1460,7 +1467,7 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
     globals()['all_lines'] = all_lines
     globals()['pos']       = pos
     globals()['linepos']   = linepos
-    globals()['code']      = __kei__.get('code', '未知行')[tokens[pos]['linenum']]
+    globals()['source']    = __kei__.get('code', '未知行')[tokens[pos]['linenum']]
     globals()['linenum']   = tokens[pos]['linenum']
 
     code = __kei__.get('code', '未知行')[tokens[pos]['linenum']]
@@ -2942,21 +2949,27 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                     err_name if err_name is not err_msg else None,  # info
                     err_msg,
                     __kei__.stack.copy(),  # stack - 直接用 __kei__.stack
-                    globals()['code'],
+                    globals()['source'] if globals()['source'] is not None else node.get('source', None),
                     globals()['linenum']+1 if globals()['linenum'] is not None else node.get('linenum', -1),
-                    globals().get('file', '未知文件')
+                    __kei__.get('file', '未知文件')
                 )
-                sys.exit(1)
+                if not __kei__.repl:
+                    sys.exit(1)
+                else:
+                    raise
         else:
             error(
                 type(e).__name__,
                 str(e),
                 __kei__.stack.copy(),  # stack
-                globals()['code'],
+                globals()['source'] if globals()['source'] is not None else node.get('source', None),
                 globals()['linenum']+1 if globals()['linenum'] is not None else node.get('linenum', -1),
-                globals().get('file', '未知文件')
+                __kei__.get('file', '未知文件')
             )
-            sys.exit(1)
+            if not __kei__.repl:
+                sys.exit(1)
+            else:
+                raise
 
 def parse_index(tokens: list, pos: int) -> tuple:
     """解析索引访问, 递归解析整个链条"""
@@ -5493,9 +5506,12 @@ def runtoken(node, env) -> tuple:
                     __kei__.stack.copy(),  # stack - 直接用 __kei__.stack
                     globals()['source'] if globals()['source'] is not None else node.get('source', None),
                     globals()['linenum']+1 if globals()['linenum'] is not None else node.get('linenum', -1),
-                    globals().get('file', '未知文件')
+                    __kei__.get('file', '未知文件')
                 )
-                sys.exit(1)
+                if not __kei__.repl:
+                    sys.exit(1)
+                else:
+                    return None, env
         else:
             error(
                 type(e).__name__,
@@ -5503,9 +5519,12 @@ def runtoken(node, env) -> tuple:
                 __kei__.stack.copy(),  # stack
                 globals()['source'] if globals()['source'] is not None else node.get('source', None),
                 globals()['linenum']+1 if globals()['linenum'] is not None else node.get('linenum', -1),
-                globals().get('file', '未知文件')
+                __kei__.get('file', '未知文件')
             )
-            sys.exit(1)
+            if not __kei__.repl:
+                sys.exit(1)
+            else:
+                return None, env
 
 def exec(code, env=None):
     if isinstance(code, KeiString):
@@ -5577,7 +5596,7 @@ def main():
             sys.exit(0)
 
         if len(sys.argv) >= 2:
-            globals()['file'] = sys.argv[1]
+            __kei__.file = sys.argv[1]
 
             if os.path.isfile(sys.argv[1]):
                 with open(sys.argv[1], "r", encoding="utf-8") as f:
