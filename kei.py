@@ -10,7 +10,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.5-6"
+__version__ = "1.5-8"
 
 class KeiState:
     stack: List[Any]  # 添加类型提示
@@ -5859,7 +5859,7 @@ def main():
                             print(json.dumps(ast(token(filecontent)), indent=4, ensure_ascii=False))
                         else:
                             if step:
-                                print(f"\033[36mKei Debugger\033[0m for \033[33;1m{os.path.abspath(sys.argv[1])}\033[0m")
+                                print(f"[\033[34mKei Debugger\033[0m] \033[33;1m{os.path.abspath(sys.argv[1])}\033[0m")
 
                             execmain(filecontent, step=step)
 
@@ -5874,4 +5874,7 @@ def main():
         exit()
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        exit()
