@@ -10,7 +10,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.5-15"
+__version__ = "1.5-16"
 
 class KeiState:
     stack: List[Any]  # 添加类型提示
@@ -21,6 +21,7 @@ class KeiState:
     step: bool | None | str | int
     error: bool
     var: list
+    env: dict
 
     _instance: Optional['KeiState'] = None
 
@@ -36,6 +37,7 @@ class KeiState:
             cls._instance.step = False
             cls._instance.error = True
             cls._instance.var = []
+            cls._instance.env = {}
 
         return cls._instance
 
@@ -851,6 +853,11 @@ def process_fstring(template, env):
 
                     expr_tokens = token(expr)
                     expr_ast = ast(expr_tokens)[0]
+                    try: del expr_ast['source']
+                    except: pass
+                    try: del expr_ast['linenum']
+                    except: pass
+
                     value, _ = runtoken(expr_ast, env)
                     result.append(content(value))
 
@@ -3643,6 +3650,8 @@ def runtoken(node, env) -> tuple:
         globals()['linenum'] = node.get('linenum')
 
     def runtokentemp() -> tuple:
+        __kei__.env = env
+
         if env.get("__maxrecursion__"):
             if type(env["__maxrecursion__"]) is KeiInt:
                 __maxrecursion__ = env["__maxrecursion__"].value
@@ -5626,6 +5635,8 @@ def runtoken(node, env) -> tuple:
         if __kei__.step and type(__kei__.step) is not int and node.get('source', None) is not None:
             while True:
                 maxline = stdlib.kei.cnlen(max([i.strip() for i in __kei__.code], key=stdlib.kei.cnlen) if __kei__.code is not None else None)
+
+                print(node)
 
                 prompt = f"--> \033[94m{node.get('source').strip()}\033[0m"
                 prompt = (prompt +

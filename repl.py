@@ -141,8 +141,10 @@ class KeiREPL:
             if self.env is None:
                 self.env = None
 
+            from kei import __kei__
+
             try:
-                self.env = kei.exec(line, self.env)[0]
+                self.env = kei.exec(line, __kei__.env)[0] | __kei__.env
             except:
                 kei.__kei__.code = line
                 raise
