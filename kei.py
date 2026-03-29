@@ -10,7 +10,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.5-11"
+__version__ = "1.5-12"
 
 class KeiState:
     stack: List[Any]  # 添加类型提示
@@ -5732,6 +5732,7 @@ def runtoken(node, env) -> tuple:
                     print("  \033[33mp\033[0m - \033[36m打印变量\033[0m")
                     print("  \033[33ml\033[0m - \033[36m显示附近的代码\033[0m")
                     print("  \033[33mt\033[0m - \033[36m持续跟踪变量\033[0m")
+                    print("  \033[33bt\033[0m - \033[36m执行到指定的行\033[0m")
                     print("  \033[33mh\033[0m - \033[36m显示此帮助\033[0m")
                     print()
 
