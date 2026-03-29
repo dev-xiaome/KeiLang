@@ -10,7 +10,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.5-8"
+__version__ = "1.5-9"
 
 class KeiState:
     stack: List[Any]  # 添加类型提示
@@ -20,6 +20,7 @@ class KeiState:
     file: str
     step: bool | None | str
     error: bool
+    var: list
 
     _instance: Optional['KeiState'] = None
 
@@ -34,6 +35,7 @@ class KeiState:
             cls._instance.file = "未知文件"
             cls._instance.step = False
             cls._instance.error = True
+            cls._instance.var = []
 
         return cls._instance
 
@@ -5597,11 +5599,9 @@ def runtoken(node, env) -> tuple:
                           (" \033[95m" + (' / '.join(__kei__.stack) or '<global>') + "\033[0m") +
                           "\n:")
 
-                print(prompt, end='')
-
                 if __kei__.step == "breakpoint": __kei__.step = True
 
-                cmd = sys.stdin.readline().rstrip('\n')
+                cmd = input(prompt)
 
                 print("\033[1A\033[2K\033[1A\r")
 
@@ -5628,6 +5628,13 @@ def runtoken(node, env) -> tuple:
                 elif cmd == "q":
                     sys.exit(0)
 
+                elif cmd.startswith("@"):
+                    py_code = cmd[1:]
+                    try:
+                        exec(py_code)
+                    except Exception as e:
+                        print(f"  % \033[31mPython错误: {e}\033[0m")
+
                 elif cmd == "v":
                     # 获取所有用户变量
                     vars_to_show = {k: v for k, v in env.items()
@@ -5650,8 +5657,58 @@ def runtoken(node, env) -> tuple:
                     __kei__.step = None
                     break
 
+                elif cmd[0] == "l":
+                    if __kei__.code is None:
+                        print("  没有可显示的代码")
+                    else:
+                        line_num = globals()['linenum']+1 if globals()['linenum'] is not None else node.get('linenum', -1)+1
+                        if cmd[1:]:
+                            if cmd[1] == "a":
+                                start = 0
+                                end   = len(__kei__.code)
+                            else:
+                                try:
+                                    start = max(0, line_num - (int(''.join(cmd[1:]))+1))
+                                except:
+                                    print(f"  % \033[31m{cmd}需要整数参数\033[0m")
+                                    continue
+
+                                end = min(len(__kei__.code), line_num + int(''.join(cmd[1:])))
+                        else:
+                            start = max(0, line_num - 6)  # 显示前后5行
+                            end = min(len(__kei__.code), line_num + 5)
+
+                        for i in range(start, end):
+                            marker = " \033[33m>\033[0m" if i == line_num - 1 else "  "  # line_num 是 1-based
+                            print(f"{marker} {i+1}: {__kei__.code[i]}")
+
                 elif cmd == "k":
                     return None, False
+
+                elif cmd.startswith("u "):
+                    if cmd[2:]:
+                        cmd = cmd[2:].split()
+                        for c in cmd:
+                            try:
+                                del env[c]
+                            except:
+                                print(f"  % \033[31m变量{c}不存在\033[0m")
+                    else:
+                        print(f"  % \033[31m\"u\"需要变量名称\033[0m")
+
+                elif cmd.startswith("p "):
+                    if cmd[2:]:
+                        cmd = cmd[2:].split()
+                        for c in cmd:
+                            try:
+                                print(f"  \033[36m{c}\033[0m = \033[33m{env[c]}\033[0m")
+                            except:
+                                print(f"  % \033[31m变量{c}不存在\033[0m")
+                    else:
+                        print(f"  % \033[31m\"p\"需要变量名称\033[0m")
+
+                elif cmd.startswith("t "):
+                    __kei__.var = cmd[2:].split()
 
                 elif cmd == "h":
                     print("Kei Debugger (KDB)")
@@ -5660,6 +5717,10 @@ def runtoken(node, env) -> tuple:
                     print("  \033[33mv\033[0m - \033[36m查看全部变量(除了下划线开头的变量)\033[0m")
                     print("  \033[33mn\033[0m - \033[36m执行代码到下一个breakpoint()\033[0m")
                     print("  \033[33mk\033[0m - \033[36m跳过当前行\033[0m")
+                    print("  \033[33mu\033[0m - \033[36m删除env的变量\033[0m")
+                    print("  \033[33mp\033[0m - \033[36m打印变量\033[0m")
+                    print("  \033[33ml\033[0m - \033[36m显示附近的代码\033[0m")
+                    print("  \033[33mt\033[0m - \033[36m持续跟踪变量\033[0m")
                     print("  \033[33mh\033[0m - \033[36m显示此帮助\033[0m")
                     print()
 
@@ -5692,6 +5753,15 @@ def runtoken(node, env) -> tuple:
                 print(f"  \033[31m- {' and '.join(rmvar)}\033[0m")
             if changevar:
                 print(f"  \033[33m& {' and '.join(changevar)}\033[0m")
+
+            if __kei__.var:
+                for v in __kei__.var:
+                    if not v:
+                        continue
+                    try:
+                        print(f"  \033[36m{v}\033[0m = \033[33m{env[v]}\033[0m")
+                    except:
+                        print(f"  % \033[31m变量{v}不存在\033[0m")
 
         else:
             result = runtokentemp()
@@ -5859,7 +5929,7 @@ def main():
                             print(json.dumps(ast(token(filecontent)), indent=4, ensure_ascii=False))
                         else:
                             if step:
-                                print(f"[\033[34mKei Debugger\033[0m] \033[33;1m{os.path.abspath(sys.argv[1])}\033[0m")
+                                print(f"[Kei Debugger] \033[33;1m{os.path.abspath(sys.argv[1])}\033[0m")
 
                             execmain(filecontent, step=step)
 
