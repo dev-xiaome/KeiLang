@@ -139,17 +139,13 @@ class KeiREPL:
             return True
         try:
             if self.env is None:
-                self.env = {}
+                self.env = None
+
             try:
-                tokens = kei.ast(kei.token(line))
+                self.env = kei.exec(line, self.env)[0]
             except:
-                return True
-            for t in tokens:
-                try:
-                    self.env = kei.runtoken(t, self.env)[0]
-                except:
-                    kei.__kei__.code = line
-                    raise
+                kei.__kei__.code = line
+                raise
 
         except KeyboardInterrupt:
             pass
