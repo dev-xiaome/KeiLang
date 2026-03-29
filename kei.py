@@ -10,7 +10,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.5-10"
+__version__ = "1.5-11"
 
 class KeiState:
     stack: List[Any]  # 添加类型提示
@@ -5586,7 +5586,6 @@ def runtoken(node, env) -> tuple:
         raise KeiError("RuntimeError", f"未知的节点: {node['type']}")
 
     try:
-        #print(__kei__.step, type(__kei__.step))
         if type(__kei__.step) is int:
             if __kei__.step == (globals()['linenum']+1 if globals()['linenum'] is not None else node.get('linenum', -1)+1):
                 __kei__.step = True
@@ -5608,7 +5607,7 @@ def runtoken(node, env) -> tuple:
 
                 cmd = input(prompt)
 
-                #print("\033[1A\033[2K\033[1A\r")
+                print("\033[1A\033[2K\033[1A\r")
 
                 if not cmd:
                     break
