@@ -10,7 +10,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.5-13"
+__version__ = "1.5-14"
 
 class KeiState:
     stack: List[Any]  # 添加类型提示
@@ -353,6 +353,32 @@ def token(original: str) -> list:
                     tokens.append(('string', escape(string)))
                     continue
 
+                # rf-string 或 fr-string
+                if (c == 'r' and pos + 1 < length and codes[pos+1] == 'f') or \
+                   (c == 'f' and pos + 1 < length and codes[pos+1] == 'r'):
+                    pos += 2
+                    temp_pos = pos
+                    while temp_pos < length and codes[temp_pos] in ' \n\t':
+                        temp_pos += 1
+
+                    if temp_pos < length and codes[temp_pos] in '"\'':
+                        quote = codes[temp_pos]
+                        pos = temp_pos + 1
+                        start = pos
+                        # rf-string: 不处理转义（原始字符串特性）
+                        while pos < length and codes[pos] != quote:
+                            pos += 1
+
+                        # 检查未闭合
+                        if pos >= length:
+                            raise KeiError("SyntaxError", f"未闭合的rf-string: {codes[start-3:]}")
+
+                        pos += 1
+                        string = codes[start-3:pos]  # 包含 rf/fr 和引号
+                        # 标记为 rfstring，既是原始字符串又支持 f-string
+                        tokens.append(('rfstring', string[2:]))  # 去掉 rf/fr 和引号
+                        continue
+
                 # r-string 单行
                 if c == 'r':
                     temp_pos = pos + 1
@@ -539,13 +565,18 @@ def ast(tokenlines: list) -> list:
     while pos < length:
         thetoken = tokens[pos]
 
+        if isinstance(thetoken, tuple) and thetoken[0] == 'rfstring':
+            result.append({"type":"str", "mark": "f", "value":thetoken[1][1:-1], 'linenum':linetokens[pos][1]})
+            pos += 1
+            continue
+
         if isinstance(thetoken, tuple) and thetoken[0] == 'fstring':
             result.append({"type":"str", "value":thetoken[1][1:-1], "mark": "f", 'linenum':linetokens[pos][1]})
             pos += 1
             continue
 
         if isinstance(thetoken, tuple) and thetoken[0] == 'rstring':
-            result.append({"type":"str", "value":thetoken[1][1:-1], "mark": "r", 'linenum':linetokens[pos][1]})
+            result.append({"type":"str", "value":thetoken[1][1:-1], 'linenum':linetokens[pos][1]})
             pos += 1
             continue
 
@@ -3153,7 +3184,7 @@ def parse_dictcomp(tokens, pos):
     elif ifunless == "unless":
         rettype = 'undictcomp'
     else:
-        rettype = undefined
+        rettype = 'dictcomp'
 
     return {
         'type': rettype,
@@ -3454,7 +3485,7 @@ def parse_listcomp(tokens, pos):
     elif ifunless == "unless":
         rettype = 'unlistcomp'
     else:
-        rettype = undefined
+        rettype = "listcomp"
 
     return {
         'type': rettype,
@@ -5939,8 +5970,8 @@ def main():
                         filecontent = f.read()
 
                         if compile:
-                            import json
-                            print(json.dumps(ast(token(filecontent)), indent=4, ensure_ascii=False))
+                            from pprint import pprint
+                            pprint(ast(token(filecontent)))
                         else:
                             if step:
                                 print(f"[Kei Debugger] \033[33;1m{os.path.abspath(sys.argv[1])}\033[0m")
