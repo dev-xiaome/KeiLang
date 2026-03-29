@@ -33,11 +33,11 @@ class kei:
     def _assert(x, y=None):
         kei.check(x, KeiBool, name='assert')
         x = x.value
-        import sys
+
         if not x:
             if y is not None:
                 kei.print(y)
-            sys.exit(1)
+            raise KeiError('AssertError', f'断言失败')
 
     @s
     def factorial(n):

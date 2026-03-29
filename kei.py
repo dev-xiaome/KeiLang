@@ -10,7 +10,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.5-16"
+__version__ = "1.6"
 
 class KeiState:
     stack: List[Any]  # 添加类型提示
@@ -112,6 +112,33 @@ sys.setrecursionlimit(1024)
 def debug_print(*args, **kwargs):
     if DEBUG:
         print("[DEBUG]", *args, **kwargs)
+
+def getname(node, env):
+    result = []
+    seen = set()  # 用来去重！
+
+    def traverse(n):
+        if isinstance(n, dict):
+            # 只收集 type=name 的节点
+            if n.get("type") == "name":
+                name = n["value"]
+                # 只收集第一次出现的，避免重复
+                if name not in seen:
+                    seen.add(name)
+                    val = runtoken(n, env)[0]
+                    result.append([name, val])
+
+            # 递归遍历所有子节点
+            for v in n.values():
+                traverse(v)
+
+        elif isinstance(n, list):
+            for item in n:
+                traverse(item)
+
+    # 开始遍历
+    traverse(node)
+    return result
 
 def error(errtype: str | None, info: str, stack: list=[], code:str|None=None, linenum=None, filename='未知文件') -> None:
     linenum = linenum if linenum is not None else "??"
@@ -3638,6 +3665,8 @@ def find_method(class_obj, method_name, env):
 def runtoken(node, env) -> tuple:
     env["__env__"] = KeiDict(env)
 
+    __kei__.env = env
+
     if 'source' not in globals():
         globals()['source'] = None
     if 'linenum' not in globals():
@@ -3650,8 +3679,6 @@ def runtoken(node, env) -> tuple:
         globals()['linenum'] = node.get('linenum')
 
     def runtokentemp() -> tuple:
-        __kei__.env = env
-
         if env.get("__maxrecursion__"):
             if type(env["__maxrecursion__"]) is KeiInt:
                 __maxrecursion__ = env["__maxrecursion__"].value
@@ -5634,15 +5661,31 @@ def runtoken(node, env) -> tuple:
 
         if __kei__.step and type(__kei__.step) is not int and node.get('source', None) is not None:
             while True:
+                import copy
+
+                try:
+                    save_env = copy.deepcopy(env)
+                except:
+                    try:
+                        save_env = copy.copy(env)
+                    except:
+                        save_env = env.copy()
+
+                # 使用复制的env最大防止污染环境
+                names = getname(node, save_env)
+
                 maxline = stdlib.kei.cnlen(max([i.strip() for i in __kei__.code], key=stdlib.kei.cnlen) if __kei__.code is not None else None)
 
                 prompt = f"--> \033[94m{node.get('source').strip()}\033[0m"
                 prompt = (prompt +
                           ((maxline + 3) - stdlib.kei.cnlen(node.get('source').strip())) * " " +
-                          (f"[{globals()['linenum']+1 if globals()['linenum'] is not None else node.get('linenum', -1)+1}]"
+                          (f"[{node.get('linenum', -1)+1}]"
                           if __kei__.step != "breakpoint" else
-                          f"{{{globals()['linenum']+1 if globals()['linenum'] is not None else node.get('linenum', -1)+1}}}") +
+                          f"{{{node.get('linenum', -1)+1}}}") +
                           (" \033[95m" + (' / '.join(__kei__.stack) or '<global>') + "\033[0m") +
+                          ' \033[34;2m' +
+                          (';'.join([f"{n} = {v}" for n, v in names])) +
+                          '\033[0m' +
                           "\n:")
 
                 if __kei__.step == "breakpoint": __kei__.step = True
@@ -5714,12 +5757,12 @@ def runtoken(node, env) -> tuple:
                                 end   = len(__kei__.code)
                             else:
                                 try:
-                                    start = max(0, line_num - (int(''.join(cmd[1:]))+1))
+                                    start = max(0, line_num - (int(cmd[1:]))+1)
                                 except:
                                     print(f"  % \033[31m{cmd}需要整数参数\033[0m")
                                     continue
 
-                                end = min(len(__kei__.code), line_num + int(''.join(cmd[1:])))
+                                end = min(len(__kei__.code), line_num + int(cmd[1:]))
                         else:
                             start = max(0, line_num - 6)  # 显示前后5行
                             end = min(len(__kei__.code), line_num + 5)
@@ -5775,6 +5818,7 @@ def runtoken(node, env) -> tuple:
                     print("  \033[33ml\033[0m - \033[36m显示附近的代码\033[0m")
                     print("  \033[33mt\033[0m - \033[36m持续跟踪变量\033[0m")
                     print("  \033[33mb\033[0m - \033[36m执行到指定的行\033[0m")
+                    print("  \033[33m@\033[0m - \033[36m执行Python代码\033[0m")
                     print("  \033[33mh\033[0m - \033[36m显示此帮助\033[0m")
                     print()
 
