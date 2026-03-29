@@ -10,7 +10,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.5-9"
+__version__ = "1.5-10"
 
 class KeiState:
     stack: List[Any]  # 添加类型提示
@@ -18,7 +18,7 @@ class KeiState:
     code: Optional[List[str]]
     repl: bool
     file: str
-    step: bool | None | str
+    step: bool | None | str | int
     error: bool
     var: list
 
@@ -5586,7 +5586,12 @@ def runtoken(node, env) -> tuple:
         raise KeiError("RuntimeError", f"未知的节点: {node['type']}")
 
     try:
-        if __kei__.step and node.get('source', None) is not None:
+        #print(__kei__.step, type(__kei__.step))
+        if type(__kei__.step) is int:
+            if __kei__.step == (globals()['linenum']+1 if globals()['linenum'] is not None else node.get('linenum', -1)+1):
+                __kei__.step = True
+
+        if __kei__.step and type(__kei__.step) is not int and node.get('source', None) is not None:
             while True:
                 maxline = stdlib.kei.cnlen(max([i.strip() for i in __kei__.code], key=stdlib.kei.cnlen) if __kei__.code is not None else None)
 
@@ -5603,7 +5608,7 @@ def runtoken(node, env) -> tuple:
 
                 cmd = input(prompt)
 
-                print("\033[1A\033[2K\033[1A\r")
+                #print("\033[1A\033[2K\033[1A\r")
 
                 if not cmd:
                     break
@@ -5684,6 +5689,13 @@ def runtoken(node, env) -> tuple:
 
                 elif cmd == "k":
                     return None, False
+
+                elif cmd.startswith("b "):
+                    try:
+                        __kei__.step = int(cmd[2:])
+                        break
+                    except:
+                        print(f"  % \033[31m{cmd}需要整数参数\033[0m")
 
                 elif cmd.startswith("u "):
                     if cmd[2:]:
