@@ -5636,8 +5636,6 @@ def runtoken(node, env) -> tuple:
             while True:
                 maxline = stdlib.kei.cnlen(max([i.strip() for i in __kei__.code], key=stdlib.kei.cnlen) if __kei__.code is not None else None)
 
-                print(node)
-
                 prompt = f"--> \033[94m{node.get('source').strip()}\033[0m"
                 prompt = (prompt +
                           ((maxline + 3) - stdlib.kei.cnlen(node.get('source').strip())) * " " +
