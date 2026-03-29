@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 
-from lib.object import *
-
 def to_float(x):
     """将 Kei 类型转换为 Python float"""
+    from lib.object import KeiFloat, KeiInt, KeiError
+
     if isinstance(x, (KeiFloat, KeiInt)):
         return float(x.value)
     else:
@@ -11,6 +11,8 @@ def to_float(x):
 
 def to_int(x):
     """将 Kei 类型转换为 Python int"""
+    from lib.object import KeiInt, KeiError
+
     if isinstance(x, (KeiInt)):
         return int(x.value)
     else:
@@ -18,6 +20,8 @@ def to_int(x):
 
 def to_str(x):
     """将 Kei 类型转换为 Python str"""
+    from lib.object import KeiString, KeiError
+
     if isinstance(x, KeiString):
         return str(x.value)
     else:
@@ -25,6 +29,8 @@ def to_str(x):
 
 def to_bool(x):
     """将 Kei 类型转换为 Python bool"""
+    from lib.object import KeiBool, KeiError
+
     if isinstance(x, KeiBool):
         return bool(x.value)
     else:
@@ -32,6 +38,8 @@ def to_bool(x):
 
 def to_list(x):
     """将 Kei 类型转换为 Python list"""
+    from lib.object import KeiList, KeiError
+
     if isinstance(x, KeiList):
         return [to_python(item) for item in x.items]
     else:
@@ -39,12 +47,15 @@ def to_list(x):
 
 def to_dict(x):
     """将 Kei 类型转换为 Python dict"""
+    from lib.object import KeiDict, KeiError
+
     if isinstance(x, KeiDict):
         return {k: to_python(v) for k, v in x.items.items()}
     else:
         raise KeiError("TypeError", "需要dict")
 
 def to_python(x):
+    from lib.object import KeiInt, KeiFloat, KeiString, KeiBool, KeiList, KeiDict
     if isinstance(x, KeiInt):
         return x.value
     if isinstance(x, KeiFloat):

@@ -1,11 +1,8 @@
 *
 
 !.gitignore
-!kei.py
-!repl.py
 !README.md
 !LICENSE
 !lib/
-!lib/*.py
-!*.sh
+!**/*.py
 !kei

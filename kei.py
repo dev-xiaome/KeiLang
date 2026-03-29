@@ -10,7 +10,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.5-12"
+__version__ = "1.5-13"
 
 class KeiState:
     stack: List[Any]  # 添加类型提示
@@ -5100,7 +5100,9 @@ def runtoken(node, env) -> tuple:
             elif isinstance(iterable_val, KeiString):
                 items = [KeiString(c) for c in iterable_val.value]
             elif isinstance(iterable_val, KeiDict):
-                items = [(KeiString(k), v) for k, v in iterable_val.items.items()]
+                items = []
+                for k, v in iterable_val.items.items():
+                    items.append(KeiList([KeiString(k), v]))
             elif isinstance(iterable_val, (list, tuple)):
                 items = iterable_val
             else:
