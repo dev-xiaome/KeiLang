@@ -1468,13 +1468,19 @@ class KeiFunction(KeiBase):
         self.__name__ = func_obj['name'] if func_obj['name'] else "lambda"
         self.__env__ = func_obj.get('closure', env)
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args, linecode=None, **kwargs):
         from kei import runtoken, __kei__
 
-        __kei__.stack.append(self.__name__)
+        if linecode is not None:
+            __kei__.stack.append((self.__name__, linecode))
 
         params = self.func_obj['params']
         typeassert = self.func_obj.get('typeassert', None)
+
+        # 找到 * 参数的位置
+        star_pos = -1
+        star_param_name = None
+        starstar_param_name = None
 
         # 找到 * 参数的位置
         star_pos = -1
@@ -1490,9 +1496,13 @@ class KeiFunction(KeiBase):
                 star_pos = i
                 break
 
-        # 分离参数
-        before_star = params[:star_pos] if star_pos > 0 else []
-        after_star = params[star_pos + 1:] if star_pos >= 0 else []
+        # 如果没有 *，所有参数都是普通参数
+        if star_pos == -1:
+            before_star = params      # 所有参数都是普通参数
+            after_star = []
+        else:
+            before_star = params[:star_pos]
+            after_star = params[star_pos + 1:]
 
         # 转换参数列表
         all_args = list(args)

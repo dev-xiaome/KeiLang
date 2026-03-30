@@ -10,7 +10,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.6-2"
+__version__ = "1.6-3"
 
 class KeiState:
     stack: List[Any]  # 添加类型提示
@@ -173,7 +173,10 @@ def error(errtype: str | None, info: str, stack: list=[], code:str|None=None, li
     print(f"{space} ·")
 
     for s in stack:
-        print(f"{space} | in \033[36;1m{s}\033[0m")
+        if type(s) is tuple and s[1].strip():
+            print(f"{space} | in \033[36;1m{s[0]}: {s[1].strip()}\033[0m")
+        else:
+            print(f"{space} | in \033[36;1m{s}\033[0m")
 
     if not stack:
         print(f"{space} | in \033[36;1m<global>\033[0m")
@@ -4563,6 +4566,11 @@ def runtoken(node, env) -> tuple:
             args = []
             kwargs = {}
 
+            # 获取当前行的源代码
+            call_source = node.get('source')
+            if call_source is None:
+                call_source = globals().get('source', '')
+
             # 按顺序处理 arguments
             for arg_node in node.get('arguments', []):
                 if arg_node['type'] == 'positional':
@@ -4618,7 +4626,6 @@ def runtoken(node, env) -> tuple:
                         new_env = {k: v for k, v in init_method.get('closure', {}).items()
                                   if k not in ['__builtins__', '__env__']}
                         new_env['self'] = instance
-                        # 使用新的 arguments 结构
                         for i, p in enumerate(init_method['params'][1:]):
                             if i < len(args):
                                 new_env[p] = args[i]
@@ -4652,7 +4659,7 @@ def runtoken(node, env) -> tuple:
 
                     if method is not None and callable(method):
                         if isinstance(method, KeiFunction):
-                            result = method(*args, **kwargs)
+                            result = method(linecode=call_source, *args, **kwargs)
                         else:
                             result = method(*args, **kwargs)
                         return result, False
@@ -4684,7 +4691,7 @@ def runtoken(node, env) -> tuple:
                         return instance, False
 
                     if isinstance(func_obj, KeiFunction):
-                        return func_obj(*args, **kwargs), False
+                        return func_obj(linecode=call_source, *args, **kwargs), False
 
                     if callable(func_obj):
                         return func_obj(*args, **kwargs), False
@@ -4735,9 +4742,9 @@ def runtoken(node, env) -> tuple:
 
                     if is_namespace_func:
                         if star_param:
-                            result = method(*args, **kwargs)
+                            result = method(linecode=call_source, *args, **kwargs)
                         elif starstar_param:
-                            result = method(*args, **kwargs)
+                            result = method(linecode=call_source, *args, **kwargs)
                         else:
                             call_args = []
                             remaining = kwargs.copy()
@@ -4750,7 +4757,7 @@ def runtoken(node, env) -> tuple:
                                     call_args.append(undefined)
                             if remaining:
                                 raise KeiError("SyntaxError", f"方法 {method_name} 不接受关键字参数: {list(remaining.keys())}")
-                            result = method(*call_args)
+                            result = method(linecode=call_source, *call_args)
                         return result, False
 
                     is_bound = isinstance(method, KeiBoundMethod) or hasattr(method, '__self__')
@@ -5563,13 +5570,15 @@ def runtoken(node, env) -> tuple:
 
                 maxline = stdlib.kei.cnlen(max([i.strip() for i in __kei__.code], key=stdlib.kei.cnlen) if __kei__.code is not None else None)
 
+                first = __kei__.stack[0] if __kei__.stack else None
+
                 prompt = f"--> \033[94m{node.get('source').strip()}\033[0m"
                 prompt = (prompt +
                           ((maxline + 3) - stdlib.kei.cnlen(node.get('source').strip())) * " " +
                           (f"[{node.get('linenum', -1)+1}]"
                           if type(__kei__.step) is not str and __kei__.step is not stdlib.kei.breakpoint else
                           f"{{{node.get('linenum', -1)+1}}}") +
-                          (" \033[95m" + (' / '.join(__kei__.stack) or '<global>') + "\033[0m") +
+                          (" \033[95m" + (' / '.join(__kei__.stack if type(first) is not tuple else [s[0] for s in __kei__.stack]) or '<global>') + "\033[0m") +
                           ' \033[34;2m' +
                           ('; '.join([f"{n} = {v}" for n, v in names])) +
                           '\033[0m' +
@@ -5603,13 +5612,6 @@ def runtoken(node, env) -> tuple:
 
                 elif cmd == "q":
                     sys.exit(0)
-
-                elif cmd.startswith("@"):
-                    py_code = cmd[1:]
-                    try:
-                        exec(py_code)
-                    except Exception as e:
-                        print(f"  % \033[31mPython错误: {e}\033[0m")
 
                 elif cmd == "v":
                     # 获取所有用户变量
@@ -5708,7 +5710,6 @@ def runtoken(node, env) -> tuple:
                     print("  \033[33ml\033[0m - \033[36m显示附近的代码\033[0m")
                     print("  \033[33mt\033[0m - \033[36m持续跟踪变量\033[0m")
                     print("  \033[33mb\033[0m - \033[36m执行到指定的行\033[0m")
-                    print("  \033[33m@\033[0m - \033[36m执行Python代码\033[0m")
                     print("  \033[33mh\033[0m - \033[36m显示此帮助\033[0m")
                     print()
 
@@ -5916,7 +5917,12 @@ def main():
                             if step:
                                 print(f"[Kei Debugger] \033[33;1m{os.path.abspath(sys.argv[1])}\033[0m")
 
-                            ret = execmain(filecontent, step=step)
+                            try:
+                                ret = execmain(filecontent, step=step)
+                            except SystemExit as e:
+                                if not step:
+                                    raise
+                                ret = e.code
 
                             if step:
                                 print(f"[Kei Debugger] \033[33;1m程序返回: {ret}\033[0m")

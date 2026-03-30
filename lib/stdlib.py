@@ -453,6 +453,8 @@ class kei:
             return KeiInt(len(string.value))
         elif type(string) is KeiList:
             return KeiInt(len(string.items))
+        elif type(string) is KeiDict:
+            return KeiInt(len(string.items))
         else:
             raise KeiError("TypeError", "len 需要字符串/列表/字典")
 
@@ -492,25 +494,72 @@ class kei:
     def max(*args, key=None):
         """返回最大值，支持多个参数或列表，支持 key 函数"""
         if len(args) == 0:
-            raise Exception("max 需要至少一个参数")
+            raise KeiError("ValueError", "max 需要至少一个参数")
 
         # 处理 key 参数
         if key is not None:
-            # key 是 Kei 函数，需要转换
             if isinstance(key, KeiFunction):
-                key_func = lambda x: kei.topy(key(x))
+                def key_wrapper(x):
+                    k = key(x)
+                    # 获取原始值用于二级比较
+                    if hasattr(x, 'value'):
+                        raw_x = x.value
+                    else:
+                        raw_x = x
+                    return (k, raw_x)
+                key_func = key_wrapper
             else:
                 key_func = key
         else:
-            key_func = lambda x: x
+            # 自动检测类型
+            if len(args) == 1 and isinstance(args[0], KeiList):
+                items = args[0].items
+            else:
+                items = list(args)
+
+            if not items:
+                raise KeiError("ValueError", "max 的参数列表不能为空")
+
+            # 检查所有元素类型
+            all_string = True
+            all_number = True
+            all_bool = True
+
+            for item in items:
+                if not isinstance(item, KeiString):
+                    all_string = False
+                if not isinstance(item, (KeiInt, KeiFloat)):
+                    all_number = False
+                if not isinstance(item, KeiBool):
+                    all_bool = False
+
+            if all_string:
+                # 字符串：只按长度比较
+                def str_key_func(x):
+                    if isinstance(x, KeiString):
+                        return len(x.value)
+                    return 0
+                key_func = str_key_func
+
+            elif all_number:
+                # 数字：直接比较值
+                key_func = lambda x: x.value if isinstance(x, (KeiInt, KeiFloat)) else x
+            elif all_bool:
+                # 布尔值：有 true 就返回 true，否则 false
+                for item in items:
+                    if item.value:
+                        return true
+                return false
+            else:
+                # 混合类型，用默认比较
+                key_func = lambda x: x
 
         # 如果只有一个参数且是列表
         if len(args) == 1 and isinstance(args[0], KeiList):
             items = args[0].items
             if not items:
-                raise Exception("max 的列表不能为空")
+                raise KeiError("ValueError", "max 的列表不能为空")
 
-            # 用 key 找最大值
             max_item = items[0]
             max_key = key_func(max_item)
             for item in items[1:]:
