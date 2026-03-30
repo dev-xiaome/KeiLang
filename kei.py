@@ -10,7 +10,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.6"
+__version__ = "1.6-1"
 
 class KeiState:
     stack: List[Any]  # 添加类型提示
@@ -18,7 +18,7 @@ class KeiState:
     code: Optional[List[str]]
     repl: bool
     file: str
-    step: bool | None | str | int
+    step: object
     error: bool
     var: list
     env: dict
@@ -69,11 +69,14 @@ keidir = os.path.dirname(os.path.abspath(__file__))
 path = os.environ.get('PATH', '')
 paths = path.split(os.pathsep)
 
-modulenames = []
+paths.append(os.path.abspath(os.path.join(keidir, 'lib')))
 
-for f in os.listdir(os.path.join(keidir, 'lib')):
-    if os.path.isfile(f) and f.endswith('.py'):
-        modulenames.append(f)
+pkg_dir = os.path.join(keidir, 'pkg')
+if os.path.isdir(pkg_dir):
+    for item in os.listdir(pkg_dir):
+        sub_path = os.path.join(pkg_dir, item)
+        if os.path.isdir(sub_path):
+            paths.append(sub_path)
 
 __py_exec__ = exec
 
@@ -5321,8 +5324,6 @@ def runtoken(node, env) -> tuple:
                     alias = module_info.get('alias')
                     is_wildcard = module_info.get('type') == 'wildcard'
 
-                    lib_path = os.path.join(keidir, 'lib')
-
                     assert isinstance(env.get("__path__", KeiList([])), KeiList), "__path__需要是一个列表"
 
                     __path__ = env.get("__path__", KeiList([])).items
@@ -5333,8 +5334,7 @@ def runtoken(node, env) -> tuple:
 
                     # ==== 1. 先找 .kei 文件（KeiLang 模块）====
 
-                    kei_file = os.path.join(lib_path, f"{full_module_name}.kei")
-                    kei_files = [os.path.join(path, f"{full_module_name}.kei") for path in __path__] + [kei_file]
+                    kei_files = [os.path.join(path, f"{full_module_name}.kei") for path in __path__]
 
                     for keifile in kei_files:
                         if os.path.isfile(keifile):
@@ -5373,8 +5373,7 @@ def runtoken(node, env) -> tuple:
                             return None, False
 
                     # ==== 2. 再找 .py 文件（Python 模块）====
-                    py_file = os.path.join(lib_path, f"{full_module_name}.py")
-                    py_files = [os.path.join(path, f"{full_module_name}.py") for path in __path__] + [py_file]
+                    py_files = [os.path.join(path, f"{full_module_name}.py") for path in __path__]
 
                     for pyfile in py_files:
                         if os.path.isfile(pyfile):
@@ -5656,10 +5655,13 @@ def runtoken(node, env) -> tuple:
 
     try:
         if type(__kei__.step) is int:
-            if __kei__.step == (globals()['linenum']+1 if globals()['linenum'] is not None else node.get('linenum', -1)+1):
-                __kei__.step = True
+            if __kei__.step <= (node.get('linenum', -1)+1):
+                if __kei__.step != (node.get('linenum', -1)+1):
+                    print(f"  % \033[31m错过断点行号{__kei__.step}继续执行\033[0m")
+                else:
+                    __kei__.step = True
 
-        if __kei__.step and type(__kei__.step) is not int and node.get('source', None) is not None:
+        if __kei__.step and type(__kei__.step) not in [int, str] and node.get('source', None) is not None:
             while True:
                 import copy
 
@@ -5680,7 +5682,7 @@ def runtoken(node, env) -> tuple:
                 prompt = (prompt +
                           ((maxline + 3) - stdlib.kei.cnlen(node.get('source').strip())) * " " +
                           (f"[{node.get('linenum', -1)+1}]"
-                          if __kei__.step != "breakpoint" else
+                          if type(__kei__.step) is not str and __kei__.step is not stdlib.kei.breakpoint else
                           f"{{{node.get('linenum', -1)+1}}}") +
                           (" \033[95m" + (' / '.join(__kei__.stack) or '<global>') + "\033[0m") +
                           ' \033[34;2m' +
@@ -5742,22 +5744,25 @@ def runtoken(node, env) -> tuple:
                     else:
                         print("  (无变量)")
 
-                elif cmd == "n":
-                    __kei__.step = None
+                elif cmd.startswith('n'):
+                    if cmd[2:]:
+                        __kei__.step = cmd[2:]
+                    else:
+                        __kei__.step = None
                     break
 
                 elif cmd[0] == "l":
                     if __kei__.code is None:
                         print("  没有可显示的代码")
                     else:
-                        line_num = globals()['linenum']+1 if globals()['linenum'] is not None else node.get('linenum', -1)+1
+                        line_num = node.get('linenum', -1)+1
                         if cmd[1:]:
                             if cmd[1] == "a":
                                 start = 0
                                 end   = len(__kei__.code)
                             else:
                                 try:
-                                    start = max(0, line_num - (int(cmd[1:]))+1)
+                                    start = max(0, line_num - (int(cmd[1:]))-1)
                                 except:
                                     print(f"  % \033[31m{cmd}需要整数参数\033[0m")
                                     continue
@@ -5774,9 +5779,9 @@ def runtoken(node, env) -> tuple:
                 elif cmd == "k":
                     return None, False
 
-                elif cmd.startswith("b "):
+                elif cmd.startswith("b"):
                     try:
-                        __kei__.step = int(cmd[2:])
+                        __kei__.step = int(cmd[1:])
                         break
                     except:
                         print(f"  % \033[31m{cmd}需要整数参数\033[0m")
@@ -6029,7 +6034,12 @@ def main():
                             if step:
                                 print(f"[Kei Debugger] \033[33;1m{os.path.abspath(sys.argv[1])}\033[0m")
 
-                            execmain(filecontent, step=step)
+                            ret = execmain(filecontent, step=step)
+
+                            if step:
+                                print(f"[Kei Debugger] \033[33;1m程序返回: {ret}\033[0m")
+
+                            return ret
 
                 else:
                     raise KeiError("NotFoundError", f"未找到 {sys.argv[1]}")

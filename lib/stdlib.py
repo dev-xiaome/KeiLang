@@ -531,11 +531,18 @@ class kei:
         return max_item
 
     @s
-    def breakpoint():
+    def breakpoint(value=None):
         from kei import __kei__
 
         if __kei__.step is None:
-            __kei__.step = "breakpoint"
+            return __kei__.step
+
+        if value is None:
+            __kei__.step = kei.breakpoint
+        else:
+            value = to_str(value)
+            if __kei__.step == value:
+                __kei__.step = kei.breakpoint
 
         return __kei__.step
 
