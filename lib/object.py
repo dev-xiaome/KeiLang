@@ -1473,39 +1473,32 @@ class KeiFunction(KeiBase):
 
         __kei__.stack.append(self.__name__)
 
-        params     = self.func_obj['params']
+        params = self.func_obj['params']
         typeassert = self.func_obj.get('typeassert', None)
 
-        regular_params = []
-        star_param = None
-        starstar_param = None
+        # 找到 * 参数的位置
+        star_pos = -1
+        star_param_name = None
+        starstar_param_name = None
 
-        for p in params:
+        for i, p in enumerate(params):
             if p.startswith('**'):
-                starstar_param = p[2:]
-            elif p.startswith('*'):
-                star_param = p[1:]
-            else:
-                regular_params.append(p)
+                starstar_param_name = p[2:]
+                star_pos = i
+            elif p.startswith('*') and star_pos == -1:
+                star_param_name = p[1:]
+                star_pos = i
+                break
 
+        # 分离参数
+        before_star = params[:star_pos] if star_pos > 0 else []
+        after_star = params[star_pos + 1:] if star_pos >= 0 else []
+
+        # 转换参数列表
         all_args = list(args)
         remaining_kwargs = kwargs.copy()
 
-        final_args = []
-        for i, param_name in enumerate(regular_params):
-            if i < len(all_args):
-                final_args.append(all_args[i])
-            elif param_name in remaining_kwargs:
-                final_args.append(remaining_kwargs.pop(param_name))
-            elif param_name in self.func_obj.get('defaults', {}):
-                default_val_node = self.func_obj['defaults'][param_name]
-                default_val, _ = runtoken(default_val_node, self.__env__)
-                final_args.append(default_val)
-            else:
-                final_args.append(undefined)
-
-        extra_args = all_args[len(regular_params):]
-
+        # 构建新环境
         try:
             new_env = copy.deepcopy(self.__env__)
         except:
@@ -1514,18 +1507,42 @@ class KeiFunction(KeiBase):
             except:
                 new_env = self.__env__.copy()
 
-        for i, param_name in enumerate(regular_params):
-            new_env[param_name] = final_args[i]
+        # 1. 绑定 * 之前的参数（只能从位置参数取）
+        for i, param_name in enumerate(before_star):
+            if i < len(all_args):
+                new_env[param_name] = all_args[i]
+            elif param_name in remaining_kwargs:
+                new_env[param_name] = remaining_kwargs.pop(param_name)
+            elif param_name in self.func_obj.get('defaults', {}):
+                default_val_node = self.func_obj['defaults'][param_name]
+                default_val, _ = runtoken(default_val_node, self.__env__)
+                new_env[param_name] = default_val
+            else:
+                new_env[param_name] = undefined
 
-        if star_param:
-            star_values = []
-            for arg in extra_args:
-                star_values.append(arg)
-            new_env[star_param] = KeiList(star_values)
+        # 2. 处理 * 参数：收集剩余位置参数
+        if star_param_name:
+            star_args = all_args[len(before_star):]
+            new_env[star_param_name] = KeiList(star_args)
 
-        if starstar_param:
-            new_env[starstar_param] = KeiDict(remaining_kwargs)
-        elif remaining_kwargs:
+        # 3. 绑定 * 之后的参数（只能从关键字参数取）
+        for param_name in after_star:
+            if param_name.startswith('**'):
+                # **kwargs
+                starstar_param_name = param_name[2:]
+                new_env[starstar_param_name] = KeiDict(remaining_kwargs)
+                remaining_kwargs = {}
+            elif param_name in remaining_kwargs:
+                new_env[param_name] = remaining_kwargs.pop(param_name)
+            elif param_name in self.func_obj.get('defaults', {}):
+                default_val_node = self.func_obj['defaults'][param_name]
+                default_val, _ = runtoken(default_val_node, self.__env__)
+                new_env[param_name] = default_val
+            else:
+                new_env[param_name] = undefined
+
+        # 检查多余的关键字参数
+        if remaining_kwargs and not starstar_param_name:
             raise KeiError("SyntaxError", f"函数 {self.__name__} 收到未预料的关键字参数: {list(remaining_kwargs.keys())}")
 
         try:

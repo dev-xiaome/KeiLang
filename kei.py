@@ -10,7 +10,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.6-1"
+__version__ = "1.6-2"
 
 class KeiState:
     stack: List[Any]  # 添加类型提示
@@ -117,30 +117,51 @@ def debug_print(*args, **kwargs):
         print("[DEBUG]", *args, **kwargs)
 
 def getname(node, env):
+    """只收集当前节点直接引用的变量，不进入子块"""
     result = []
-    seen = set()  # 用来去重！
+    seen = set()
 
-    def traverse(n):
+    # 需要跳过内部块的节点类型
+    block_nodes = {
+        'try',           # try-catch-finally 语句
+        'class',         # 类定义
+        'for',           # for 循环
+        'function',      # 函数定义
+        'with',          # with 语句
+        'namespace',     # 命名空间
+        'if',            # if 语句
+        'while',         # while 循环
+        'unless',        # unless 语句（条件取反的 if）
+        'until',         # until 语句（条件取反的 while）
+        'match',         # match-case 模式匹配
+    }
+
+    def traverse(n, current_depth):
+        if current_depth > 0:  # 只遍历当前深度，不进入子块
+            return
+
         if isinstance(n, dict):
-            # 只收集 type=name 的节点
+            # 遇到块节点，不深入
+            if n.get("type") in block_nodes:
+                # 只处理 iterable 等，不处理 body
+                if n.get("type") == "for" and "iterable" in n:
+                    traverse(n["iterable"], current_depth)
+                return
+
             if n.get("type") == "name":
                 name = n["value"]
-                # 只收集第一次出现的，避免重复
                 if name not in seen:
                     seen.add(name)
                     val = runtoken(n, env)[0]
                     result.append([name, val])
 
-            # 递归遍历所有子节点
             for v in n.values():
-                traverse(v)
-
+                traverse(v, current_depth)
         elif isinstance(n, list):
             for item in n:
-                traverse(item)
+                traverse(item, current_depth)
 
-    # 开始遍历
-    traverse(node)
+    traverse(node, 0)
     return result
 
 def error(errtype: str | None, info: str, stack: list=[], code:str|None=None, linenum=None, filename='未知文件') -> None:
@@ -908,26 +929,27 @@ def process_fstring(template, env):
 
     return ''.join(result)
 
-def parse_call(name: str, tokens: list, pos: int) -> tuple:
-    """解析函数调用, 支持函数作为参数"""
+def parse_call(name, tokens, pos, is_attr=False):
+    """解析函数调用，支持 is_attr 参数区分普通调用和方法调用"""
     pos += 1  # 跳过 '('
 
-    args = []  # 普通位置参数
-    kwargs = {}  # 关键字参数
-    starargs = None  # *args 解包
-    starkwargs = None  # **kwargs 解包
+    arguments = []
 
     # 如果没有参数
     if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ')':
         pos += 1
-        return {
-            'type': 'call',
-            'name': name,
-            'args': args,
-            'kwargs': kwargs,
-            'starargs': starargs,
-            'starkwargs': starkwargs
-        }, pos
+        if is_attr:
+            return {
+                'type': 'methodcall',
+                'obj': name,  # name 实际上是 obj_node
+                'arguments': arguments,
+            }, pos
+        else:
+            return {
+                'type': 'call',
+                'name': name,
+                'arguments': arguments,
+            }, pos
 
     # 解析参数
     while True:
@@ -935,38 +957,29 @@ def parse_call(name: str, tokens: list, pos: int) -> tuple:
         if (pos < len(tokens) and tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '**' and
               pos + 1 < len(tokens)):
             pos += 1  # 跳过 '**'
-            # 解析后面的表达式（应该是字典）
-            starkwargs, pos = parse_expr(tokens, pos, in_call=True)
-            if not starkwargs:
-                raise KeiError("SyntaxError", "** 后面需要表达式")
+            val, pos = parse_expr(tokens, pos, in_call=True)
+            arguments.append({'type': 'starkwargs', 'value': val})
 
         # 检查是否是 *args 解包
         elif (pos < len(tokens) and tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '*' and
               pos + 1 < len(tokens)):
             pos += 1  # 跳过 '*'
-            # 解析后面的表达式（应该是列表）
-            starargs, pos = parse_expr(tokens, pos, in_call=True)
-            if not starargs:
-                raise KeiError("SyntaxError", "* 后面需要表达式")
+            val, pos = parse_expr(tokens, pos, in_call=True)
+            arguments.append({'type': 'starargs', 'value': val})
 
         # 检查是否是关键字参数 (name=value)
         elif (pos < len(tokens) and tokens[pos]['type'] == 'name' and
             pos + 1 < len(tokens) and tokens[pos+1]['type'] == 'op' and
             tokens[pos+1]['value'] == "="):
-
-            # 关键字参数
             kwarg_name = tokens[pos]['value']
-            pos += 2  # 跳过 name 和 =
-
-            # 解析值
+            pos += 2
             kwarg_value, pos = parse_expr(tokens, pos, in_call=True)
-            if kwarg_value:
-                kwargs[kwarg_name] = kwarg_value
+            arguments.append({'type': 'keyword', 'name': kwarg_name, 'value': kwarg_value})
+
         else:
             # 普通位置参数
             arg, pos = parse_expr(tokens, pos, in_call=True)
-            if arg:
-                args.append(arg)
+            arguments.append({'type': 'positional', 'value': arg})
 
         # 检查逗号或结束
         if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
@@ -982,111 +995,22 @@ def parse_call(name: str, tokens: list, pos: int) -> tuple:
         else:
             break
 
-    return {
-        'type': 'call',
-        'name': name,
-        'args': args,
-        'kwargs': kwargs,
-        'starargs': starargs,
-        'starkwargs': starkwargs,
-    }, pos
-
-def parse_call_attr(obj_node, tokens, pos, in_call=False):
-    pos += 1  # 跳过 '('
-
-    args = []
-    kwargs = {}
-    starargs = None
-    starkwargs = None
-
-    # 如果没有参数
-    if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ')':
-        pos += 1
+    if is_attr:
         return {
             'type': 'methodcall',
-            'obj': obj_node,
-            'args': args,
-            'kwargs': kwargs,
-            'starargs': starargs,
-            'starkwargs': starkwargs
+            'obj': name,  # name 实际上是 obj_node
+            'arguments': arguments,
+        }, pos
+    else:
+        return {
+            'type': 'call',
+            'name': name,
+            'arguments': arguments,
         }, pos
 
-    # 解析参数
-    while True:
-        # 🔥 这里要处理函数作为参数！
-        if (pos < len(tokens) and
-            tokens[pos]['type'] == 'name' and
-            tokens[pos]['value'] == 'fn'):
-
-            pos += 1
-
-            # 解析参数列表（直到 =>）
-            params = []
-            while pos < len(tokens):
-                if tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '=>':
-                    pos += 1
-                    break
-                elif tokens[pos]['type'] == 'name':
-                    params.append(tokens[pos]['value'])
-                    pos += 1
-                    if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
-                        pos += 1
-                else:
-                    break
-
-            # 解析表达式
-            expr, pos = parse_expr(tokens, pos)
-
-            args.append({
-                'type': 'lambda',
-                'params': params,
-                'body': expr
-            })
-
-        # 检查是否是 **kwargs 解包
-        elif (pos < len(tokens) and tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '**' and
-              pos + 1 < len(tokens)):
-            pos += 1
-            starkwargs, pos = parse_expr(tokens, pos, in_call=True)
-
-        # 检查是否是 *args 解包
-        elif (pos < len(tokens) and tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '*' and
-              pos + 1 < len(tokens)):
-            pos += 1
-            starargs, pos = parse_expr(tokens, pos, in_call=True)
-
-        # 检查是否是关键字参数
-        elif (pos < len(tokens) and tokens[pos]['type'] == 'name' and
-              pos + 1 < len(tokens) and tokens[pos+1]['type'] == 'op' and
-              tokens[pos+1]['value'] == "="):
-            kwarg_name = tokens[pos]['value']
-            pos += 2
-            kwarg_value, pos = parse_expr(tokens, pos, in_call=True)
-            kwargs[kwarg_name] = kwarg_value
-        else:
-            # 普通位置参数
-            arg, pos = parse_expr(tokens, pos, in_call=True)
-            if arg:
-                args.append(arg)
-
-        # 检查逗号或结束
-        if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
-            pos += 1
-            continue
-        elif pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ')':
-            pos += 1
-            break
-        else:
-            break
-
-    return {
-        'type': 'methodcall',
-        'obj': obj_node,
-        'args': args,
-        'kwargs': kwargs,
-        'starargs': starargs,
-        'starkwargs': starkwargs
-    }, pos
+def parse_call_attr(obj_node, tokens, pos, in_call=False):
+    """解析方法调用，直接调用 parse_call"""
+    return parse_call(obj_node, tokens, pos, is_attr=True)
 
 def parse_atom(tokens: list, pos: int, in_call=False) -> tuple:
     debug_print(f"parse_atom: pos={pos}, token={tokens[pos] if pos < len(tokens) else 'EOF'}")
@@ -2048,11 +1972,14 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
 
                         elif tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '*':
                             pos += 1
+                            # 检查后面是否有名字
                             if pos < len(tokens) and tokens[pos]['type'] == 'name':
+                                # 有名字：*args
                                 params.append('*' + tokens[pos]['value'])
                                 pos += 1
                             else:
-                                raise KeiError("SyntaxError", "* 后面需要参数名")
+                                # 没有名字：*
+                                params.append('*')
                             continue
 
                         elif tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '**':
@@ -2061,7 +1988,8 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                                 params.append('**' + tokens[pos]['value'])
                                 pos += 1
                             else:
-                                raise KeiError("SyntaxError", "** 后面需要参数名")
+                                # 没有名字：**
+                                params.append('**')
                             continue
 
                         elif tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
@@ -4631,44 +4559,41 @@ def runtoken(node, env) -> tuple:
 
         # ========== 函数调用 ==========
         if node['type'] in {'call', 'methodcall'}:
-            # ----- 1. 统一解析参数 -----
+            # ----- 1. 统一解析参数（使用新结构）-----
             args = []
             kwargs = {}
 
-            # 普通参数
-            for arg in node.get('args', []):
-                val, _ = runtoken(arg, env)
-                args.append(val)
+            # 按顺序处理 arguments
+            for arg_node in node.get('arguments', []):
+                if arg_node['type'] == 'positional':
+                    val, _ = runtoken(arg_node['value'], env)
+                    args.append(val)
 
-            # 关键字参数
-            for key, value in node.get('kwargs', {}).items():
-                val, _ = runtoken(value, env)
-                kwargs[key] = val
+                elif arg_node['type'] == 'keyword':
+                    val, _ = runtoken(arg_node['value'], env)
+                    kwargs[arg_node['name']] = val
 
-            # 解包 *args
-            if node.get('starargs'):
-                star_val, _ = runtoken(node['starargs'], env)
-                if isinstance(star_val, KeiList):
-                    args.extend(star_val.items)
-                elif isinstance(star_val, (list, tuple)):
-                    args.extend(star_val)
-                else:
-                    args.append(star_val)
+                elif arg_node['type'] == 'starargs':
+                    star_val, _ = runtoken(arg_node['value'], env)
+                    if isinstance(star_val, KeiList):
+                        args.extend(star_val.items)
+                    elif isinstance(star_val, (list, tuple)):
+                        args.extend(star_val)
+                    else:
+                        args.append(star_val)
 
-            # 解包 **kwargs
-            if node.get('starkwargs'):
-                star_val, _ = runtoken(node['starkwargs'], env)
-                if isinstance(star_val, KeiDict):
-                    for k, v in star_val.items.items():
-                        key = k.value if isinstance(k, KeiString) else str(k)
-                        kwargs[key] = v
-                elif isinstance(star_val, dict):
-                    kwargs.update(star_val)
+                elif arg_node['type'] == 'starkwargs':
+                    star_val, _ = runtoken(arg_node['value'], env)
+                    if isinstance(star_val, KeiDict):
+                        for k, v in star_val.items.items():
+                            key = k.value if isinstance(k, KeiString) else str(k)
+                            kwargs[key] = v
+                    elif isinstance(star_val, dict):
+                        kwargs.update(star_val)
 
             # ----- 2. 处理 call -----
             if node['type'] == 'call':
                 name = node['name']
-
                 stdlib.kei.setenv(env)
 
                 # super 特殊处理
@@ -4693,10 +4618,12 @@ def runtoken(node, env) -> tuple:
                         new_env = {k: v for k, v in init_method.get('closure', {}).items()
                                   if k not in ['__builtins__', '__env__']}
                         new_env['self'] = instance
+                        # 使用新的 arguments 结构
                         for i, p in enumerate(init_method['params'][1:]):
-                            if i < len(node.get('args', [])):
-                                arg_val, _ = runtoken(node['args'][i], env)
-                                new_env[p] = arg_val
+                            if i < len(args):
+                                new_env[p] = args[i]
+                            elif p in kwargs:
+                                new_env[p] = kwargs[p]
                         for stmt in init_method['body']:
                             val, is_return = runtoken(stmt, new_env)
                             if is_return:
@@ -4710,7 +4637,6 @@ def runtoken(node, env) -> tuple:
                     if current is None:
                         return undefined, False
 
-                    # 逐级访问属性
                     for part in parts[1:-1]:
                         if isinstance(current, KeiBase):
                             current = current[part]
@@ -4726,10 +4652,8 @@ def runtoken(node, env) -> tuple:
 
                     if method is not None and callable(method):
                         if isinstance(method, KeiFunction):
-                            # KeiLang 函数 - 直接传递所有参数
                             result = method(*args, **kwargs)
                         else:
-                            # Python 函数
                             result = method(*args, **kwargs)
                         return result, False
                     raise KeiError("NameError", f"对象没有方法 {method_name}")
@@ -4739,25 +4663,20 @@ def runtoken(node, env) -> tuple:
                     func_obj = env[name]
 
                     if isinstance(func_obj, KeiInstance) and hasattr(func_obj, '__call__'):
-                        # 调用 __call__ 方法
                         result = func_obj.__call__(*args, **kwargs)
                         return result, False
 
                     if isinstance(func_obj, KeiClass):
-                        # 类实例化
                         instance = func_obj(*args, **kwargs)
                         init_method = find_method(func_obj.class_obj, '__init__', env)
                         if init_method:
                             new_env = {'__parent__': init_method['closure'], 'self': instance}
                             new_env.update({k: v for k, v in init_method['closure'].items() if k != '__parent__'})
-
-                            # 绑定参数
                             for i, p in enumerate(init_method['params'][1:]):
                                 if i < len(args):
                                     new_env[p] = args[i]
                                 elif p in kwargs:
                                     new_env[p] = kwargs[p]
-
                             for stmt in init_method['body']:
                                 val, is_return = runtoken(stmt, new_env)
                                 if is_return and val is not None:
@@ -4765,7 +4684,6 @@ def runtoken(node, env) -> tuple:
                         return instance, False
 
                     if isinstance(func_obj, KeiFunction):
-                        # KeiLang 函数 - 直接传递参数
                         return func_obj(*args, **kwargs), False
 
                     if callable(func_obj):
@@ -4775,59 +4693,36 @@ def runtoken(node, env) -> tuple:
 
             # ----- 3. 处理 methodcall -----
             else:  # node['type'] == 'methodcall'
-                # 解析对象和方法名
                 obj = None
                 method_name = None
 
-                if 'obj' in node and isinstance(node['obj'], dict):
-                    if node['obj'].get('type') == 'attr':
-                        obj, _ = runtoken(node['obj']['obj'], env)
-                        method_name = node['obj']['attr']
-                    else:
-                        obj, _ = runtoken(node['obj'], env)
-                        method_name = node.get('method')
-
-                elif 'obj_parts' in node:
-                    for part in node['obj_parts']:
-                        if obj is None:
-                            obj = env.get(part) if isinstance(part, str) else runtoken(part, env)[0]
-                        else:
-                            if isinstance(obj, KeiBase):
-                                obj = obj[part]
-                            elif isinstance(obj, dict):
-                                obj = obj.get(part)
-                            else:
-                                obj = getattr(obj, part)
-                    method_name = node['method']
+                # 从新结构中获取 obj
+                if 'obj' in node:
+                    obj, _ = runtoken(node['obj'], env)
+                    method_name = node.get('method')
 
                 if obj is None:
                     raise KeiError("NameError", "对象未定义")
                 if method_name is None:
-                    # 直接调用 obj
                     if callable(obj):
                         result = obj(*args, **kwargs)
                         return result, False
                     else:
                         raise KeiError("TypeError", f"{obj} 不可调用")
 
-                # 获取并调用方法
                 method = obj[method_name] if isinstance(obj, KeiBase) else getattr(obj, method_name, None)
 
                 if method is undefined or not callable(method):
                     raise KeiError("SyntaxError", f"方法 {method_name} 调用失败")
 
-                # 🔥 判断这是不是命名空间/字典中的函数（不需要 self）
                 is_namespace_func = isinstance(obj, KeiNamespace) or (isinstance(obj, KeiDict) and method_name in obj.items)
 
-                # 处理 KeiLang 函数/方法
                 if isinstance(method, (KeiFunction, KeiMethod, KeiBoundMethod)):
-                    # 获取参数信息
                     if isinstance(method, KeiFunction):
                         params = method.func_obj['params']
                     else:
                         params = method.method_obj['params']
 
-                    # 分离参数类型
                     regular_params = []
                     star_param = starstar_param = None
                     for p in params:
@@ -4838,15 +4733,12 @@ def runtoken(node, env) -> tuple:
                         else:
                             regular_params.append(p)
 
-                    # 🔥 关键修复：如果是命名空间函数，当作普通函数调用
                     if is_namespace_func:
-                        # 命名空间函数 - 直接传递所有参数，不需要 self
                         if star_param:
                             result = method(*args, **kwargs)
                         elif starstar_param:
                             result = method(*args, **kwargs)
                         else:
-                            # 按位置匹配参数
                             call_args = []
                             remaining = kwargs.copy()
                             for i, p in enumerate(regular_params):
@@ -4861,11 +4753,9 @@ def runtoken(node, env) -> tuple:
                             result = method(*call_args)
                         return result, False
 
-                    # 普通方法调用（需要 self）
                     is_bound = isinstance(method, KeiBoundMethod) or hasattr(method, '__self__')
 
                     if is_bound:
-                        # 已绑定的方法
                         if star_param:
                             result = method(*args, **kwargs)
                         elif starstar_param:
@@ -4880,16 +4770,12 @@ def runtoken(node, env) -> tuple:
                                     call_args.append(remaining.pop(p))
                                 else:
                                     call_args.append(undefined)
-
                             if remaining:
                                 raise KeiError("SyntaxError", f"方法 {method_name} 不接受关键字参数: {list(remaining.keys())}")
                             result = method(*call_args)
                     else:
-                        # 未绑定的方法，需要传递 self
-                        # self 就是 obj
-                        call_args = [obj]  # self 作为第一个参数
+                        call_args = [obj]
                         remaining = kwargs.copy()
-                        # 从 regular_params[1:] 开始（跳过 self）
                         for i, p in enumerate(regular_params[1:]):
                             if i < len(args):
                                 call_args.append(args[i])
@@ -4903,7 +4789,6 @@ def runtoken(node, env) -> tuple:
 
                     return result, False
 
-                # Python 函数/方法
                 return method(*args, **kwargs), False
 
         # ========== 赋值 ==========
@@ -5686,7 +5571,7 @@ def runtoken(node, env) -> tuple:
                           f"{{{node.get('linenum', -1)+1}}}") +
                           (" \033[95m" + (' / '.join(__kei__.stack) or '<global>') + "\033[0m") +
                           ' \033[34;2m' +
-                          (';'.join([f"{n} = {v}" for n, v in names])) +
+                          ('; '.join([f"{n} = {v}" for n, v in names])) +
                           '\033[0m' +
                           "\n:")
 
@@ -5971,10 +5856,7 @@ def execmain(code, env=None, step=False):
 
     env, ret = exec(code, env)
 
-    if compile:
-        return 0
-
-    if type(ret) in HASVALUE:
+    if isinstance(ret, KeiInt):
         return ret.value
     else:
         return 0
