@@ -156,7 +156,7 @@ class kei:
                 return value
 
     @s
-    def cnlen(text):
+    def cnlen(text) -> KeiInt:
         kei.check(text, KeiString, str, name='cnlen')
         text = kei.topy(text)
         """计算字符串的显示长度
@@ -239,7 +239,7 @@ class kei:
                 else:
                     length += 1
 
-        return length
+        return KeiInt(length)
 
     @s
     def exit(code=KeiInt(0)):

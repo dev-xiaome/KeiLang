@@ -10,7 +10,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.6-3"
+__version__ = "1.6-4"
 
 class KeiState:
     stack: List[Any]  # 添加类型提示
@@ -117,43 +117,52 @@ def debug_print(*args, **kwargs):
         print("[DEBUG]", *args, **kwargs)
 
 def getname(node, env):
-    """只收集当前节点直接引用的变量，不进入子块"""
+    """收集当前节点引用的变量，支持属性访问"""
     result = []
     seen = set()
 
-    # 需要跳过内部块的节点类型
     block_nodes = {
-        'try',           # try-catch-finally 语句
-        'class',         # 类定义
-        'for',           # for 循环
-        'function',      # 函数定义
-        'with',          # with 语句
-        'namespace',     # 命名空间
-        'if',            # if 语句
-        'while',         # while 循环
-        'unless',        # unless 语句（条件取反的 if）
-        'until',         # until 语句（条件取反的 while）
-        'match',         # match-case 模式匹配
+        'try', 'class', 'for', 'function', 'with', 'namespace',
+        'if', 'while', 'unless', 'until', 'match'
     }
 
+    def get_full_name(n):
+        """从 attr 节点获取完整名称，如 math.pi"""
+        if n.get("type") == "name":
+            return n["value"]
+        elif n.get("type") == "attr":
+            obj_name = get_full_name(n["obj"])
+            attr_name = n["attr"]
+            return f"{obj_name}.{attr_name}"
+        return None
+
     def traverse(n, current_depth):
-        if current_depth > 0:  # 只遍历当前深度，不进入子块
+        if current_depth > 0:
             return
 
         if isinstance(n, dict):
-            # 遇到块节点，不深入
             if n.get("type") in block_nodes:
-                # 只处理 iterable 等，不处理 body
                 if n.get("type") == "for" and "iterable" in n:
                     traverse(n["iterable"], current_depth)
                 return
 
+            # 处理 name 节点
             if n.get("type") == "name":
                 name = n["value"]
                 if name not in seen:
                     seen.add(name)
                     val = runtoken(n, env)[0]
                     result.append([name, val])
+
+            # 处理 attr 节点（如 math.pi）
+            if n.get("type") == "attr":
+                full_name = get_full_name(n)
+                if full_name and full_name not in seen:
+                    seen.add(full_name)
+                    val = runtoken(n, env)[0]
+                    result.append([full_name, val])
+
+                return result
 
             for v in n.values():
                 traverse(v, current_depth)
@@ -190,7 +199,7 @@ def error(errtype: str | None, info: str, stack: list=[], code:str|None=None, li
 
     print(f"\033[33;1m{linenum}\033[0m | {code}")
 
-    print(f"{space} | \033[31;1m" + ('^' * stdlib.kei.cnlen(KeiString(code))) + "\033[0m")
+    print(f"{space} | \033[31;1m" + ('^' * stdlib.kei.cnlen(KeiString(code)).value) + "\033[0m")
 
     if errtype is not None:
         print(f"{space} | \033[36m>>>\033[0m \033[33;1m[{errtype}] {info}\033[0m")
@@ -199,8 +208,8 @@ def error(errtype: str | None, info: str, stack: list=[], code:str|None=None, li
 
     print(f"{space} ·")
 
-    #import traceback
-    #traceback.print_exc()
+    import traceback
+    traceback.print_exc()
 
     if not __kei__.repl:
         sys.exit(1)
@@ -5568,13 +5577,13 @@ def runtoken(node, env) -> tuple:
                 # 使用复制的env最大防止污染环境
                 names = getname(node, save_env)
 
-                maxline = stdlib.kei.cnlen(max([i.strip() for i in __kei__.code], key=stdlib.kei.cnlen) if __kei__.code is not None else None)
+                maxline = int(str(stdlib.kei.cnlen(max([i.strip() for i in __kei__.code], key=stdlib.kei.cnlen) if __kei__.code is not None else None).value))
 
                 first = __kei__.stack[0] if __kei__.stack else None
 
                 prompt = f"--> \033[94m{node.get('source').strip()}\033[0m"
                 prompt = (prompt +
-                          ((maxline + 3) - stdlib.kei.cnlen(node.get('source').strip())) * " " +
+                          ((maxline + 3) - int(str(stdlib.kei.cnlen(node.get('source').strip()).value))) * " " +
                           (f"[{node.get('linenum', -1)+1}]"
                           if type(__kei__.step) is not str and __kei__.step is not stdlib.kei.breakpoint else
                           f"{{{node.get('linenum', -1)+1}}}") +

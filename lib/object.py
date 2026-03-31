@@ -1927,6 +1927,9 @@ class KeiNamespace(KeiBase):
         result = self.env.get(key, undefined)
         return result
 
+    def __setitem__(self, key, value):
+        self.env[key] = value
+
     def __repr__(self):
         return f"<namespace {self.__name__}>"
 
