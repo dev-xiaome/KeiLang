@@ -46,6 +46,7 @@ class KeiMeta(type):
             return True
         return type(instance) is cls or issubclass(type(instance), cls)
 
+
 # ========== Kei 对象基类 ==========
 
 class KeiBase(metaclass=KeiMeta):
@@ -55,27 +56,337 @@ class KeiBase(metaclass=KeiMeta):
         self._methods: Dict[str, Callable] = {}
         self._props: Dict[str, KeiValue] = {}
         self.value: Any = None
+        self._class = None
 
-    def __getitem__(self, key: Any) -> Any:
-        if key in self._methods:
-            method = self._methods[key]
-            if hasattr(method, '__self__'):
-                return method
-            return self._wrap_method(method)
-        if key in self._props:
-            return self._props[key]
-        return undefined
-
-    def __setitem__(self, key: Any, _value: Any) -> None:
-        self._props[key] = _value
+    def _get_method(self, name: str) -> Optional[Callable]:
+        """获取方法（优先实例属性，再类方法）"""
+        if name in self._props:
+            val = self._props[name]
+            if callable(val):
+                return val
+            return None
+        if name in self._methods:
+            return self._methods[name]
+        if self._class is not None:
+            return self._class._get_method(name)
+        return None
 
     def _wrap_method(self, method: Callable) -> Callable:
         def bound(*args: Any, **kwargs: Any) -> Any:
             return method(self, *args, **kwargs)
         return bound
 
-    def __repr__(self) -> str:
+    def __getitem__(self, key: Any) -> Any:
+        method = self._get_method('__getitem__')
+        if method:
+            return method(key)
+        return self._default_getitem(key)
+
+    def __setitem__(self, key: Any, value: Any) -> None:
+        method = self._get_method('__setitem__')
+        if method:
+            method(key, value)
+            return
+        self._default_setitem(key, value)
+
+    def __delitem__(self, key: Any) -> None:
+        method = self._get_method('__delitem__')
+        if method:
+            method(key)
+            return
+        if key in self._props:
+            del self._props[key]
+
+    def __len__(self) -> int:
+        method = self._get_method('__len__')
+        if method:
+            return method()
+        return len(self._props)
+
+    def __contains__(self, key: Any) -> bool:
+        method = self._get_method('__contains__')
+        if method:
+            return method(key)
+        return key in self._props
+
+    def __iter__(self):
+        method = self._get_method('__iter__')
+        if method:
+            return method()
+        return iter(self._props.keys())
+
+    def _default_getitem(self, key):
+        """默认的 __getitem__ 实现，子类可以覆盖"""
+        if isinstance(key, str):
+            if key in self._methods:
+                method = self._methods[key]
+                if hasattr(method, '__self__'):
+                    return method
+                return self._wrap_method(method)
+            if key in self._props:
+                return self._props[key]
+            return undefined
+        return undefined
+
+    def _default_setitem(self, key, value):
+        """默认的 __setitem__ 实现，子类可以覆盖"""
+        if isinstance(key, str):
+            self._props[key] = value
+        else:
+            raise KeiError("TypeError", f"不支持的类型作为键: {type(key)}")
+
+    # ========== 算术运算符 ==========
+    def __add__(self, other):
+        method = self._get_method('__add__')
+        if method:
+            return method(other)
+        return undefined
+
+    def __radd__(self, other):
+        method = self._get_method('__radd__')
+        if method:
+            return method(other)
+        return self.__add__(other)
+
+    def __sub__(self, other):
+        method = self._get_method('__sub__')
+        if method:
+            return method(other)
+        return undefined
+
+    def __rsub__(self, other):
+        method = self._get_method('__rsub__')
+        if method:
+            return method(other)
+        return undefined
+
+    def __mul__(self, other):
+        method = self._get_method('__mul__')
+        if method:
+            return method(other)
+        return undefined
+
+    def __rmul__(self, other):
+        method = self._get_method('__rmul__')
+        if method:
+            return method(other)
+        return self.__mul__(other)
+
+    def __truediv__(self, other):
+        method = self._get_method('__truediv__')
+        if method:
+            return method(other)
+        return undefined
+
+    def __rtruediv__(self, other):
+        method = self._get_method('__rtruediv__')
+        if method:
+            return method(other)
+        return undefined
+
+    def __floordiv__(self, other):
+        method = self._get_method('__floordiv__')
+        if method:
+            return method(other)
+        return undefined
+
+    def __rfloordiv__(self, other):
+        method = self._get_method('__rfloordiv__')
+        if method:
+            return method(other)
+        return undefined
+
+    def __mod__(self, other):
+        method = self._get_method('__mod__')
+        if method:
+            return method(other)
+        return undefined
+
+    def __rmod__(self, other):
+        method = self._get_method('__rmod__')
+        if method:
+            return method(other)
+        return undefined
+
+    def __pow__(self, other):
+        method = self._get_method('__pow__')
+        if method:
+            return method(other)
+        return undefined
+
+    def __rpow__(self, other):
+        method = self._get_method('__rpow__')
+        if method:
+            return method(other)
+        return undefined
+
+    # ========== 位运算符 ==========
+    def __and__(self, other):
+        method = self._get_method('__and__')
+        if method:
+            return method(other)
+        return undefined
+
+    def __rand__(self, other):
+        method = self._get_method('__rand__')
+        if method:
+            return method(other)
+        return self.__and__(other)
+
+    def __or__(self, other):
+        method = self._get_method('__or__')
+        if method:
+            return method(other)
+        return undefined
+
+    def __ror__(self, other):
+        method = self._get_method('__ror__')
+        if method:
+            return method(other)
+        return self.__or__(other)
+
+    def __xor__(self, other):
+        method = self._get_method('__xor__')
+        if method:
+            return method(other)
+        return undefined
+
+    def __rxor__(self, other):
+        method = self._get_method('__rxor__')
+        if method:
+            return method(other)
+        return self.__xor__(other)
+
+    def __lshift__(self, other):
+        method = self._get_method('__lshift__')
+        if method:
+            return method(other)
+        return undefined
+
+    def __rlshift__(self, other):
+        method = self._get_method('__rlshift__')
+        if method:
+            return method(other)
+        return undefined
+
+    def __rshift__(self, other):
+        method = self._get_method('__rshift__')
+        if method:
+            return method(other)
+        return undefined
+
+    def __rrshift__(self, other):
+        method = self._get_method('__rrshift__')
+        if method:
+            return method(other)
+        return undefined
+
+    def __invert__(self):
+        method = self._get_method('__invert__')
+        if method:
+            return method()
+        return undefined
+
+    # ========== 一元运算符 ==========
+    def __neg__(self):
+        method = self._get_method('__neg__')
+        if method:
+            return method()
+        return undefined
+
+    def __pos__(self):
+        method = self._get_method('__pos__')
+        if method:
+            return method()
+        return undefined
+
+    def __abs__(self):
+        method = self._get_method('__abs__')
+        if method:
+            return method()
+        return undefined
+
+    # ========== 比较运算符 ==========
+    def __eq__(self, other):
+        method = self._get_method('__eq__')
+        if method:
+            return method(other)
+        return true if self is other else false
+
+    def __ne__(self, other):
+        method = self._get_method('__ne__')
+        if method:
+            return method(other)
+        return true if self is not other else false
+
+    def __lt__(self, other):
+        method = self._get_method('__lt__')
+        if method:
+            return method(other)
+        return undefined
+
+    def __gt__(self, other):
+        method = self._get_method('__gt__')
+        if method:
+            return method(other)
+        return undefined
+
+    def __le__(self, other):
+        method = self._get_method('__le__')
+        if method:
+            return method(other)
+        return undefined
+
+    def __ge__(self, other):
+        method = self._get_method('__ge__')
+        if method:
+            return method(other)
+        return undefined
+
+    # ========== 类型转换 ==========
+    def __int__(self):
+        method = self._get_method('__int__')
+        if method:
+            return method()
+        raise KeiError("TypeError", f"无法将 {self} 转为 int")
+
+    def __float__(self):
+        method = self._get_method('__float__')
+        if method:
+            return method()
+        raise KeiError("TypeError", f"无法将 {self} 转为 float")
+
+    def __str__(self):
+        method = self._get_method('__str__')
+        if method:
+            return method()
+        return repr(self)
+
+    def __repr__(self):
+        method = self._get_method('__repr__')
+        if method:
+            return method()
         return f"<{self._type} object>"
+
+    def __bool__(self):
+        method = self._get_method('__bool__')
+        if method:
+            return method()
+        return True
+
+    def __call__(self, *args, **kwargs):
+        method = self._get_method('__call__')
+        if method:
+            return method(*args, **kwargs)
+        return undefined
+
+    def __dir__(self):
+        """默认返回用户可见的属性和方法"""
+        # 收集公开方法
+        public_methods = [m for m in self._methods.keys()]
+        # 收集公开属性
+        public_props = [p for p in self._props.keys()]
+        return public_methods + public_props
 
 # ========== 错误对象 ==========
 
@@ -91,6 +402,7 @@ class KeiException(Exception, KeiBase):
 
     def __repr__(self):
         return f"{self.value}"
+
 
 class KeiError(Exception, KeiBase):
     def __init__(self, types="", value="", code=None, linenum=-1):
@@ -140,6 +452,7 @@ class KeiError(Exception, KeiBase):
         else:
             return KeiString(self.types)
 
+
 # ========== 数值类型 ==========
 
 class KeiInt(KeiBase):
@@ -154,17 +467,16 @@ class KeiInt(KeiBase):
             raise KeiError("TypeError", f"无法把 {content(_value)} 转为 int")
 
         self._methods = {
-            "abs": self.abs,
-            "pow": self.pow,
-            "sqrt": self.sqrt,
-            "take": self.take
+            "abs": self._abs,
+            "pow": self._pow,
+            "sqrt": self._sqrt,
+            "take": self._take
         }
 
-    def take(self, digits):
+    def _take(self, digits):
         return KeiFloat(self.value).take(digits)
-
-    def __setitem__(self, key, value):
-        raise KeiError("IndexError", "整数不支持索引赋值")
+    def take(self, digits):
+        return self._take(digits)
 
     def __bool__(self):
         return self.value != 0
@@ -172,17 +484,23 @@ class KeiInt(KeiBase):
     def __hash__(self):
         return hash(self.value)
 
-    def abs(self):
+    def _abs(self):
         return KeiInt(abs(self.value))
+    def abs(self):
+        return self._abs()
 
-    def pow(self, exponent):
+    def _pow(self, exponent):
         exp_val = to_float(exponent) if isinstance(exponent, (KeiInt, KeiFloat)) else float(exponent)
         return KeiFloat(self.value ** exp_val)
+    def pow(self, exponent):
+        return self._pow(exponent)
 
-    def sqrt(self):
+    def _sqrt(self):
         return KeiFloat(math.sqrt(self.value))
+    def sqrt(self):
+        return self._sqrt()
 
-    def __add__(self, other):
+    def _default_add(self, other):
         if isinstance(other, KeiInt):
             return KeiInt(self.value + other.value)
         if isinstance(other, KeiFloat):
@@ -193,10 +511,19 @@ class KeiInt(KeiBase):
             return KeiFloat(self.value + other)
         return undefined
 
-    def __radd__(self, other):
-        return self.__add__(other)
+    def __add__(self, other):
+        method = self._get_method('__add__')
+        if method:
+            return method(other)
+        return self._default_add(other)
 
-    def __sub__(self, other):
+    def __radd__(self, other):
+        method = self._get_method('__radd__')
+        if method:
+            return method(other)
+        return self._default_add(other)
+
+    def _default_sub(self, other):
         if isinstance(other, KeiInt):
             return KeiInt(self.value - other.value)
         if isinstance(other, KeiFloat):
@@ -205,12 +532,21 @@ class KeiInt(KeiBase):
             return KeiFloat(self.value - other)
         return undefined
 
+    def __sub__(self, other):
+        method = self._get_method('__sub__')
+        if method:
+            return method(other)
+        return self._default_sub(other)
+
     def __rsub__(self, other):
+        method = self._get_method('__rsub__')
+        if method:
+            return method(other)
         if isinstance(other, (int, float)):
             return KeiFloat(other - self.value)
         return undefined
 
-    def __mul__(self, other):
+    def _default_mul(self, other):
         if isinstance(other, KeiInt):
             return KeiInt(self.value * other.value)
         if isinstance(other, KeiFloat):
@@ -221,10 +557,19 @@ class KeiInt(KeiBase):
             return KeiString(other.value * self.value)
         return undefined
 
-    def __rmul__(self, other):
-        return self.__mul__(other)
+    def __mul__(self, other):
+        method = self._get_method('__mul__')
+        if method:
+            return method(other)
+        return self._default_mul(other)
 
-    def __truediv__(self, other):
+    def __rmul__(self, other):
+        method = self._get_method('__rmul__')
+        if method:
+            return method(other)
+        return self._default_mul(other)
+
+    def _default_truediv(self, other):
         if isinstance(other, (KeiInt, KeiFloat)):
             val = to_float(other)
             if val == 0:
@@ -236,14 +581,23 @@ class KeiInt(KeiBase):
             return KeiFloat(self.value / other)
         return undefined
 
+    def __truediv__(self, other):
+        method = self._get_method('__truediv__')
+        if method:
+            return method(other)
+        return self._default_truediv(other)
+
     def __rtruediv__(self, other):
+        method = self._get_method('__rtruediv__')
+        if method:
+            return method(other)
         if isinstance(other, (int, float)):
             if self.value == 0:
                 raise KeiError("ZeroDivisionError", "除数不能为零")
             return KeiFloat(other / self.value)
         return undefined
 
-    def __floordiv__(self, other):
+    def _default_floordiv(self, other):
         if isinstance(other, (KeiInt, KeiFloat)):
             val = to_float(other)
             if val == 0:
@@ -255,14 +609,23 @@ class KeiInt(KeiBase):
             return KeiInt(self.value // other)
         return undefined
 
+    def __floordiv__(self, other):
+        method = self._get_method('__floordiv__')
+        if method:
+            return method(other)
+        return self._default_floordiv(other)
+
     def __rfloordiv__(self, other):
+        method = self._get_method('__rfloordiv__')
+        if method:
+            return method(other)
         if isinstance(other, (int, float)):
             if self.value == 0:
                 raise KeiError("ZeroDivisionError", "除数不能为零")
             return KeiInt(other // self.value)
         return undefined
 
-    def __mod__(self, other):
+    def _default_mod(self, other):
         if isinstance(other, (KeiInt, KeiFloat)):
             val = to_float(other)
             if val == 0:
@@ -274,14 +637,23 @@ class KeiInt(KeiBase):
             return KeiInt(self.value % other)
         return undefined
 
+    def __mod__(self, other):
+        method = self._get_method('__mod__')
+        if method:
+            return method(other)
+        return self._default_mod(other)
+
     def __rmod__(self, other):
+        method = self._get_method('__rmod__')
+        if method:
+            return method(other)
         if isinstance(other, (int, float)):
             if self.value == 0:
                 raise KeiError("ZeroDivisionError", "除数不能为零")
             return KeiInt(other % self.value)
         return undefined
 
-    def __pow__(self, other):
+    def _default_pow(self, other):
         if isinstance(other, KeiInt):
             return KeiInt(self.value ** other.value)
         if isinstance(other, KeiFloat):
@@ -290,69 +662,129 @@ class KeiInt(KeiBase):
             return KeiFloat(self.value ** other)
         return undefined
 
+    def __pow__(self, other):
+        method = self._get_method('__pow__')
+        if method:
+            return method(other)
+        return self._default_pow(other)
+
     def __rpow__(self, other):
+        method = self._get_method('__rpow__')
+        if method:
+            return method(other)
         if isinstance(other, (int, float)):
             return KeiFloat(other ** self.value)
         return undefined
 
-    def __and__(self, other):
+    def _default_and(self, other):
         if isinstance(other, KeiInt):
             return KeiInt(self.value & other.value)
         if isinstance(other, int):
             return KeiInt(self.value & other)
         return undefined
 
-    def __rand__(self, other):
-        return self.__and__(other)
+    def __and__(self, other):
+        method = self._get_method('__and__')
+        if method:
+            return method(other)
+        return self._default_and(other)
 
-    def __or__(self, other):
+    def __rand__(self, other):
+        method = self._get_method('__rand__')
+        if method:
+            return method(other)
+        return self._default_and(other)
+
+    def _default_or(self, other):
         if isinstance(other, KeiInt):
             return KeiInt(self.value | other.value)
         if isinstance(other, int):
             return KeiInt(self.value | other)
         return undefined
 
-    def __ror__(self, other):
-        return self.__or__(other)
+    def __or__(self, other):
+        method = self._get_method('__or__')
+        if method:
+            return method(other)
+        return self._default_or(other)
 
-    def __xor__(self, other):
+    def __ror__(self, other):
+        method = self._get_method('__ror__')
+        if method:
+            return method(other)
+        return self._default_or(other)
+
+    def _default_xor(self, other):
         if isinstance(other, KeiInt):
             return KeiInt(self.value ^ other.value)
         if isinstance(other, int):
             return KeiInt(self.value ^ other)
         return undefined
 
-    def __rxor__(self, other):
-        return self.__xor__(other)
+    def __xor__(self, other):
+        method = self._get_method('__xor__')
+        if method:
+            return method(other)
+        return self._default_xor(other)
 
-    def __lshift__(self, other):
+    def __rxor__(self, other):
+        method = self._get_method('__rxor__')
+        if method:
+            return method(other)
+        return self._default_xor(other)
+
+    def _default_lshift(self, other):
         if isinstance(other, KeiInt):
             return KeiInt(self.value << other.value)
         if isinstance(other, int):
             return KeiInt(self.value << other)
         return undefined
 
+    def __lshift__(self, other):
+        method = self._get_method('__lshift__')
+        if method:
+            return method(other)
+        return self._default_lshift(other)
+
     def __rlshift__(self, other):
+        method = self._get_method('__rlshift__')
+        if method:
+            return method(other)
         if isinstance(other, int):
             return KeiInt(other << self.value)
         return undefined
 
-    def __rshift__(self, other):
+    def _default_rshift(self, other):
         if isinstance(other, KeiInt):
             return KeiInt(self.value >> other.value)
         if isinstance(other, int):
             return KeiInt(self.value >> other)
         return undefined
 
+    def __rshift__(self, other):
+        method = self._get_method('__rshift__')
+        if method:
+            return method(other)
+        return self._default_rshift(other)
+
     def __rrshift__(self, other):
+        method = self._get_method('__rrshift__')
+        if method:
+            return method(other)
         if isinstance(other, int):
             return KeiInt(other >> self.value)
         return undefined
 
-    def __invert__(self):
+    def _default_invert(self):
         return KeiInt(~self.value)
 
-    def __eq__(self, other):
+    def __invert__(self):
+        method = self._get_method('__invert__')
+        if method:
+            return method()
+        return self._default_invert()
+
+    def _default_eq(self, other):
         if isinstance(other, KeiInt):
             return true if self.value == other.value else false
         if isinstance(other, KeiFloat):
@@ -361,43 +793,83 @@ class KeiInt(KeiBase):
             return true if self.value == other else false
         return false
 
-    def __ne__(self, other):
+    def __eq__(self, other):
+        method = self._get_method('__eq__')
+        if method:
+            return method(other)
+        return self._default_eq(other)
+
+    def _default_ne(self, other):
         if isinstance(other, (KeiInt, KeiFloat)):
             return true if self.value != to_float(other) else false
         if isinstance(other, (int, float)):
             return true if self.value != other else false
         return true
 
-    def __lt__(self, other):
+    def __ne__(self, other):
+        method = self._get_method('__ne__')
+        if method:
+            return method(other)
+        return self._default_ne(other)
+
+    def _default_lt(self, other):
         if isinstance(other, (KeiInt, KeiFloat)):
             return true if self.value < to_float(other) else false
         if isinstance(other, (int, float)):
             return true if self.value < other else false
         return false
 
-    def __gt__(self, other):
+    def __lt__(self, other):
+        method = self._get_method('__lt__')
+        if method:
+            return method(other)
+        return self._default_lt(other)
+
+    def _default_gt(self, other):
         if isinstance(other, (KeiInt, KeiFloat)):
             return true if self.value > to_float(other) else false
         if isinstance(other, (int, float)):
             return true if self.value > other else false
         return false
 
-    def __le__(self, other):
+    def __gt__(self, other):
+        method = self._get_method('__gt__')
+        if method:
+            return method(other)
+        return self._default_gt(other)
+
+    def _default_le(self, other):
         if isinstance(other, (KeiInt, KeiFloat)):
             return true if self.value <= to_float(other) else false
         if isinstance(other, (int, float)):
             return true if self.value <= other else false
         return false
 
-    def __ge__(self, other):
+    def __le__(self, other):
+        method = self._get_method('__le__')
+        if method:
+            return method(other)
+        return self._default_le(other)
+
+    def _default_ge(self, other):
         if isinstance(other, (KeiInt, KeiFloat)):
             return true if self.value >= to_float(other) else false
         if isinstance(other, (int, float)):
             return true if self.value >= other else false
         return false
 
+    def __ge__(self, other):
+        method = self._get_method('__ge__')
+        if method:
+            return method(other)
+        return self._default_ge(other)
+
     def __repr__(self):
+        method = self._get_method('__repr__')
+        if method:
+            return method()
         return f"{self.value}"
+
 
 class KeiFloat(KeiBase):
     def __init__(self, _value):
@@ -419,15 +891,12 @@ class KeiFloat(KeiBase):
             raise KeiError("TypeError", f"无法把 {content(_value)} 转为 float")
 
         self._methods = {
-            "abs": self.abs,
-            "round": self.round,
-            "floor": self.floor,
-            "ceil": self.ceil,
-            "take": self.take,
+            "abs": self._abs,
+            "round": self._round,
+            "floor": self._floor,
+            "ceil": self._ceil,
+            "take": self._take,
         }
-
-    def __setitem__(self, key, value):
-        raise KeiError("IndexError", "浮点数不支持索引赋值")
 
     def __bool__(self):
         return self.value != 0
@@ -435,21 +904,29 @@ class KeiFloat(KeiBase):
     def __hash__(self):
         return hash(self.value)
 
-    def abs(self):
+    def _abs(self):
         return KeiFloat(abs(self.value))
+    def abs(self):
+        return self._abs()
 
-    def round(self):
+    def _round(self):
         return KeiFloat(self.value.quantize(Decimal('1.'), rounding=ROUND_HALF_EVEN))
+    def round(self):
+        return self._round()
 
-    def floor(self):
+    def _floor(self):
         from decimal import ROUND_FLOOR
         return KeiInt(int(self.value.to_integral(rounding=ROUND_FLOOR)))
+    def floor(self):
+        return self._floor()
 
-    def ceil(self):
+    def _ceil(self):
         from decimal import ROUND_CEILING
         return KeiInt(int(self.value.to_integral(rounding=ROUND_CEILING)))
+    def ceil(self):
+        return self._ceil()
 
-    def take(self, digits):
+    def _take(self, digits):
         if isinstance(digits, KeiInt):
             d = digits.value
         else:
@@ -459,12 +936,14 @@ class KeiFloat(KeiBase):
             return KeiFloat(self.value.quantize(quant, rounding=ROUND_HALF_EVEN))
         except InvalidOperation:
             raise KeiError("ArithmeticError", "浮点数精度错误: 精度不足")
+    def take(self, digits):
+        return self._take(digits)
 
     def places(self):
         exp = self.value.as_tuple().exponent
         return abs(exp if exp < 0 else 0)
 
-    def __add__(self, other):
+    def _default_add(self, other):
         if isinstance(other, (KeiInt, KeiFloat)):
             return KeiFloat(self.value + Decimal(str(to_float(other))))
         if isinstance(other, (int, float)):
@@ -473,22 +952,40 @@ class KeiFloat(KeiBase):
             return KeiString(str(self.value) + other.value)
         return undefined
 
-    def __radd__(self, other):
-        return self.__add__(other)
+    def __add__(self, other):
+        method = self._get_method('__add__')
+        if method:
+            return method(other)
+        return self._default_add(other)
 
-    def __sub__(self, other):
+    def __radd__(self, other):
+        method = self._get_method('__radd__')
+        if method:
+            return method(other)
+        return self._default_add(other)
+
+    def _default_sub(self, other):
         if isinstance(other, (KeiInt, KeiFloat)):
             return KeiFloat(self.value - Decimal(str(to_float(other))))
         if isinstance(other, (int, float)):
             return KeiFloat(self.value - Decimal(str(other)))
         return undefined
 
+    def __sub__(self, other):
+        method = self._get_method('__sub__')
+        if method:
+            return method(other)
+        return self._default_sub(other)
+
     def __rsub__(self, other):
+        method = self._get_method('__rsub__')
+        if method:
+            return method(other)
         if isinstance(other, (int, float)):
             return KeiFloat(Decimal(str(other)) - self.value)
         return undefined
 
-    def __mul__(self, other):
+    def _default_mul(self, other):
         if isinstance(other, (KeiInt, KeiFloat)):
             return KeiFloat(self.value * Decimal(str(to_float(other))))
         if isinstance(other, (int, float)):
@@ -497,10 +994,19 @@ class KeiFloat(KeiBase):
             return KeiString(other.value * float(self.value))
         return undefined
 
-    def __rmul__(self, other):
-        return self.__mul__(other)
+    def __mul__(self, other):
+        method = self._get_method('__mul__')
+        if method:
+            return method(other)
+        return self._default_mul(other)
 
-    def __truediv__(self, other):
+    def __rmul__(self, other):
+        method = self._get_method('__rmul__')
+        if method:
+            return method(other)
+        return self._default_mul(other)
+
+    def _default_truediv(self, other):
         if isinstance(other, (KeiInt, KeiFloat)):
             val = Decimal(str(to_float(other)))
             if val == 0:
@@ -513,14 +1019,23 @@ class KeiFloat(KeiBase):
             return KeiFloat(self.value / val)
         return undefined
 
+    def __truediv__(self, other):
+        method = self._get_method('__truediv__')
+        if method:
+            return method(other)
+        return self._default_truediv(other)
+
     def __rtruediv__(self, other):
+        method = self._get_method('__rtruediv__')
+        if method:
+            return method(other)
         if isinstance(other, (int, float)):
             if self.value == 0:
                 raise KeiError("ZeroDivisionError", "除数不能为零")
             return KeiFloat(Decimal(str(other)) / self.value)
         return undefined
 
-    def __floordiv__(self, other):
+    def _default_floordiv(self, other):
         if isinstance(other, (KeiInt, KeiFloat)):
             val = Decimal(str(to_float(other)))
             if val == 0:
@@ -533,14 +1048,23 @@ class KeiFloat(KeiBase):
             return KeiInt(self.value // val)
         return undefined
 
+    def __floordiv__(self, other):
+        method = self._get_method('__floordiv__')
+        if method:
+            return method(other)
+        return self._default_floordiv(other)
+
     def __rfloordiv__(self, other):
+        method = self._get_method('__rfloordiv__')
+        if method:
+            return method(other)
         if isinstance(other, (int, float)):
             if self.value == 0:
                 raise KeiError("ZeroDivisionError", "除数不能为零")
             return KeiInt(Decimal(str(other)) // self.value)
         return undefined
 
-    def __mod__(self, other):
+    def _default_mod(self, other):
         if isinstance(other, (KeiInt, KeiFloat)):
             val = Decimal(str(to_float(other)))
             if val == 0:
@@ -553,26 +1077,44 @@ class KeiFloat(KeiBase):
             return KeiFloat(self.value % val)
         return undefined
 
+    def __mod__(self, other):
+        method = self._get_method('__mod__')
+        if method:
+            return method(other)
+        return self._default_mod(other)
+
     def __rmod__(self, other):
+        method = self._get_method('__rmod__')
+        if method:
+            return method(other)
         if isinstance(other, (int, float)):
             if self.value == 0:
                 raise KeiError("ZeroDivisionError", "除数不能为零")
             return KeiFloat(Decimal(str(other)) % self.value)
         return undefined
 
-    def __pow__(self, other):
+    def _default_pow(self, other):
         if isinstance(other, (KeiInt, KeiFloat)):
             return KeiFloat(self.value ** Decimal(str(to_float(other))))
         if isinstance(other, (int, float)):
             return KeiFloat(self.value ** Decimal(str(other)))
         return undefined
 
+    def __pow__(self, other):
+        method = self._get_method('__pow__')
+        if method:
+            return method(other)
+        return self._default_pow(other)
+
     def __rpow__(self, other):
+        method = self._get_method('__rpow__')
+        if method:
+            return method(other)
         if isinstance(other, (int, float)):
             return KeiFloat(Decimal(str(other)) ** self.value)
         return undefined
 
-    def __eq__(self, other):
+    def _default_eq(self, other):
         if isinstance(other, KeiFloat):
             return true if self.value == other.value else false
         if isinstance(other, KeiInt):
@@ -581,7 +1123,13 @@ class KeiFloat(KeiBase):
             return true if float(self.value) == other else false
         return false
 
-    def __ne__(self, other):
+    def __eq__(self, other):
+        method = self._get_method('__eq__')
+        if method:
+            return method(other)
+        return self._default_eq(other)
+
+    def _default_ne(self, other):
         if isinstance(other, KeiFloat):
             return true if self.value != other.value else false
         if isinstance(other, KeiInt):
@@ -590,41 +1138,75 @@ class KeiFloat(KeiBase):
             return true if float(self.value) != other else false
         return true
 
-    def __lt__(self, other):
+    def __ne__(self, other):
+        method = self._get_method('__ne__')
+        if method:
+            return method(other)
+        return self._default_ne(other)
+
+    def _default_lt(self, other):
         if isinstance(other, (KeiInt, KeiFloat)):
             return true if self.value < Decimal(str(to_float(other))) else false
         if isinstance(other, (int, float)):
             return true if float(self.value) < other else false
         return false
 
-    def __gt__(self, other):
+    def __lt__(self, other):
+        method = self._get_method('__lt__')
+        if method:
+            return method(other)
+        return self._default_lt(other)
+
+    def _default_gt(self, other):
         if isinstance(other, (KeiInt, KeiFloat)):
             return true if self.value > Decimal(str(to_float(other))) else false
         if isinstance(other, (int, float)):
             return true if float(self.value) > other else false
         return false
 
-    def __le__(self, other):
+    def __gt__(self, other):
+        method = self._get_method('__gt__')
+        if method:
+            return method(other)
+        return self._default_gt(other)
+
+    def _default_le(self, other):
         if isinstance(other, (KeiInt, KeiFloat)):
             return true if self.value <= Decimal(str(to_float(other))) else false
         if isinstance(other, (int, float)):
             return true if float(self.value) <= other else false
         return false
 
-    def __ge__(self, other):
+    def __le__(self, other):
+        method = self._get_method('__le__')
+        if method:
+            return method(other)
+        return self._default_le(other)
+
+    def _default_ge(self, other):
         if isinstance(other, (KeiInt, KeiFloat)):
             return true if self.value >= Decimal(str(to_float(other))) else false
         if isinstance(other, (int, float)):
             return true if float(self.value) >= other else false
         return false
 
+    def __ge__(self, other):
+        method = self._get_method('__ge__')
+        if method:
+            return method(other)
+        return self._default_ge(other)
+
     def __repr__(self):
+        method = self._get_method('__repr__')
+        if method:
+            return method()
         if self.value == self.value.to_integral():
             return str(int(self.value))
         s = str(self.value)
         if '.' in s:
             s = s.rstrip('0').rstrip('.')
         return s
+
 
 # ========== 布尔类型 ==========
 
@@ -652,34 +1234,45 @@ class KeiBool(KeiBase):
             self._initialized = True
 
             self._methods = {
-                "not": self.not_,
-                "and": self.and_,
-                "or": self.or_,
-                "xor": self.xor,
+                "not": self._not,
+                "and": self._and,
+                "or": self._or,
+                "xor": self._xor,
             }
 
-    def not_(self):
+    def _not(self):
         return KeiBool(not self.value)
+    def not_(self):
+        return self._not()
 
-    def and_(self, other):
+    def _and(self, other):
         if isinstance(other, KeiBool):
             return KeiBool(self.value and other.value)
         return KeiBool(self.value and bool(other))
+    def and_(self, other):
+        return self._and(other)
 
-    def or_(self, other):
+    def _or(self, other):
         if isinstance(other, KeiBool):
             return KeiBool(self.value or other.value)
         return KeiBool(self.value or bool(other))
+    def or_(self, other):
+        return self._or(other)
 
-    def xor(self, other):
+    def _xor(self, other):
         if isinstance(other, KeiBool):
             return KeiBool(self.value ^ other.value)
         return KeiBool(self.value ^ bool(other))
+    def xor(self, other):
+        return self._xor(other)
 
     def __bool__(self):
         return self.value
 
     def __and__(self, other):
+        method = self._get_method('__and__')
+        if method:
+            return method(other)
         if isinstance(other, KeiBool):
             return KeiBool(self.value and other.value)
         return KeiBool(self.value and bool(other))
@@ -688,6 +1281,9 @@ class KeiBool(KeiBase):
         return self.__and__(other)
 
     def __or__(self, other):
+        method = self._get_method('__or__')
+        if method:
+            return method(other)
         if isinstance(other, KeiBool):
             return KeiBool(self.value or other.value)
         return KeiBool(self.value or bool(other))
@@ -696,6 +1292,9 @@ class KeiBool(KeiBase):
         return self.__or__(other)
 
     def __xor__(self, other):
+        method = self._get_method('__xor__')
+        if method:
+            return method(other)
         if isinstance(other, KeiBool):
             return KeiBool(self.value ^ other.value)
         return KeiBool(self.value ^ bool(other))
@@ -704,15 +1303,23 @@ class KeiBool(KeiBase):
         return self.__xor__(other)
 
     def __eq__(self, other):
+        method = self._get_method('__eq__')
+        if method:
+            return method(other)
         if isinstance(other, KeiBool):
             return true if self.value == other.value else false
         return false
 
     def __repr__(self):
+        method = self._get_method('__repr__')
+        if method:
+            return method()
         return "true" if self.value else "false"
+
 
 true = KeiBool(True)
 false = KeiBool(False)
+
 
 # ========== 字符串类型 ==========
 
@@ -728,58 +1335,42 @@ class KeiString(KeiBase):
             raise KeiError("TypeError", f"无法把 {content(_value)} 转为 string")
 
         self._methods = {
-            "upper": self.upper,
-            "lower": self.lower,
-            "split": self.split,
-            "join": self.join,
-            "replace": self.replace,
-            "strip": self.strip,
-            "startswith": self.startswith,
-            "endswith": self.endswith,
-            "contains": self.contains,
-            "length": self.length,
-            "char_at": self.char_at,
-            "index_of": self.index_of,
-            "center": self.center,
-            "append": self.append,
-            "push": self.push
+            "upper": self._upper,
+            "lower": self._lower,
+            "split": self._split,
+            "join": self._join,
+            "replace": self._replace,
+            "strip": self._strip,
+            "startswith": self._startswith,
+            "endswith": self._endswith,
+            "contains": self._contains,
+            "length": self._length,
+            "char_at": self._char_at,
+            "index_of": self._index_of,
+            "center": self._center,
+            "append": self._append,
+            "push": self._push
         }
 
+    def _append(self, *values):
+        for value in values:
+            if isinstance(value, HASVALUE):
+                self.value = self.value + str(value.value)
+            else:
+                self.value = self.value + str(value)
+        return KeiString(self.value)
     def append(self, *values):
+        return self._append(*values)
+
+    def _push(self, *values):
         for value in values:
             if isinstance(value, HASVALUE):
                 self.value = self.value + str(value.value)
             else:
                 self.value = self.value + str(value)
         return KeiString(self.value)
-
     def push(self, *values):
-        for value in values:
-            if isinstance(value, HASVALUE):
-                self.value = self.value + str(value.value)
-            else:
-                self.value = self.value + str(value)
-        return KeiString(self.value)
-
-    def __setitem__(self, key, value):
-        if isinstance(key, KeiInt):
-            idx = key.value
-        elif isinstance(key, int):
-            idx = key
-        else:
-            raise KeiError("TypeError", "字符串索引必须是整数")
-
-        if idx < 0:
-            idx = len(self.value) + idx
-
-        if 0 <= idx < len(self.value):
-            if isinstance(value, KeiString):
-                new_str = value.value
-            else:
-                new_str = str(value)
-            self.value = self.value[:idx] + new_str + self.value[idx+1:]
-        else:
-            return undefined
+        return self._push(*values)
 
     def __bool__(self):
         return len(self.value) > 0
@@ -787,13 +1378,17 @@ class KeiString(KeiBase):
     def __hash__(self):
         return hash(self.value)
 
-    def upper(self):
+    def _upper(self):
         return KeiString(self.value.upper())
+    def upper(self):
+        return self._upper()
 
-    def lower(self):
+    def _lower(self):
         return KeiString(self.value.lower())
+    def lower(self):
+        return self._lower()
 
-    def center(self, width, fill=' '):
+    def _center(self, width, fill=' '):
         if isinstance(width, KeiInt):
             w = width.value
         else:
@@ -812,8 +1407,10 @@ class KeiString(KeiBase):
         right = w - text_len - left
         result = fill_char * left + self.value + fill_char * right
         return KeiString(result)
+    def center(self, width, fill=' '):
+        return self._center(width, fill)
 
-    def split(self, separator=None):
+    def _split(self, separator=None):
         if separator is None or separator is undefined:
             parts = self.value.split()
         else:
@@ -823,15 +1420,19 @@ class KeiString(KeiBase):
                 sep = str(separator)
             parts = self.value.split(sep)
         return KeiList([KeiString(p) for p in parts])
+    def split(self, separator=None):
+        return self._split(separator)
 
-    def join(self, iterable):
+    def _join(self, iterable):
         if isinstance(iterable, KeiList):
             items = [str(item) for item in iterable.items]
         else:
             items = [str(iterable)]
         return KeiString(self.value.join(items))
+    def join(self, iterable):
+        return self._join(iterable)
 
-    def replace(self, old, new):
+    def _replace(self, old, new):
         if isinstance(old, KeiString):
             old_str = old.value
         else:
@@ -841,35 +1442,47 @@ class KeiString(KeiBase):
         else:
             new_str = str(new)
         return KeiString(self.value.replace(old_str, new_str))
+    def replace(self, old, new):
+        return self._replace(old, new)
 
-    def strip(self):
+    def _strip(self):
         return KeiString(self.value.strip())
+    def strip(self):
+        return self._strip()
 
-    def startswith(self, prefix):
+    def _startswith(self, prefix):
         if isinstance(prefix, KeiString):
             p = prefix.value
         else:
             p = str(prefix)
         return true if self.value.startswith(p) else false
+    def startswith(self, prefix):
+        return self._startswith(prefix)
 
-    def endswith(self, suffix):
+    def _endswith(self, suffix):
         if isinstance(suffix, KeiString):
             s = suffix.value
         else:
             s = str(suffix)
         return true if self.value.endswith(s) else false
+    def endswith(self, suffix):
+        return self._endswith(suffix)
 
-    def contains(self, substr):
+    def _contains(self, substr):
         if isinstance(substr, KeiString):
             s = substr.value
         else:
             s = str(substr)
         return true if s in self.value else false
+    def contains(self, substr):
+        return self._contains(substr)
 
-    def length(self):
+    def _length(self):
         return KeiInt(len(self.value))
+    def length(self):
+        return self._length()
 
-    def char_at(self, index):
+    def _char_at(self, index):
         if isinstance(index, KeiInt):
             i = index.value
         else:
@@ -877,8 +1490,10 @@ class KeiString(KeiBase):
         if 0 <= i < len(self.value):
             return KeiString(self.value[i])
         return undefined
+    def char_at(self, index):
+        return self._char_at(index)
 
-    def index_of(self, substr):
+    def _index_of(self, substr):
         if isinstance(substr, KeiString):
             s = substr.value
         else:
@@ -887,62 +1502,21 @@ class KeiString(KeiBase):
             return KeiInt(self.value.index(s))
         except ValueError:
             return KeiInt(-1)
+    def index_of(self, substr):
+        return self._index_of(substr)
 
-    def __add__(self, other):
-        if isinstance(other, HASVALUE):
-            return KeiString(self.value + str(other.value))
-        if isinstance(other, (int, float, str)):
-            return KeiString(self.value + str(other))
-        return undefined
+    def _default_getitem(self, key):
+        """覆盖基类的 _default_getitem，支持字符串索引"""
+        if isinstance(key, str):
+            if key in self._methods:
+                method = self._methods[key]
+                if hasattr(method, '__self__'):
+                    return method
+                return self._wrap_method(method)
+            if key in self._props:
+                return self._props[key]
+            return undefined
 
-    def __radd__(self, other):
-        if isinstance(other, (int, float, str)):
-            return KeiString(str(other) + self.value)
-        return undefined
-
-    def __mul__(self, other):
-        if isinstance(other, (KeiInt, int)):
-            n = other.value if isinstance(other, KeiInt) else other
-            return KeiString(self.value * n)
-        return undefined
-
-    def __rmul__(self, other):
-        return self.__mul__(other)
-
-    def __eq__(self, other):
-        if isinstance(other, KeiString):
-            return true if self.value == other.value else false
-        return false
-
-    def __ne__(self, other):
-        if isinstance(other, KeiString):
-            return true if self.value != other.value else false
-        return true
-
-    def __lt__(self, other):
-        if isinstance(other, KeiString):
-            return true if self.value < other.value else false
-        return false
-
-    def __gt__(self, other):
-        if isinstance(other, KeiString):
-            return true if self.value > other.value else false
-        return false
-
-    def __le__(self, other):
-        if isinstance(other, KeiString):
-            return true if self.value <= other.value else false
-        return false
-
-    def __ge__(self, other):
-        if isinstance(other, KeiString):
-            return true if self.value >= other.value else false
-        return false
-
-    def __repr__(self):
-        return f'{self.value}'
-
-    def __getitem__(self, key):
         if isinstance(key, slice):
             start = key.start
             stop = key.stop
@@ -980,7 +1554,7 @@ class KeiString(KeiBase):
         elif isinstance(key, int):
             idx = key
         else:
-            return super().__getitem__(key)
+            return undefined
 
         if idx < 0:
             idx = len(self.value) + idx
@@ -988,6 +1562,129 @@ class KeiString(KeiBase):
         if 0 <= idx < len(self.value):
             return KeiString(self.value[idx])
         return undefined
+
+    def _default_setitem(self, key, value):
+        """覆盖基类的 _default_setitem，支持字符串属性赋值"""
+        if isinstance(key, str):
+            if key in self._methods:
+                raise KeiError("TypeError", f"不能修改方法 {key}")
+            self._props[key] = value
+            return
+
+        if isinstance(key, KeiInt):
+            idx = key.value
+        elif isinstance(key, int):
+            idx = key
+        else:
+            raise KeiError("TypeError", f"不支持的类型作为索引: {type(key)}")
+
+        if idx < 0:
+            idx = len(self.value) + idx
+
+        if 0 <= idx < len(self.value):
+            if isinstance(value, KeiString):
+                new_str = value.value
+            else:
+                new_str = str(value)
+            self.value = self.value[:idx] + new_str + self.value[idx+1:]
+
+    def __getitem__(self, key):
+        method = self._get_method('__getitem__')
+        if method:
+            return method(key)
+        return self._default_getitem(key)
+
+    def __setitem__(self, key, value):
+        method = self._get_method('__setitem__')
+        if method:
+            method(key, value)
+            return
+        self._default_setitem(key, value)
+
+    def __add__(self, other):
+        method = self._get_method('__add__')
+        if method:
+            return method(other)
+        if isinstance(other, HASVALUE):
+            return KeiString(self.value + str(other.value))
+        if isinstance(other, (int, float, str)):
+            return KeiString(self.value + str(other))
+        return undefined
+
+    def __radd__(self, other):
+        method = self._get_method('__radd__')
+        if method:
+            return method(other)
+        if isinstance(other, (int, float, str)):
+            return KeiString(str(other) + self.value)
+        return undefined
+
+    def __mul__(self, other):
+        method = self._get_method('__mul__')
+        if method:
+            return method(other)
+        if isinstance(other, (KeiInt, int)):
+            n = other.value if isinstance(other, KeiInt) else other
+            return KeiString(self.value * n)
+        return undefined
+
+    def __rmul__(self, other):
+        return self.__mul__(other)
+
+    def __eq__(self, other):
+        method = self._get_method('__eq__')
+        if method:
+            return method(other)
+        if isinstance(other, KeiString):
+            return true if self.value == other.value else false
+        return false
+
+    def __ne__(self, other):
+        method = self._get_method('__ne__')
+        if method:
+            return method(other)
+        if isinstance(other, KeiString):
+            return true if self.value != other.value else false
+        return true
+
+    def __lt__(self, other):
+        method = self._get_method('__lt__')
+        if method:
+            return method(other)
+        if isinstance(other, KeiString):
+            return true if self.value < other.value else false
+        return false
+
+    def __gt__(self, other):
+        method = self._get_method('__gt__')
+        if method:
+            return method(other)
+        if isinstance(other, KeiString):
+            return true if self.value > other.value else false
+        return false
+
+    def __le__(self, other):
+        method = self._get_method('__le__')
+        if method:
+            return method(other)
+        if isinstance(other, KeiString):
+            return true if self.value <= other.value else false
+        return false
+
+    def __ge__(self, other):
+        method = self._get_method('__ge__')
+        if method:
+            return method(other)
+        if isinstance(other, KeiString):
+            return true if self.value >= other.value else false
+        return false
+
+    def __repr__(self):
+        method = self._get_method('__repr__')
+        if method:
+            return method()
+        return f'{self.value}'
+
 
 # ========== 列表类型 ==========
 
@@ -997,56 +1694,67 @@ class KeiList(KeiBase):
         self.items = _items if _items is not None else []
 
         self._methods = {
-            "push": self.push,
-            "pop": self.pop,
-            "get": self.get,
-            "set": self.set,
-            "length": self.length,
-            "map": self.map,
-            "filter": self.filter,
-            "reduce": self.reduce,
-            "foreach": self.foreach,
-            "slice": self.slice,
-            "concat": self.concat,
-            "join": self.join,
-            "reverse": self.reverse,
-            "sort": self.sort,
-            "index_of": self.index_of,
-            "includes": self.includes,
-            "uniq": self.uniq,
-            "append": self.append,
+            "push": self._push,
+            "pop": self._pop,
+            "get": self._get,
+            "set": self._set,
+            "length": self._length,
+            "map": self._map,
+            "filter": self._filter,
+            "reduce": self._reduce,
+            "foreach": self._foreach,
+            "slice": self._slice,
+            "concat": self._concat,
+            "join": self._join,
+            "reverse": self._reverse,
+            "sort": self._sort,
+            "index_of": self._index_of,
+            "includes": self._includes,
+            "uniq": self._uniq,
+            "append": self._append,
         }
 
     def __bool__(self):
         return len(self.items) > 0
 
     def __len__(self):
+        method = self._get_method('__len__')
+        if method:
+            return method()
         return len(self.items)
 
-    def append(self, *values):
+    def _append(self, *values):
         for v in values:
             self.items.append(v)
-        return self if values else undefined
+        return self
+    def append(self, *values):
+        return self._append(*values)
 
-    def uniq(self):
+    def _uniq(self):
         result = []
         if self.items:
             for i in self.items:
                 if i not in result:
                     result.append(i)
         return KeiList(result)
+    def uniq(self):
+        return self._uniq()
 
-    def push(self, *values):
+    def _push(self, *values):
         for v in values:
             self.items.append(v)
-        return self if values else undefined
+        return self
+    def push(self, *values):
+        return self._push(*values)
 
-    def pop(self):
+    def _pop(self):
         if not self.items:
             return undefined
         return self.items.pop()
+    def pop(self):
+        return self._pop()
 
-    def get(self, index):
+    def _get(self, index):
         if isinstance(index, KeiInt):
             i = index.value
         else:
@@ -1054,8 +1762,10 @@ class KeiList(KeiBase):
         if 0 <= i < len(self.items):
             return self.items[i]
         return undefined
+    def get(self, index):
+        return self._get(index)
 
-    def set(self, index, _value):
+    def _set(self, index, _value):
         if isinstance(index, KeiInt):
             i = index.value
         else:
@@ -1067,11 +1777,15 @@ class KeiList(KeiBase):
         else:
             return undefined
         return _value
+    def set(self, index, _value):
+        return self._set(index, _value)
 
-    def length(self):
+    def _length(self):
         return KeiInt(len(self.items))
+    def length(self):
+        return self._length()
 
-    def map(self, func):
+    def _map(self, func):
         result = []
         for item in self.items:
             if callable(func):
@@ -1080,8 +1794,10 @@ class KeiList(KeiBase):
                 new_val = func(item)
             result.append(new_val)
         return KeiList(result)
+    def map(self, func):
+        return self._map(func)
 
-    def filter(self, func):
+    def _filter(self, func):
         result = []
         for item in self.items:
             if callable(func):
@@ -1091,8 +1807,10 @@ class KeiList(KeiBase):
                 if func(item):
                     result.append(item)
         return KeiList(result)
+    def filter(self, func):
+        return self._filter(func)
 
-    def reduce(self, func, initial=undefined):
+    def _reduce(self, func, initial=undefined):
         if not self.items:
             return initial
 
@@ -1110,78 +1828,80 @@ class KeiList(KeiBase):
             else:
                 acc = result
         return acc
+    def reduce(self, func, initial=undefined):
+        return self._reduce(func, initial)
 
-    def foreach(self, func):
+    def _foreach(self, func):
         for item in self.items:
             func(item)
         return undefined
+    def foreach(self, func):
+        return self._foreach(func)
 
-    def slice(self, start=None, end=None):
+    def _slice(self, start=None, end=None):
         s = start.value if isinstance(start, KeiInt) else (start or 0)
         e = end.value if isinstance(end, KeiInt) else (end if end is not None else len(self.items))
         return KeiList(self.items[s:e])
+    def slice(self, start=None, end=None):
+        return self._slice(start, end)
 
-    def concat(self, other):
+    def _concat(self, other):
         if isinstance(other, KeiList):
             return KeiList(self.items + other.items)
         return KeiList(self.items + [other])
+    def concat(self, other):
+        return self._concat(other)
 
-    def join(self, separator=""):
+    def _join(self, separator=""):
         if isinstance(separator, KeiString):
             sep = separator.value
         else:
             sep = str(separator)
         return KeiString(sep.join(str(item) for item in self.items))
+    def join(self, separator=""):
+        return self._join(separator)
 
-    def reverse(self):
+    def _reverse(self):
         self.items.reverse()
         return self
+    def reverse(self):
+        return self._reverse()
 
-    def sort(self, key=None, reverse=false):
+    def _sort(self, key=None, reverse=false):
         rev = reverse.value if isinstance(reverse, KeiBase) else bool(reverse)
         if key and key is not undefined:
             self.items.sort(key=lambda x: key(x).value if isinstance(key(x), KeiBase) else key(x), reverse=rev)
         else:
             self.items.sort(reverse=rev)
         return self
+    def sort(self, key=None, reverse=false):
+        return self._sort(key, reverse)
 
-    def index_of(self, _value):
+    def _index_of(self, _value):
         try:
             return KeiInt(self.items.index(_value))
         except ValueError:
             return KeiInt(-1)
+    def index_of(self, _value):
+        return self._index_of(_value)
 
-    def includes(self, _value):
+    def _includes(self, _value):
         return true if _value in self.items else false
+    def includes(self, _value):
+        return self._includes(_value)
 
-    def __setitem__(self, key, value):
-        if isinstance(key, KeiInt):
-            idx = key.value
-        elif isinstance(key, int):
-            idx = key
-        else:
-            raise KeiError("TypeError", "列表索引必须是整数")
-
-        if idx < 0:
-            idx = len(self.items) + idx
-
-        if 0 <= idx < len(self.items):
-            self.items[idx] = value
-        else:
+    def _default_getitem(self, key):
+        """覆盖基类的 _default_getitem，支持字符串属性访问"""
+        if isinstance(key, str):
+            if key in self._methods:
+                method = self._methods[key]
+                if hasattr(method, '__self__'):
+                    return method
+                return self._wrap_method(method)
+            if key in self._props:
+                return self._props[key]
             return undefined
 
-    def __or__(self, other):
-        if isinstance(other, KeiList):
-            result = []
-            for item in self.items + other.items:
-                result.append(item)
-            return KeiList(result)
-        return undefined
-
-    def __ror__(self, other):
-        return self.__or__(other)
-
-    def __getitem__(self, key):
         if isinstance(key, slice):
             start = key.start
             stop = key.stop
@@ -1219,7 +1939,7 @@ class KeiList(KeiBase):
         elif isinstance(key, int):
             idx = key
         else:
-            return super().__getitem__(key)
+            return undefined
 
         if idx < 0:
             idx = len(self.items) + idx
@@ -1228,15 +1948,62 @@ class KeiList(KeiBase):
             return self.items[idx]
         return undefined
 
+    def _default_setitem(self, key, value):
+        """覆盖基类的 _default_setitem，支持字符串属性赋值"""
+        if isinstance(key, str):
+            if key in self._methods:
+                raise KeiError("TypeError", f"不能修改方法 {key}")
+            self._props[key] = value
+            return
+
+        if isinstance(key, KeiInt):
+            idx = key.value
+        elif isinstance(key, int):
+            idx = key
+        else:
+            raise KeiError("TypeError", f"列表索引必须是整数, 得到 {type(key)}")
+
+        if idx < 0:
+            idx = len(self.items) + idx
+
+        if 0 <= idx < len(self.items):
+            self.items[idx] = value
+        elif idx == len(self.items):
+            self.items.append(value)
+        else:
+            raise KeiError("IndexError", f"列表索引超出范围: {idx}")
+
+    def __getitem__(self, key):
+        method = self._get_method('__getitem__')
+        if method:
+            return method(key)
+        return self._default_getitem(key)
+
+    def __setitem__(self, key, value):
+        method = self._get_method('__setitem__')
+        if method:
+            method(key, value)
+            return
+        self._default_setitem(key, value)
+
     def __add__(self, other):
+        method = self._get_method('__add__')
+        if method:
+            return method(other)
         if isinstance(other, KeiList):
             return KeiList(self.items + other.items)
         return KeiList(self.items + [other])
 
     def __radd__(self, other):
+        method = self._get_method('__radd__')
+        if method:
+            return method(other)
         return KeiList([other] + self.items)
 
     def __mul__(self, other):
+        method = self._get_method('__mul__')
+        if method:
+            return method(other)
         if isinstance(other, (KeiInt, int)):
             n = other.value if isinstance(other, KeiInt) else other
             return KeiList(self.items * n)
@@ -1246,15 +2013,38 @@ class KeiList(KeiBase):
         return self.__mul__(other)
 
     def __sub__(self, other):
+        method = self._get_method('__sub__')
+        if method:
+            return method(other)
         if isinstance(other, KeiList):
             result = [x for x in self.items if x not in other.items]
             return KeiList(result)
         return KeiList([x for x in self.items if x != other])
 
     def __rsub__(self, other):
+        method = self._get_method('__rsub__')
+        if method:
+            return method(other)
         return KeiList([x for x in [other] if x not in self.items])
 
+    def __or__(self, other):
+        method = self._get_method('__or__')
+        if method:
+            return method(other)
+        if isinstance(other, KeiList):
+            result = []
+            for item in self.items + other.items:
+                result.append(item)
+            return KeiList(result)
+        return undefined
+
+    def __ror__(self, other):
+        return self.__or__(other)
+
     def __eq__(self, other):
+        method = self._get_method('__eq__')
+        if method:
+            return method(other)
         if isinstance(other, KeiList):
             if len(self.items) != len(other.items):
                 return false
@@ -1265,33 +2055,54 @@ class KeiList(KeiBase):
         return false
 
     def __ne__(self, other):
+        method = self._get_method('__ne__')
+        if method:
+            return method(other)
         if isinstance(other, KeiList):
             return true if not self.__eq__(other) else false
         return true
 
     def __lt__(self, other):
+        method = self._get_method('__lt__')
+        if method:
+            return method(other)
         if isinstance(other, KeiList):
             return true if len(self.items) < len(other.items) else false
         return false
 
     def __gt__(self, other):
+        method = self._get_method('__gt__')
+        if method:
+            return method(other)
         if isinstance(other, KeiList):
             return true if len(self.items) > len(other.items) else false
         return false
 
     def __le__(self, other):
+        method = self._get_method('__le__')
+        if method:
+            return method(other)
         if isinstance(other, KeiList):
             return true if len(self.items) <= len(other.items) else false
         return false
 
     def __ge__(self, other):
+        method = self._get_method('__ge__')
+        if method:
+            return method(other)
         if isinstance(other, KeiList):
             return true if len(self.items) >= len(other.items) else false
         return false
 
     def __repr__(self):
+        method = self._get_method('__repr__')
+        if method:
+            return method()
         items = ", ".join(repr(i) for i in self.items)
         return f"[{items}]"
+
+    def __dir__(self):
+        return list(self._methods.keys()) + ['items']
 
 # ========== 字典类型 ==========
 
@@ -1301,78 +2112,35 @@ class KeiDict(KeiBase):
         self.items = pairs if pairs is not None else {}
 
         self._methods = {
-            "keys": self.keys,
-            "values": self.values,
-            "get": self.get,
-            "set": self.set,
-            "has": self.has,
-            "delete": self.delete,
-            "clear": self.clear,
-            "length": self.length,
-            "update": self.update,
-            "map": self.map,
+            "keys": self._keys,
+            "values": self._values,
+            "get": self._get,
+            "set": self._set,
+            "has": self._has,
+            "delete": self._delete,
+            "clear": self._clear,
+            "length": self._length,
+            "update": self._update,
+            "map": self._map,
         }
 
     def __len__(self):
+        method = self._get_method('__len__')
+        if method:
+            return method()
         return len(self.items)
 
-    def __or__(self, other):
-        if isinstance(other, KeiDict):
-            new_dict = self.items.copy()
-            new_dict.update(other.items)
-            return KeiDict(new_dict)
-        return undefined
-
-    def __ror__(self, other):
-        return self.__or__(other)
-
-    def __getitem__(self, key):
-        if isinstance(key, (str, KeiString)):
-            key_str = key.value if isinstance(key, KeiString) else key
-            if key_str in self._methods:
-                return super().__getitem__(key_str)
-
-        if isinstance(key, KeiString):
-            k = key.value
-        elif isinstance(key, (KeiInt, KeiFloat, KeiBool)):
-            k = to_python(key)
-        else:
-            k = key
-
-        if k in self.items:
-            return self.items[k]
-        return super().__getitem__(key)
-
-    def __setitem__(self, key, _value):
-        if isinstance(key, KeiString):
-            k = key.value
-        elif isinstance(key, (KeiInt, KeiFloat, KeiBool)):
-            k = to_python(key)
-        else:
-            k = key
-        self.items[k] = _value
-
-    def __contains__(self, key):
-        if isinstance(key, KeiString):
-            k = key.value
-        elif isinstance(key, (KeiInt, KeiFloat, KeiBool)):
-            k = to_python(key)
-        else:
-            k = key
-        return k in self.items
-
-    def map(self, func):
-        for k in self.items:
-            self.items[k] = func(self.items[k])
-        return self
-
-    def keys(self):
+    def _keys(self):
         return KeiList([KeiString(k) for k in self.items.keys()])
+    def keys(self):
+        return self._keys()
 
-    def values(self):
+    def _values(self):
         return KeiList(list(self.items.values()))
+    def values(self):
+        return self._values()
 
-    def get(self, key, default=undefined):
+    def _get(self, key, default=undefined):
         if isinstance(key, KeiString):
             k = key.value
         elif isinstance(key, (KeiInt, KeiFloat, KeiBool)):
@@ -1380,8 +2148,10 @@ class KeiDict(KeiBase):
         else:
             k = key
         return self.items.get(k, default)
+    def get(self, key, default=undefined):
+        return self._get(key, default)
 
-    def set(self, key, _value):
+    def _set(self, key, _value):
         if isinstance(key, KeiString):
             k = key.value
         elif isinstance(key, (KeiInt, KeiFloat, KeiBool)):
@@ -1390,8 +2160,10 @@ class KeiDict(KeiBase):
             k = key
         self.items[k] = _value
         return _value
+    def set(self, key, _value):
+        return self._set(key, _value)
 
-    def has(self, key):
+    def _has(self, key):
         if isinstance(key, KeiString):
             k = key.value
         elif isinstance(key, (KeiInt, KeiFloat, KeiBool)):
@@ -1399,8 +2171,10 @@ class KeiDict(KeiBase):
         else:
             k = key
         return true if k in self.items else false
+    def has(self, key):
+        return self._has(key)
 
-    def delete(self, key):
+    def _delete(self, key):
         if isinstance(key, KeiString):
             k = key.value
         elif isinstance(key, (KeiInt, KeiFloat, KeiBool)):
@@ -1411,22 +2185,104 @@ class KeiDict(KeiBase):
             del self.items[k]
             return true
         return false
+    def delete(self, key):
+        return self._delete(key)
 
-    def clear(self):
+    def _clear(self):
         self.items.clear()
         return null
+    def clear(self):
+        return self._clear()
 
-    def length(self):
+    def _length(self):
         return KeiInt(len(self.items))
+    def length(self):
+        return self._length()
 
-    def update(self, other):
+    def _update(self, other):
         if isinstance(other, KeiDict):
             self.items.update(other.items)
         elif isinstance(other, dict):
             self.items.update(other)
         return self
+    def update(self, other):
+        return self._update(other)
+
+    def _map(self, func):
+        for k in self.items:
+            self.items[k] = func(self.items[k])
+        return self
+    def map(self, func):
+        return self._map(func)
+
+    def _default_getitem(self, key):
+        """覆盖基类的 _default_getitem"""
+        if isinstance(key, str):
+            if key in self._methods:
+                method = self._methods[key]
+                if hasattr(method, '__self__'):
+                    return method
+                return self._wrap_method(method)
+            if key in self._props:
+                return self._props[key]
+            return undefined
+
+        if isinstance(key, KeiString):
+            k = key.value
+        elif isinstance(key, (KeiInt, KeiFloat, KeiBool)):
+            k = to_python(key)
+        else:
+            k = key
+
+        if k in self.items:
+            return self.items[k]
+        return undefined
+
+    def _default_setitem(self, key, value):
+        """覆盖基类的 _default_setitem"""
+        if isinstance(key, str):
+            if key in self._methods:
+                raise KeiError("TypeError", f"不能修改方法 {key}")
+            self._props[key] = value
+            return
+
+        if isinstance(key, KeiString):
+            k = key.value
+        elif isinstance(key, (KeiInt, KeiFloat, KeiBool)):
+            k = to_python(key)
+        else:
+            k = key
+        self.items[k] = value
+
+    def __getitem__(self, key):
+        method = self._get_method('__getitem__')
+        if method:
+            return method(key)
+        return self._default_getitem(key)
+
+    def __setitem__(self, key, value):
+        method = self._get_method('__setitem__')
+        if method:
+            method(key, value)
+            return
+        self._default_setitem(key, value)
+
+    def __contains__(self, key):
+        method = self._get_method('__contains__')
+        if method:
+            return method(key)
+        if isinstance(key, KeiString):
+            k = key.value
+        elif isinstance(key, (KeiInt, KeiFloat, KeiBool)):
+            k = to_python(key)
+        else:
+            k = key
+        return k in self.items
 
     def __add__(self, other):
+        method = self._get_method('__add__')
+        if method:
+            return method(other)
         if isinstance(other, KeiDict):
             new_dict = self.items.copy()
             new_dict.update(other.items)
@@ -1436,7 +2292,23 @@ class KeiDict(KeiBase):
     def __radd__(self, other):
         return self.__add__(other)
 
+    def __or__(self, other):
+        method = self._get_method('__or__')
+        if method:
+            return method(other)
+        if isinstance(other, KeiDict):
+            new_dict = self.items.copy()
+            new_dict.update(other.items)
+            return KeiDict(new_dict)
+        return undefined
+
+    def __ror__(self, other):
+        return self.__or__(other)
+
     def __eq__(self, other):
+        method = self._get_method('__eq__')
+        if method:
+            return method(other)
         if isinstance(other, KeiDict):
             if len(self.items) != len(other.items):
                 return false
@@ -1447,6 +2319,9 @@ class KeiDict(KeiBase):
         return false
 
     def __ne__(self, other):
+        method = self._get_method('__ne__')
+        if method:
+            return method(other)
         if isinstance(other, KeiDict):
             return true if not self.__eq__(other) else false
         return true
@@ -1455,8 +2330,14 @@ class KeiDict(KeiBase):
         return len(self.items) > 0
 
     def __repr__(self):
+        method = self._get_method('__repr__')
+        if method:
+            return method()
         items = ", ".join(f"{k}: {repr(v)}" for k, v in self.items.items())
         return f"{{{items}}}"
+
+    def __dir__(self):
+        return list(self._methods.keys()) + ['items']
 
 # ========== 函数类型 ==========
 
@@ -1471,18 +2352,14 @@ class KeiFunction(KeiBase):
     def __call__(self, *args, linecode=None, **kwargs):
         from kei import runtoken, __kei__
 
+        pushed = False
         if linecode is not None:
             __kei__.stack.append((self.__name__, linecode))
+            pushed = True
 
         params = self.func_obj['params']
         typeassert = self.func_obj.get('typeassert', None)
 
-        # 找到 * 参数的位置
-        star_pos = -1
-        star_param_name = None
-        starstar_param_name = None
-
-        # 找到 * 参数的位置
         star_pos = -1
         star_param_name = None
         starstar_param_name = None
@@ -1496,19 +2373,16 @@ class KeiFunction(KeiBase):
                 star_pos = i
                 break
 
-        # 如果没有 *，所有参数都是普通参数
         if star_pos == -1:
-            before_star = params      # 所有参数都是普通参数
+            before_star = params
             after_star = []
         else:
             before_star = params[:star_pos]
             after_star = params[star_pos + 1:]
 
-        # 转换参数列表
         all_args = list(args)
         remaining_kwargs = kwargs.copy()
 
-        # 构建新环境
         try:
             new_env = copy.deepcopy(self.__env__)
         except:
@@ -1517,7 +2391,6 @@ class KeiFunction(KeiBase):
             except:
                 new_env = self.__env__.copy()
 
-        # 1. 绑定 * 之前的参数（只能从位置参数取）
         for i, param_name in enumerate(before_star):
             if i < len(all_args):
                 new_env[param_name] = all_args[i]
@@ -1530,15 +2403,12 @@ class KeiFunction(KeiBase):
             else:
                 new_env[param_name] = undefined
 
-        # 2. 处理 * 参数：收集剩余位置参数
         if star_param_name:
             star_args = all_args[len(before_star):]
             new_env[star_param_name] = KeiList(star_args)
 
-        # 3. 绑定 * 之后的参数（只能从关键字参数取）
         for param_name in after_star:
             if param_name.startswith('**'):
-                # **kwargs
                 starstar_param_name = param_name[2:]
                 new_env[starstar_param_name] = KeiDict(remaining_kwargs)
                 remaining_kwargs = {}
@@ -1551,7 +2421,6 @@ class KeiFunction(KeiBase):
             else:
                 new_env[param_name] = undefined
 
-        # 检查多余的关键字参数
         if remaining_kwargs and not starstar_param_name:
             raise KeiError("SyntaxError", f"函数 {self.__name__} 收到未预料的关键字参数: {list(remaining_kwargs.keys())}")
 
@@ -1589,10 +2458,15 @@ class KeiFunction(KeiBase):
         except:
             raise
         finally:
-            __kei__.stack.pop()
+            if pushed:
+                __kei__.stack.pop()
 
     def __repr__(self) -> str:
         return f"<function {self.__name__}>"
+
+    def __dir__(self):
+        return ['__name__']
+
 
 # ========== 类类型 ==========
 
@@ -1603,10 +2477,25 @@ class KeiClass(KeiBase):
         self.env = env
         self.value = class_obj
         self.__name__ = class_obj['name']
+        self._class_attrs = class_obj.get('attrs', {})
+        self._methods_map = class_obj.get('methods_map', {})
+
+    def _get_method(self, name: str) -> Optional[Callable]:
+        """获取类方法"""
+        if name in self._class_attrs:
+            return self._class_attrs[name]
+        if name in self._methods_map:
+            method_obj = self._methods_map[name]
+            if method_obj.get('is_property'):
+                return KeiProperty(method_obj)
+            return KeiMethod(method_obj, self)
+        return None
 
     def __call__(self, *args: Any, **kwargs: Any) -> 'KeiInstance':
         instance = KeiInstance(self)
-        init_method = self.class_obj['methods_map'].get('__init__')
+        instance._class = self
+
+        init_method = self._methods_map.get('__init__')
         if init_method:
             try:
                 new_env = copy.deepcopy(init_method['closure'])
@@ -1640,14 +2529,31 @@ class KeiClass(KeiBase):
         return instance
 
     def __getitem__(self, key):
-        if key in self.class_obj['methods_map']:
-            method_obj = self.class_obj['methods_map'][key]
+        method = self._get_method('__getitem__')
+        if method:
+            return method(key)
+        if key in self._class_attrs:
+            return self._class_attrs[key]
+        if key in self._methods_map:
+            method_obj = self._methods_map[key]
             if method_obj.get('is_property'):
                 return KeiProperty(method_obj)
             return KeiMethod(method_obj, self)
+        return undefined
+
+    def __setitem__(self, key, value):
+        method = self._get_method('__setitem__')
+        if method:
+            method(key, value)
+            return
+        self._class_attrs[key] = value
 
     def __repr__(self) -> str:
         return f"<class {self.__name__}>"
+
+    def __dir__(self):
+        return list(self._class_attrs.keys()) + list(self._methods_map.keys())
+
 
 class KeiProperty(KeiBase):
     def __init__(self, method_obj: dict):
@@ -1664,6 +2570,7 @@ class KeiProperty(KeiBase):
     def __repr__(self):
         return f"<property {self.__name__}>"
 
+
 # ========== 实例类型 ==========
 
 class KeiInstance(KeiBase):
@@ -1672,150 +2579,45 @@ class KeiInstance(KeiBase):
         self._class = klass
         self._attrs = {}
 
-    def _get_method(self, name) -> Optional[Callable]:
-        method = self[name]
-        if method is undefined or not callable(method):
-            return None
-        return method
+    def _get_method(self, name: str) -> Optional[Callable]:
+        """获取方法：先查实例属性，再查类方法"""
+        if name in self._attrs:
+            return self._attrs[name]
+        if self._class is not None:
+            return self._class._get_method(name)
+        return None
 
     def __getitem__(self, key):
+        method = self._get_method('__getitem__')
+        if method:
+            return method(key)
         if key in self._attrs:
             return self._attrs[key]
-        if hasattr(self._class, 'class_obj') and 'methods_map' in self._class.class_obj:
-            methods_map = self._class.class_obj['methods_map']
-            if key in methods_map:
-                method_obj = methods_map[key]
-                if method_obj.get('is_property'):
-                    bound = KeiBoundMethod(method_obj, self)
-                    return bound()
-                return KeiBoundMethod(method_obj, self)
+        if self._class is not None:
+            return self._class[key]
         return undefined
 
     def __setitem__(self, key, _value):
+        method = self._get_method('__setitem__')
+        if method:
+            method(key, _value)
+            return
         self._attrs[key] = _value
 
-    def __add__(self, other):
-        method = self._get_method('__add__')
+    def __delitem__(self, key):
+        method = self._get_method('__delitem__')
         if method:
-            return method(other)
-        return undefined
-
-    def __sub__(self, other):
-        method = self._get_method('__sub__')
-        if method:
-            return method(other)
-        return undefined
-
-    def __mul__(self, other):
-        method = self._get_method('__mul__')
-        if method:
-            return method(other)
-        return undefined
-
-    def __truediv__(self, other):
-        method = self._get_method('__truediv__')
-        if method:
-            return method(other)
-        return undefined
-
-    def __floordiv__(self, other):
-        method = self._get_method('__floordiv__')
-        if method:
-            return method(other)
-        return undefined
-
-    def __mod__(self, other):
-        method = self._get_method('__mod__')
-        if method:
-            return method(other)
-        return undefined
-
-    def __pow__(self, other):
-        method = self._get_method('__pow__')
-        if method:
-            return method(other)
-        return undefined
-
-    def __eq__(self, other):
-        method = self._get_method('__eq__')
-        if method:
-            return method(other)
-        return true if self is other else false
-
-    def __ne__(self, other):
-        method = self._get_method('__ne__')
-        if method:
-            return method(other)
-        return true if self is not other else false
-
-    def __lt__(self, other):
-        method = self._get_method('__lt__')
-        if method:
-            return method(other)
-        return undefined
-
-    def __gt__(self, other):
-        method = self._get_method('__gt__')
-        if method:
-            return method(other)
-        return undefined
-
-    def __le__(self, other):
-        method = self._get_method('__le__')
-        if method:
-            return method(other)
-        return undefined
-
-    def __ge__(self, other):
-        method = self._get_method('__ge__')
-        if method:
-            return method(other)
-        return undefined
-
-    def __and__(self, other):
-        method = self._get_method('__and__')
-        if method:
-            return method(other)
-        return undefined
-
-    def __or__(self, other):
-        method = self._get_method('__or__')
-        if method:
-            return method(other)
-        return undefined
-
-    def __xor__(self, other):
-        method = self._get_method('__xor__')
-        if method:
-            return method(other)
-        return undefined
-
-    def __neg__(self):
-        method = self._get_method('__neg__')
-        if method:
-            return method()
-        return undefined
-
-    def __pos__(self):
-        method = self._get_method('__pos__')
-        if method:
-            return method()
-        return undefined
-
-    def __invert__(self):
-        method = self._get_method('__invert__')
-        if method:
-            return method()
-        return undefined
+            method(key)
+            return
+        if key in self._attrs:
+            del self._attrs[key]
 
     def __repr__(self):
         return f"<instance {self._class.__name__}>"
 
-    def __call__(self):
-        method = self._get_method('__call__')
-        if method:
-            return method()
-        return undefined
+    def __dir__(self):
+        return list(self._attrs.keys())
+
 
 # ========== 方法类型 ==========
 
@@ -1857,6 +2659,7 @@ class KeiMethod(KeiBase):
 
     def __repr__(self):
         return f"<method {self.__name__}>"
+
 
 class KeiBoundMethod(KeiBase):
     def __init__(self, method_obj: dict, instance: KeiInstance | None):
@@ -1910,6 +2713,7 @@ class KeiBoundMethod(KeiBase):
     def __repr__(self):
         return f"<method {self.__name__}>"
 
+
 # ========== 命名空间类型 ==========
 
 class KeiNamespace(KeiBase):
@@ -1933,156 +2737,8 @@ class KeiNamespace(KeiBase):
     def __repr__(self):
         return f"<namespace {self.__name__}>"
 
-# ========== 引用类型 ==========
-
-class KeiRef(KeiBase):
-    def __init__(self, env, name):
-        self._env = env
-        self._name = name
-        super().__init__("ref")
-
-    def _resolve(self):
-        target = self._env.get(self._name)
-        while isinstance(target, KeiRef):
-            target = target._resolve()
-        return target
-
-    def __getattr__(self, name):
-        if name in ('_env', '_name', '_resolve'):
-            return object.__getattribute__(self, name)
-        target = self._resolve()
-        if target is None:
-            raise KeiError("NameError", f"引用的变量 {self._name} 不存在")
-        return getattr(target, name)
-
-    def __setattr__(self, name, value):
-        if name in ('_env', '_name'):
-            super().__setattr__(name, value)
-            return
-        target = self._resolve()
-        if target is None:
-            raise KeiError("NameError", f"引用的变量 {self._name} 不存在")
-        setattr(target, name, value)
-
-    def __getitem__(self, key):
-        target = self._resolve()
-        return target[key]
-
-    def __setitem__(self, key, value):
-        target = self._resolve()
-        target[key] = value
-
-    def __call__(self, *args, **kwargs):
-        target = self._resolve()
-        return target(*args, **kwargs)
-
-    def __add__(self, other):
-        target = self._resolve()
-        return target + other
-
-    def __sub__(self, other):
-        target = self._resolve()
-        return target - other
-
-    def __mul__(self, other):
-        target = self._resolve()
-        return target * other
-
-    def __truediv__(self, other):
-        target = self._resolve()
-        return target / other
-
-    def __floordiv__(self, other):
-        target = self._resolve()
-        return target // other
-
-    def __mod__(self, other):
-        target = self._resolve()
-        return target % other
-
-    def __pow__(self, other):
-        target = self._resolve()
-        return target ** other
-
-    def __eq__(self, other):
-        target = self._resolve()
-        return target == other
-
-    def __ne__(self, other):
-        target = self._resolve()
-        return target != other
-
-    def __lt__(self, other):
-        target = self._resolve()
-        return target < other
-
-    def __gt__(self, other):
-        target = self._resolve()
-        return target > other
-
-    def __le__(self, other):
-        target = self._resolve()
-        return target <= other
-
-    def __ge__(self, other):
-        target = self._resolve()
-        return target >= other
-
-    def __bool__(self):
-        target = self._resolve()
-        return bool(target)
-
-    def __len__(self):
-        target = self._resolve()
-        return len(target)
-
-    def __iter__(self):
-        target = self._resolve()
-        return iter(target)
-
-    def __contains__(self, item):
-        target = self._resolve()
-        return item in target
-
-    @property
-    def value(self):
-        target = self._resolve()
-        if hasattr(target, 'value'):
-            return target.value
-        return target
-
-    @value.setter
-    def value(self, new_val):
-        target = self._resolve()
-        if hasattr(target, 'value'):
-            target.value = new_val
-        elif hasattr(target, 'items'):
-            raise KeiError("SyntaxError", "不能直接给容器类型赋值 value")
-        else:
-            self._env[self._name] = new_val
-
-    @property
-    def items(self):
-        target = self._resolve()
-        if hasattr(target, 'items'):
-            return target.items
-        raise AttributeError("'KeiRef' object has no attribute 'items'")
-
-    @items.setter
-    def items(self, new_items):
-        target = self._resolve()
-        if hasattr(target, 'items'):
-            target.items = new_items
-        else:
-            raise AttributeError("'KeiRef' object has no attribute 'items'")
-
-    def __repr__(self):
-        target = self._resolve()
-        return repr(target)
-
-    def __str__(self):
-        target = self._resolve()
-        return str(target)
+    def __dir__(self):
+        return list(self.env.keys()) + ['__name__']
 
 # ========== 工厂函数 ==========
 
@@ -2141,28 +2797,23 @@ def content(obj, _seen=None, _depth=0, _in_container=False):
         if isinstance(obj, KeiInstance): return f"<instance {obj._class.__name__}>"
         if isinstance(obj, KeiNamespace): return f"<namespace {obj.__name__}>"
         if isinstance(obj, (KeiMethod, KeiBoundMethod)): return f"<method {obj.__name__}>"
-        if isinstance(obj, KeiRef): return f"{obj}"
         if isinstance(obj, KeiError): return f"{obj.value}"
 
         if isinstance(obj, type):
             if obj == KeiBase: return "<class any>"
-            if obj == KeiInt: return "<class int>"
-            if obj == KeiFloat: return "<class float>"
-            if obj == KeiString: return "<class string>"
-            if obj == KeiBool: return "<class bool>"
-            if obj == KeiList: return "<class list>"
-            if obj == KeiDict: return "<class dict>"
-            if obj == KeiFunction: return "<class function>"
-            if obj == KeiClass: return "<class class>"
-            if obj == KeiInstance: return "<class instance>"
-            if obj == KeiNamespace: return "<class namespace>"
-            if obj == _undefined: return "<class undefined>"
-            if obj == _null: return "<class null>"
-
-        if callable(obj):
-            if hasattr(obj, '__name__'):
-                return f"<function {obj.__name__}>"
-            return "<function>"
+            elif obj == KeiInt: return "<class int>"
+            elif obj == KeiFloat: return "<class float>"
+            elif obj == KeiString: return "<class string>"
+            elif obj == KeiBool: return "<class bool>"
+            elif obj == KeiList: return "<class list>"
+            elif obj == KeiDict: return "<class dict>"
+            elif obj == KeiFunction: return "<class function>"
+            elif obj == KeiClass: return "<class class>"
+            elif obj == KeiInstance: return "<class instance>"
+            elif obj == KeiNamespace: return "<class namespace>"
+            elif obj == _undefined: return "<class undefined>"
+            elif obj == _null: return "<class null>"
+            else: return f"<class {obj.__name__}>" if hasattr(obj, '__name__') else "<class>"
 
         if isinstance(obj, type(__import__('sys'))):
             name = getattr(obj, '__name__', 'unknown')
@@ -2206,16 +2857,21 @@ def content(obj, _seen=None, _depth=0, _in_container=False):
         if isinstance(obj, (int, float)):
             return str(obj)
 
-        try:
-            repr_str = repr(obj)
-            if len(repr_str) > 100:
-                repr_str = repr_str[:97] + "..."
-            return repr_str
-        except:
-            return f"<object>"
+        if isinstance(obj, object): return f"<instance {type(obj).__name__}>"
+
+        if callable(obj):
+            if hasattr(obj, '__name__'):
+                return f"<function {obj.__name__}>"
+            return "<function>"
+
+        if hasattr(obj, '__name__'):
+            return f"<object {obj.__name__}>"
+        else:
+            return "<object>"
 
     finally:
         _seen.remove(obj_id)
+
 
 # ========== 常量 ==========
 
@@ -2223,8 +2879,7 @@ HASVALUE = (
     KeiInt,
     KeiFloat,
     KeiString,
-    KeiBool,
-    KeiRef
+    KeiBool
 )
 
 HASITMES = (
@@ -2240,7 +2895,7 @@ __all__ = [
     'KeiList', 'KeiDict', 'KeiBool',
     'KeiFunction', 'KeiClass', 'KeiNamespace',
     'KeiInstance', 'KeiMethod', 'KeiBoundMethod',
-    'content', 'KeiRef',
+    'content',
     '_undefined', '_null',
     'KeiException', 'KeiError',
     'HASVALUE', 'HASITMES'

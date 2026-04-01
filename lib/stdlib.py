@@ -2,6 +2,7 @@
 
 from lib.object import *
 from lib.kei2py import *
+import lib.python as python
 
 env = {}
 
@@ -158,7 +159,7 @@ class kei:
     @s
     def cnlen(text) -> KeiInt:
         kei.check(text, KeiString, str, name='cnlen')
-        text = kei.topy(text)
+        text = python.topy(text)
         """计算字符串的显示长度
         规则：
         - 中文字符：2
@@ -368,6 +369,7 @@ class kei:
 
     @s
     def println(*text):
+        """超级阉割版print"""
         print(' '.join(content(t) for t in text), end='\n')
         return KeiString(' '.join(content(t) for t in text))
 
@@ -408,36 +410,6 @@ class kei:
             raise Exception("range 需要 1~3 个参数")
 
     @s
-    def type(obj):
-        """返回对象的类型（类本身）"""
-        # 处理 Kei 对象实例 → 返回对应的类
-        if isinstance(obj, KeiInt): return KeiInt
-        if isinstance(obj, KeiFloat): return KeiFloat
-        if isinstance(obj, KeiString): return KeiString
-        if isinstance(obj, KeiBool): return KeiBool
-        if isinstance(obj, KeiList): return KeiList
-        if isinstance(obj, KeiDict): return KeiDict
-        if isinstance(obj, KeiFunction): return KeiFunction
-        if isinstance(obj, KeiClass): return KeiClass
-        if isinstance(obj, KeiInstance): return KeiInstance
-        if isinstance(obj, KeiNamespace): return KeiNamespace
-
-        # 处理类型本身 → 返回自身（已经是类了）
-        if obj in {KeiInt, KeiFloat, KeiString, KeiBool,
-                   KeiList, KeiDict, KeiFunction, KeiClass,
-                   KeiInstance, KeiNamespace}:
-            return obj
-
-        # 处理单例 → 返回对应的类
-        if obj is undefined: return type(undefined)  # _undefined 类
-        if obj is null: return type(null)            # _null 类
-        if obj is true: return type(true)            # _true 类
-        if obj is false: return type(false)          # _false 类
-        if obj is omit: return type(omit)            # _omit 类
-
-        return undefined
-
-    @s
     def random(x=KeiInt(0), y=KeiInt(9)):
         kei.check(x, KeiInt, name='random')
         kei.check(y, KeiInt, name='random')
@@ -473,7 +445,7 @@ class kei:
         raise KeiError("TypeError", f"{(name + ' ') if name else ''}需要 {expected}，得到 {actual}")
 
     @s
-    def input(ps):
+    def input(ps=KeiString('')):
         kei.check(ps, KeiString, KeiFloat, name='input')
         kei.print(ps, end=KeiString(''))
         return KeiString(input())
@@ -612,29 +584,92 @@ class kei:
         return __kei__.step
 
     @s
-    def min(*args):
-        """返回最小值，支持多个参数或列表"""
+    def min(*args, key=None):
+        """返回最小值，支持多个参数或列表，支持 key 函数"""
         if len(args) == 0:
-            raise Exception("min 需要至少一个参数")
+            raise KeiError("ValueError", "min 需要至少一个参数")
 
-        # 如果只有一个参数且是列表，取列表最小值
+        # 处理 key 参数
+        if key is not None:
+            if isinstance(key, KeiFunction):
+                def key_wrapper(x):
+                    k = key(x)
+                    # 获取原始值用于二级比较
+                    if hasattr(x, 'value'):
+                        raw_x = x.value
+                    else:
+                        raw_x = x
+                    return (k, raw_x)
+                key_func = key_wrapper
+            else:
+                key_func = key
+        else:
+            # 自动检测类型
+            if len(args) == 1 and isinstance(args[0], KeiList):
+                items = args[0].items
+            else:
+                items = list(args)
+
+            if not items:
+                raise KeiError("ValueError", "min 的参数列表不能为空")
+
+            # 检查所有元素类型
+            all_string = True
+            all_number = True
+            all_bool = True
+
+            for item in items:
+                if not isinstance(item, KeiString):
+                    all_string = False
+                if not isinstance(item, (KeiInt, KeiFloat)):
+                    all_number = False
+                if not isinstance(item, KeiBool):
+                    all_bool = False
+
+            if all_string:
+                # 字符串：只按长度比较
+                def str_key_func(x):
+                    if isinstance(x, KeiString):
+                        return len(x.value)
+                    return 0
+                key_func = str_key_func
+
+            elif all_number:
+                # 数字：直接比较值
+                key_func = lambda x: x.value if isinstance(x, (KeiInt, KeiFloat)) else x
+            elif all_bool:
+                # 布尔值：有 false 就返回 false，否则 true
+                for item in items:
+                    if not item.value:
+                        return false
+                return true
+            else:
+                # 混合类型，用默认比较
+                key_func = lambda x: x
+
+        # 如果只有一个参数且是列表
         if len(args) == 1 and isinstance(args[0], KeiList):
             items = args[0].items
             if not items:
-                raise Exception("min 的列表不能为空")
+                raise KeiError("ValueError", "min 的列表不能为空")
 
-            # 找到最小值
             min_item = items[0]
+            min_key = key_func(min_item)
             for item in items[1:]:
-                if item < min_item:  # Kei 对象支持 < 比较
+                k = key_func(item)
+                if k < min_key:
                     min_item = item
+                    min_key = k
             return min_item
 
-        # 多个参数直接比较
+        # 多个参数
         min_item = args[0]
+        min_key = key_func(min_item)
         for arg in args[1:]:
-            if arg < min_item:
+            k = key_func(arg)
+            if k < min_key:
                 min_item = arg
+                min_key = k
         return min_item
 
     @s
@@ -752,102 +787,6 @@ class kei:
         return ret
 
     @s
-    def python(module_name):
-        """导入 Python 模块"""
-        if isinstance(module_name, KeiString):
-            module_name = module_name.value
-
-        # 用 Python 的 __import__
-        try:
-            module = __import__(module_name)
-        except ImportError:
-            raise KeiError("ImportError", f"没有模块{module_name}")
-
-        # 包装成 Kei 对象
-        return kei._wrap_module(module)
-
-    @s
-    def topy(value):
-        """KeiLang → Python 递归转换"""
-        if value is None:
-            return None
-        if value is undefined:
-            return None
-        if value is null:
-            return None
-
-        # 基础类型
-        if isinstance(value, KeiInt):
-            return value.value
-        if isinstance(value, KeiFloat):
-            return value.value
-        if isinstance(value, KeiString):
-            return value.value
-        if isinstance(value, KeiBool):
-            return value.value
-
-        # 列表
-        if isinstance(value, KeiList):
-            return [kei.topy(item) for item in value.items]
-
-        # 字典
-        if isinstance(value, KeiDict):
-            return {kei.topy(k): kei.topy(v) for k, v in value.items.items()}
-
-        # 命名空间
-        if isinstance(value, KeiNamespace):
-            return {k: kei.topy(v) for k, v in value.env.items()}
-
-        # 函数/方法（返回函数本身，调用时再转换参数）
-        if callable(value):
-            return value
-
-        # 其他 Kei 对象
-        if hasattr(value, '_props'):
-            return {k: kei.topy(v) for k, v in value._props.items()}
-
-        # 默认返回原值
-        return value
-
-    @s
-    def tokei(value):
-        """Python → KeiLang 递归转换"""
-        if value is None:
-            return null
-
-        # 基础类型
-        if isinstance(value, bool):
-            return true if value else false
-        if isinstance(value, int):
-            return KeiInt(value)
-        if isinstance(value, float):
-            return KeiFloat(value)
-        if isinstance(value, str):
-            return KeiString(value)
-
-        # 列表
-        if isinstance(value, (list, tuple)):
-            return KeiList([kei.tokei(item) for item in value])
-
-        # 字典
-        if isinstance(value, dict):
-            return KeiDict({kei.tokei(k): kei.tokei(v) for k, v in value.items()})
-
-        # 函数（包装成可调用的 Kei 对象）
-        if callable(value):
-            return kei._wrap_module(value)
-
-        # 模块
-        if hasattr(value, '__name__') and hasattr(value, '__dict__'):
-            return kei._wrap_module(value)
-
-        # 其他类型，尝试转字符串
-        try:
-            return KeiString(str(value))
-        except:
-            return value
-
-    @s
     def read(filename, encoding='utf-8'):
         kei.check(filename, KeiString, name='read')
         assert isinstance(filename, KeiString)
@@ -899,25 +838,21 @@ class kei:
         return KeiString(content(value, _in_container=True))
 
     @s
-    def _wrap_module(module):
-        """把 Python 模块包装成 KeiDict"""
-        result = {}
-        for name in dir(module):
-            if not name.startswith('_'):
-                attr = getattr(module, name)
-                if callable(attr):
-                    result[name] = attr  # 函数直接暴露
-                else:
-                    result[name] = attr
-        return KeiNamespace(module.__name__, result)
+    def hasattr(obj, value):
+        return hasattr(obj, to_str(value))
 
 func = {
+    "type": type,
+    "isinstance": isinstance,
+    'dir': dir,
+    'copy': __import__('copy').copy,
+    'deepcopy': __import__('copy').deepcopy,
+    "hasattr": kei.hasattr,
     "factorial": kei.factorial,
     "assert": kei._assert,
     "print": kei.print,
     "println": kei.println,
     "input": kei.input,
-    "type": kei.type,
     "len": kei.len,
     "abs": kei.abs,
     "sleep": kei.sleep,
@@ -935,9 +870,6 @@ func = {
     "sort": kei.sort,
     "exec": kei.exec,
     "clear": kei.clear,
-    "python": kei.python,
-    "topy": kei.topy,
-    "tokei": kei.tokei,
     "eval": kei.eval,
     "read": kei.read,
     "write": kei.write,
