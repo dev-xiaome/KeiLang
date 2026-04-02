@@ -11,7 +11,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.6-6"
+__version__ = "1.6-7"
 
 class KeiState:
     stack: List[Any]  # 添加类型提示
@@ -260,8 +260,8 @@ def error(errtype: str | None, info: str, stack: list=[], code:str|None=None, li
 
     print(f"{space} ·")
 
-    #import traceback
-    #traceback.print_exc()
+    import traceback
+    traceback.print_exc()
 
     if not __kei__.repl:
         sys.exit(1)
@@ -2729,6 +2729,7 @@ def parse_index_with_obj(obj_node, tokens, pos, all_lines=None, linepos=0):
         node = {'type': 'index', 'obj': obj_node, 'index': start}
     new_pos = end_pos + 1
     return node, new_pos, linepos
+
 def parse_assign(tokens: list, pos: int, all_lines=None, linepos=0) -> tuple:
     # 检查 ** 赋值
     if (pos + 1 < len(tokens) and

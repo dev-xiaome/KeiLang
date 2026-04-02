@@ -864,6 +864,9 @@ class KeiInt(KeiBase):
             return method(other)
         return self._default_ge(other)
 
+    def __float__(self):
+        return KeiFloat(self.value)
+
     def __repr__(self):
         method = self._get_method('__repr__')
         if method:
@@ -897,6 +900,9 @@ class KeiFloat(KeiBase):
             "ceil": self._ceil,
             "take": self._take,
         }
+
+    def __float__(self):
+        return float(self.value)
 
     def __bool__(self):
         return self.value != 0
@@ -2857,8 +2863,6 @@ def content(obj, _seen=None, _depth=0, _in_container=False):
         if isinstance(obj, (int, float)):
             return str(obj)
 
-        if isinstance(obj, object): return f"<instance {type(obj).__name__}>"
-
         if callable(obj):
             if hasattr(obj, '__name__'):
                 return f"<function {obj.__name__}>"
@@ -2871,7 +2875,6 @@ def content(obj, _seen=None, _depth=0, _in_container=False):
 
     finally:
         _seen.remove(obj_id)
-
 
 # ========== 常量 ==========
 
