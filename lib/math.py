@@ -194,5 +194,5 @@ __all__ = [
     'floor', 'ceil', 'round', 'trunc', 'modf', 'fmod',
     'gcd', 'lcm', 'comb', 'perm',
     'degrees', 'radians', 'hypot', 'dist',
-    'isclose', 'isfinite', 'isinf', 'isnan'
+    'isclose', 'isfinite', 'isinf', 'isnan', 'pibbp'
 ]

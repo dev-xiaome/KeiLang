@@ -773,16 +773,22 @@ class kei:
             return obj
 
     @s
-    def exec(codes):
+    def exec(codes, env=None):
         from kei import exec as keiexec
-        new_env = keiexec(codes, kei.getenv())[0]
+
+        temp_env = kei.getenv() if env is None else env
+
+        new_env = keiexec(codes, temp_env)[0]
 
         return KeiNamespace("__exec__", new_env)
 
     @s
-    def eval(codes):
+    def eval(codes, env=None):
         from kei import exec as keiexec
-        ret = keiexec(codes, kei.getenv())[1]
+
+        temp_env = kei.getenv() if env is None else env
+
+        ret = keiexec(codes, temp_env)[1]
 
         return ret
 
@@ -845,6 +851,7 @@ func = {
     "type": type,
     "isinstance": isinstance,
     'dir': dir,
+    'hash': hash,
     'copy': __import__('copy').copy,
     'deepcopy': __import__('copy').deepcopy,
     "hasattr": kei.hasattr,

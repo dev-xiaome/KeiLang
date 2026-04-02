@@ -11,7 +11,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.6-5"
+__version__ = "1.6-6"
 
 class KeiState:
     stack: List[Any]  # 添加类型提示
@@ -976,625 +976,8 @@ def process_fstring(template, env):
 
     return ''.join(result)
 
-def parse_call(name, tokens, pos, is_attr=False):
-    """解析函数调用，支持 is_attr 参数区分普通调用和方法调用"""
-    pos += 1  # 跳过 '('
-
-    arguments = []
-
-    # 如果没有参数
-    if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ')':
-        pos += 1
-        if is_attr:
-            return {
-                'type': 'methodcall',
-                'obj': name,  # name 实际上是 obj_node
-                'arguments': arguments,
-            }, pos
-        else:
-            return {
-                'type': 'call',
-                'name': name,
-                'arguments': arguments,
-            }, pos
-
-    # 解析参数
-    while True:
-        # 检查是否是 **kwargs 解包
-        if (pos < len(tokens) and tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '**' and
-              pos + 1 < len(tokens)):
-            pos += 1  # 跳过 '**'
-            val, pos = parse_expr(tokens, pos, in_call=True)
-            arguments.append({'type': 'starkwargs', 'value': val})
-
-        # 检查是否是 *args 解包
-        elif (pos < len(tokens) and tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '*' and
-              pos + 1 < len(tokens)):
-            pos += 1  # 跳过 '*'
-            val, pos = parse_expr(tokens, pos, in_call=True)
-            arguments.append({'type': 'starargs', 'value': val})
-
-        # 检查是否是关键字参数 (name=value)
-        elif (pos < len(tokens) and tokens[pos]['type'] == 'name' and
-            pos + 1 < len(tokens) and tokens[pos+1]['type'] == 'op' and
-            tokens[pos+1]['value'] == "="):
-            kwarg_name = tokens[pos]['value']
-            pos += 2
-            kwarg_value, pos = parse_expr(tokens, pos, in_call=True)
-            arguments.append({'type': 'keyword', 'name': kwarg_name, 'value': kwarg_value})
-
-        else:
-            # 普通位置参数
-            arg, pos = parse_expr(tokens, pos, in_call=True)
-            arguments.append({'type': 'positional', 'value': arg})
-
-        # 检查逗号或结束
-        if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
-            pos += 1
-            continue
-        elif pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ')':
-            pos += 1
-            break
-        elif pos < len(tokens) and tokens[pos]['type'] == 'name':
-            raise KeiError("SyntaxError", f"非预期的名称: {tokens[pos]['value']}")
-        elif pos >= len(tokens):
-            raise KeiError("SyntaxError", "缺少右括号 ')'")
-        else:
-            break
-
-    if is_attr:
-        return {
-            'type': 'methodcall',
-            'obj': name,  # name 实际上是 obj_node
-            'arguments': arguments,
-        }, pos
-    else:
-        return {
-            'type': 'call',
-            'name': name,
-            'arguments': arguments,
-        }, pos
-
-def parse_call_attr(obj_node, tokens, pos, in_call=False):
-    """解析方法调用，直接调用 parse_call"""
-    return parse_call(obj_node, tokens, pos, is_attr=True)
-
-def parse_atom(tokens: list, pos: int, in_call=False) -> tuple:
-    debug_print(f"parse_atom: pos={pos}, token={tokens[pos] if pos < len(tokens) else 'EOF'}")
-
-    if pos >= len(tokens):
-        debug_print("parse_atom: EOF")
-        return None, pos
-    t = tokens[pos]
-
-    # 如果是 }，返回特殊标记让上层处理
-    if t["type"] == "symbol" and t["value"] == "}":
-        debug_print("parse_atom: found '}', returning None")
-        return None, pos
-
-    if t['type'] == 'name' and t['value'] == 'fn':
-        pos += 1
-
-        # 解析参数列表（直到 =>）
-        params = []
-        while pos < len(tokens):
-            if tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '=>':
-                pos += 1
-                break
-            elif tokens[pos]['type'] == 'name':
-                params.append(tokens[pos]['value'])
-                pos += 1
-                if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
-                    pos += 1
-            else:
-                break
-
-        # 解析表达式
-        expr, pos = parse_expr(tokens, pos)
-
-        return {
-            'type': 'lambda',
-            'params': params,
-            'body': expr
-        }, pos
-
-    # 如果是关键字（包括 fn），返回 None 让 parse_stmt 处理
-    if t["type"] == "name" and t["value"] in keywords:
-        debug_print(f"parse_atom: keyword {t['value']} at pos {pos}, returning None")
-        return None, pos
-
-    # ========== 处理字面量 ==========
-    if t["type"] in {"int", "float", "str", "bool", "null", "list", "dict"}:
-        debug_print(f"parse_atom: literal {t['type']} at pos {pos}")
-        node = t
-        pos += 1
-
-        # 统一处理属性访问、索引访问和方法调用
-        while pos < len(tokens):
-            current_token = tokens[pos]
-
-            # 处理 . 属性访问
-            if current_token['type'] == 'symbol' and current_token['value'] == '.':
-                pos += 1
-                if pos >= len(tokens) or tokens[pos]['type'] != 'name':
-                    raise KeiError("SyntaxError", "属性访问语法错误")
-
-                node = {
-                    'type': 'attr',
-                    'obj': node,
-                    'attr': tokens[pos]['value']
-                }
-                pos += 1
-
-                # 如果是方法调用
-                if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '(':
-                    return parse_call_attr(node, tokens, pos, in_call)
-
-            # 处理 [ 索引访问
-            elif current_token['type'] == 'symbol' and current_token['value'] == '[':
-                node, new_pos = parse_index_with_obj(node, tokens, pos)
-                pos = new_pos
-                continue
-
-            # 处理 ( 方法调用
-            elif current_token['type'] == 'symbol' and current_token['value'] == '(':
-                return parse_call_attr(node, tokens, pos, in_call)
-
-            else:
-                break
-
-        return node, pos
-
-    # ========== 处理名字（标识符）==========
-    if t["type"] == "name":
-        name = t["value"]
-        pos += 1
-
-        # 检查是否是 key=value 形式（在字典或参数列表中）
-        if pos < len(tokens) and tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '=':
-            if {'type': 'name', 'value': 'type'} not in tokens:
-                pos -= 1
-                return None, pos
-
-        # 先构建基础节点
-        node = {'type': 'name', 'value': name}
-
-        # 检查属性链和方法调用
-        while pos < len(tokens):
-            # 检查 . 属性访问
-            if tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '.':
-                if pos + 1 < len(tokens) and tokens[pos+1]['type'] == 'symbol' and tokens[pos+1]['value'] == '.':
-                    break
-
-                pos += 1
-                if pos >= len(tokens) or tokens[pos]['type'] != 'name':
-                    raise KeiError("SyntaxError", "属性访问语法错误：'.' 后面缺少属性名")
-
-                attr_name = tokens[pos]['value']
-                pos += 1
-
-                node = {
-                    'type': 'attr',
-                    'obj': node,
-                    'attr': attr_name
-                }
-
-                if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '(':
-                    return parse_call_attr(node, tokens, pos, in_call)
-
-            # 检查函数调用 ( )
-            elif tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '(':
-                node, pos = parse_call(name, tokens, pos)
-
-            # 检查索引访问 [ ]
-            elif tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '[':
-                node, new_pos = parse_index_with_obj(node, tokens, pos)
-                pos = new_pos
-
-            else:
-                break
-
-        return node, pos
-
-    # 处理括号、列表、字典
-    if t["type"] == "symbol" and t["value"] == "(":
-        pos += 1
-        expr, new_pos = parse_expr(tokens, pos, in_call)
-        if new_pos >= len(tokens) or tokens[new_pos]["type"] != "symbol" or tokens[new_pos]["value"] != ")":
-            raise KeiError("SyntaxError", "缺少右括号")
-        pos = new_pos + 1
-        node = expr
-
-        # 🔥 关键：处理后缀操作（属性访问、方法调用、索引）
-        while pos < len(tokens):
-            # 属性访问 .attr
-            if tokens[pos]["type"] == "symbol" and tokens[pos]["value"] == ".":
-                pos += 1
-                if pos >= len(tokens) or tokens[pos]["type"] != "name":
-                    raise KeiError("SyntaxError", "属性访问语法错误")
-                attr = tokens[pos]["value"]
-                pos += 1
-
-                if pos < len(tokens) and tokens[pos]["type"] == "symbol" and tokens[pos]["value"] == "(":
-                    node = {'type': 'attr', 'obj': node, 'attr': attr}
-                    node, pos = parse_call_attr(node, tokens, pos, in_call)
-                else:
-                    node = {"type": "attr", "obj": node, "attr": attr}
-                continue
-
-            # 函数调用 ()
-            if tokens[pos]["type"] == "symbol" and tokens[pos]["value"] == "(":
-                node, pos = parse_call_attr(node, tokens, pos, in_call)
-                continue
-
-            # 索引访问 []
-            if tokens[pos]["type"] == "symbol" and tokens[pos]["value"] == "[":
-                node, new_pos = parse_index_with_obj(node, tokens, pos)
-                pos = new_pos
-                continue
-
-            break
-
-        return node, pos
-
-    # 处理列表
-    if t["type"] == "symbol" and t["value"] == "[":
-        node, new_pos = parse_list(tokens, pos)
-        pos = new_pos
-
-        while pos < len(tokens):
-            if tokens[pos]["type"] == "symbol" and tokens[pos]["value"] == ".":
-                pos += 1
-                if pos >= len(tokens) or tokens[pos]["type"] != "name":
-                    raise KeiError("SyntaxError", "属性访问语法错误")
-                attr = tokens[pos]["value"]
-                pos += 1
-
-                node = {
-                    'type': 'attr',
-                    'obj': node,
-                    'attr': attr
-                }
-
-                if pos < len(tokens) and tokens[pos]["type"] == "symbol" and tokens[pos]["value"] == "(":
-                    return parse_call_attr(node, tokens, pos)
-            else:
-                break
-
-        return node, pos
-
-    if t["type"] == "symbol" and t["value"] == "{":
-        if pos + 1 < len(tokens) and tokens[pos+1]["type"] == "name" and tokens[pos+1]["value"] in keywords:
-            return None, pos
-        node, pos = parse_dict(tokens, pos)
-
-        return node, pos
-
-    return None, pos
-
-def parse_index_with_obj(obj_node, tokens, pos):
-    # 跳过 '['
-    pos += 1
-
-    # 找到匹配的 ']'
-    bracket_count = 1
-    end_pos = pos
-
-    while end_pos < len(tokens):
-        current_token = tokens[end_pos]
-        token_desc = f"{current_token}" if isinstance(current_token, dict) else current_token
-
-        if current_token == '[' or (isinstance(current_token, dict) and current_token.get('value') == '['):
-            bracket_count += 1
-        elif current_token == ']' or (isinstance(current_token, dict) and current_token.get('value') == ']'):
-            bracket_count -= 1
-            if bracket_count == 0:
-                break
-
-        end_pos += 1
-
-    if end_pos >= len(tokens) or bracket_count != 0:
-        raise KeiError("SyntaxError", "缺少 ]")
-
-    # 提取内部 tokens
-    inner_tokens = tokens[pos:end_pos]
-
-    # 按 ':' 分割
-    parts = []
-    current = []
-    colon_positions = []
-
-    for i, token in enumerate(inner_tokens):
-        if token == ':' or (isinstance(token, dict) and token.get('value') == ':'):
-            parts.append(current)
-            current = []
-            colon_positions.append(i)
-        else:
-            current.append(token)
-    parts.append(current)
-
-    # 解析各部分
-    start = None
-    end = None
-    step = None
-
-    if len(parts) >= 1 and parts[0]:
-        start, _ = parse_expr(parts[0], 0)
-
-    if len(parts) >= 2 and parts[1]:
-        end, _ = parse_expr(parts[1], 0)
-
-    if len(parts) >= 3 and parts[2]:
-        step, _ = parse_expr(parts[2], 0)
-
-    # 判断类型
-    is_slice = len(parts) > 1 or (len(parts) == 1 and colon_positions)
-
-    # 返回
-    if is_slice:
-        result = {
-            'type': 'slice',
-            'obj': obj_node,
-            'start': start,
-            'end': end,
-            'step': step
-        }
-    else:
-        result = {
-            'type': 'index',
-            'obj': obj_node,
-            'index': start
-        }
-
-    new_pos = end_pos + 1
-
-    return result, new_pos
-
-def parse_assign(tokens: list, pos: int) -> tuple:
-    # 检查是否是 ** 赋值
-    if (pos + 1 < len(tokens) and
-        tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '*' and
-        tokens[pos + 1]['type'] == 'op' and tokens[pos + 1]['value'] == '*'):
-
-        # ** 赋值：**kwargs = {"a": 1, "b": 2}
-        if pos + 2 >= len(tokens) or tokens[pos + 2]['type'] != 'name':
-            raise KeiError("SyntaxError", "** 后面必须是变量名")
-
-        left = {
-            'type': 'starstarassign',
-            'name': tokens[pos + 2]['value']
-        }
-        pos += 3  # 跳过 ** 和 变量名
-
-    # 检查是否是 * 赋值
-    elif tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '*':
-        # * 赋值：*all = 1,2,3
-        if pos + 1 >= len(tokens) or tokens[pos + 1]['type'] != 'name':
-            raise KeiError("SyntaxError", "* 后面必须是变量名")
-
-        left = {
-            'type': 'starassign',
-            'name': tokens[pos + 1]['value']
-        }
-        pos += 2  # 跳过 * 和 变量名
-
-    else:
-        # 普通赋值
-        left = tokens[pos]
-        pos += 1  # 跳过变量名
-
-    # 检查 =
-    if pos >= len(tokens) or tokens[pos].get('type') != 'op' or tokens[pos].get('value') != '=':
-        raise KeiError("SyntaxError", "需要 =")
-    pos += 1  # 跳过 =
-
-    # 解析右边
-    right, pos = parse_expr(tokens, pos)
-
-    node = {'type': 'assign', 'left': left, 'right': right}
-    return node, pos
-
-def parse_term(tokens, pos, in_call=False):
-    left, pos = parse_pow(tokens, pos, in_call)
-
-    while pos < len(tokens):
-        t = tokens[pos]
-        if t["type"] != "op":
-            break
-
-        if t["value"] in {"*", "/", "//", "%", "|"}:
-            op = t["value"]
-            pos += 1
-            right, new_pos = parse_pow(tokens, pos)
-            if right is None:
-                raise KeiError("SyntaxError", f"运算符 '{op}' 后面缺少表达式")
-            left = {"type": "binop", "op": op, "left": left, "right": right}
-            pos = new_pos
-        else:
-            break
-
-    return left, pos
-
-def parse_pow(tokens, pos, in_call=False):
-    left, pos = parse_unary(tokens, pos, in_call)
-
-    while pos < len(tokens):
-        t = tokens[pos]
-        if t["type"] != "op":
-            break
-
-        if t["value"] == "**":
-            op = t["value"]
-            pos += 1
-            right, new_pos = parse_unary(tokens, pos)
-            if right is None:
-                raise KeiError("SyntaxError", f"运算符 '{op}' 后面缺少表达式")
-            left = {"type": "binop", "op": op, "left": left, "right": right}
-            pos = new_pos
-        else:
-            break
-
-    return left, pos
-
-def parse_expr(tokens: list, pos: int, in_call=False, allow_assign=False, in_comp=False) -> tuple:
-    """新的 parse_expr：正确处理优先级（兼容旧接口）"""
-
-    debug_print(f"parse_expr: pos={pos}, token={tokens[pos] if pos < len(tokens) else 'EOF'}")
-
-    # 先处理三目运算符（优先级最低中的最低）
-    left, pos = parse_logic(tokens, pos, in_call, allow_assign, in_comp)
-
-    # 处理三目 if/unless（需要在最外层）
-    while pos < len(tokens):
-        t = tokens[pos]
-
-        if t['value'] == 'if' and not in_comp:
-            true_val = left
-            pos += 1
-            cond, pos = parse_expr(tokens, pos, in_call, allow_assign, in_comp)
-
-            if pos >= len(tokens) or tokens[pos].get('value') != 'else':
-                raise KeiError("SyntaxError", "三目运算符需要 else 分支")
-            pos += 1
-
-            false_val, pos = parse_expr(tokens, pos, in_call, allow_assign, in_comp)
-
-            return {
-                'type': 'ternary',
-                'cond': cond,
-                'true_val': true_val,
-                'false_val': false_val
-            }, pos
-
-        if t['value'] == 'unless' and not in_comp:
-            true_val = left
-            pos += 1
-            cond, pos = parse_expr(tokens, pos, in_call, allow_assign, in_comp)
-
-            if pos >= len(tokens) or tokens[pos].get('value') != 'else':
-                raise KeiError("SyntaxError", "三目运算符需要 else 分支")
-            pos += 1
-
-            false_val, pos = parse_expr(tokens, pos, in_call, allow_assign, in_comp)
-
-            return {
-                'type': 'unternary',
-                'cond': cond,
-                'true_val': true_val,
-                'false_val': false_val
-            }, pos
-
-        break
-
-    # 处理 ?
-    if pos < len(tokens) and tokens[pos].get('type') == 'op' and tokens[pos].get('value') == '?':
-        pos += 1
-        return {
-            'type': 'trysingle',
-            'expr': left
-        }, pos
-
-    # 处理 !（非空断言后缀）
-    if pos < len(tokens) and tokens[pos].get('type') == 'op' and tokens[pos].get('value') == '!':
-        pos += 1
-        return {
-            'type': 'trysingle',
-            'expr': left
-        }, pos
-
-    return left, pos
-
-def parse_logic(tokens, pos, in_call=False, allow_assign=False, in_comp=False):
-    left, pos = parse_compare(tokens, pos, in_call, allow_assign, in_comp)
-
-    while pos < len(tokens):
-        t = tokens[pos]
-
-        if t["type"] != "op":
-            break
-
-        if t["value"] in {"and", "or"}:
-            op = t["value"]
-            pos += 1
-            right, new_pos = parse_compare(tokens, pos, in_call, allow_assign, in_comp)
-            if right is None:
-                raise KeiError("SyntaxError", f"运算符 '{op}' 后面缺少表达式")
-            left = {"type": "binop", "op": op, "left": left, "right": right}
-            pos = new_pos
-        else:
-            break
-
-    return left, pos
-
-def parse_compare(tokens, pos, in_call=False, allow_assign=False, in_comp=False):
-    left, pos = parse_addsub(tokens, pos, in_call, allow_assign, in_comp)
-
-    while pos < len(tokens):
-        t = tokens[pos]
-
-        if t["type"] != "op":
-            break
-
-        if t["value"] in {"==", "!=", "<", ">", "<=", ">=", "in", "is"}:
-            op = t["value"]
-            pos += 1
-            right, new_pos = parse_addsub(tokens, pos, in_call, allow_assign, in_comp)
-            if right is None:
-                raise KeiError("SyntaxError", f"运算符 '{op}' 后面缺少表达式")
-            left = {"type": "binop", "op": op, "left": left, "right": right}
-            pos = new_pos
-        else:
-            break
-
-    return left, pos
-
-def parse_addsub(tokens, pos, in_call=False, allow_assign=False, in_comp=False):
-    left, pos = parse_term(tokens, pos, in_call)
-
-    while pos < len(tokens):
-        t = tokens[pos]
-
-        if t["type"] != "op":
-            break
-
-        if t["value"] in {"+", "-"}:
-            op = t["value"]
-            pos += 1
-            right, new_pos = parse_term(tokens, pos, in_call)
-            if right is None:
-                raise KeiError("SyntaxError", f"运算符 '{op}' 后面缺少表达式")
-            left = {"type": "binop", "op": op, "left": left, "right": right}
-            pos = new_pos
-            continue
-
-        if t["value"] == "..":
-            pos += 1
-            right, new_pos = parse_addsub(tokens, pos, in_call, allow_assign, in_comp)
-            if right is None:
-                raise KeiError("SyntaxError", f"运算符 '..' 后面缺少表达式")
-            left = {'type': 'listscope', 'start': left, 'end': right}
-            pos = new_pos
-            continue
-
-        if t["value"] == "=" and allow_assign:
-            break
-
-        break
-
-    return left, pos
-
 def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-1) -> tuple:
-    """解析语句
-
-    Args:
-        tokens: 当前行的token列表
-        pos: 当前位置
-        all_lines: 所有行的token列表
-        linepos: 当前行号
-
-    Returns:
-        (node, new_pos, new_linepos)
-    """
+    """解析语句，返回 (node, new_pos, new_linepos)"""
     debug_print(f"parse_stmt: pos={pos}, linepos={linepos}, token={tokens[pos] if pos < len(tokens) else 'EOF'}")
 
     globals()['all_lines'] = all_lines
@@ -1633,8 +1016,8 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
 
                 # 收集所有装饰器
                 while current_line < len(all_lines) and current_pos < len(all_lines[current_line]):
-                    token = all_lines[current_line][current_pos]
-                    if token['type'] == 'op' and token['value'] == '@':
+                    toke = all_lines[current_line][current_pos]
+                    if toke['type'] == 'op' and toke['value'] == '@':
                         current_pos += 1
 
                         if current_pos >= len(all_lines[current_line]):
@@ -1644,7 +1027,7 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                                 raise KeiError("SyntaxError", "装饰器后面缺少表达式")
                             continue
 
-                        decorator, new_pos = parse_expr(all_lines[current_line], current_pos)
+                        decorator, new_pos, new_line = parse_expr(all_lines[current_line], current_pos, all_lines=all_lines, linepos=current_line)
                         decorators.append(decorator)
 
                         if new_pos < len(all_lines[current_line]):
@@ -1666,11 +1049,11 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                 if current_line >= len(all_lines):
                     raise KeiError("SyntaxError", "装饰器后面缺少函数定义")
 
-                stmt, new_pos, new_line = parse_stmt(all_lines[current_line], current_pos, all_lines, current_line)
+                stmt_node, new_pos, new_line = parse_stmt(all_lines[current_line], current_pos, all_lines, current_line)
 
-                if stmt and stmt['type'] == 'function':
-                    stmt['decorators'] = decorators
-                    return stmt, new_pos, new_line
+                if stmt_node and stmt_node['type'] == 'function':
+                    stmt_node['decorators'] = decorators
+                    return stmt_node, new_pos, new_line
                 else:
                     raise KeiError("SyntaxError", "装饰器只能用于函数")
 
@@ -1704,9 +1087,9 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                             break
                         continue
 
-                    stmt, new_pos, new_line = parse_stmt(current_tokens, current_pos, all_lines, current_line)
-                    if stmt:
-                        try_body.append(stmt)
+                    stmt_node, new_pos, new_line = parse_stmt(current_tokens, current_pos, all_lines, current_line)
+                    if stmt_node:
+                        try_body.append(stmt_node)
 
                     if new_line > current_line:
                         current_line = new_line
@@ -1759,9 +1142,9 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                                     break
                                 continue
 
-                            stmt, new_pos, new_line = parse_stmt(catch_tokens, catch_pos, all_lines, catch_line)
-                            if stmt:
-                                catchbody.append(stmt)
+                            stmt_node, new_pos, new_line = parse_stmt(catch_tokens, catch_pos, all_lines, catch_line)
+                            if stmt_node:
+                                catchbody.append(stmt_node)
 
                             if new_line > catch_line:
                                 catch_line = new_line
@@ -1806,9 +1189,9 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                                     break
                                 continue
 
-                            stmt, new_pos, new_line = parse_stmt(finally_tokens, finally_pos, all_lines, finally_line)
-                            if stmt:
-                                finallybody.append(stmt)
+                            stmt_node, new_pos, new_line = parse_stmt(finally_tokens, finally_pos, all_lines, finally_line)
+                            if stmt_node:
+                                finallybody.append(stmt_node)
 
                             if new_line > finally_line:
                                 finally_line = new_line
@@ -1818,13 +1201,14 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                                 if new_pos == finally_pos:
                                     finally_pos += 1
 
-                return {
+                node = {
                     'type': 'try',
                     'body': try_body,
                     'var': var,
                     'catchbody': catchbody,
                     'finallybody': finallybody
-                }, current_pos, current_line
+                }
+                return node, current_pos, current_line
 
             # 处理 class 语句
             if t['type'] == 'name' and t['value'] == 'class':
@@ -1833,6 +1217,8 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                 if pos >= len(tokens) or tokens[pos]['type'] != 'name':
                     raise KeiError("SyntaxError", "类需要名字")
                 class_name = tokens[pos]['value']
+                if class_name in keywords:
+                    raise KeiError("SyntaxError", f"无法使用关键字 '{class_name}' 作为类名")
                 pos += 1
 
                 parent_class = None
@@ -1851,7 +1237,7 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                     raise KeiError("SyntaxError", "class 后面缺少 {")
                 pos += 1
 
-                body = []  # 存储所有语句
+                body = []
                 brace_count = 1
                 current_line = linepos
                 current_pos = pos
@@ -1873,10 +1259,9 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                             break
                         continue
 
-                    # 直接递归解析语句
-                    stmt, new_pos, new_line = parse_stmt(current_tokens, current_pos, all_lines, current_line)
-                    if stmt:
-                        body.append(stmt)
+                    stmt_node, new_pos, new_line = parse_stmt(current_tokens, current_pos, all_lines, current_line)
+                    if stmt_node:
+                        body.append(stmt_node)
 
                     if new_line > current_line:
                         current_line = new_line
@@ -1886,12 +1271,13 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                         if new_pos == current_pos:
                             current_pos += 1
 
-                return {
+                node = {
                     'type': 'class',
                     'name': class_name,
                     'parent': parent_class,
-                    'body': body,  # 直接存所有语句，不提前分类
-                }, current_pos, current_line
+                    'body': body,
+                }
+                return node, current_pos, current_line
 
             # 处理 for 语句
             if t['type'] == 'name' and t['value'] == 'for':
@@ -1940,7 +1326,7 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                     raise KeiError("SyntaxError", "for 需要 'in'")
                 pos += 1
 
-                iterable, pos = parse_expr(tokens, pos)
+                iterable, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
 
                 if pos >= len(tokens) or tokens[pos]['type'] != 'symbol' or tokens[pos]['value'] != '{':
                     raise KeiError("SyntaxError", "for 后面需要 '{'")
@@ -1954,7 +1340,6 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                 while brace_count > 0:
                     if current_line >= len(all_lines):
                         break
-
                     if current_pos >= len(all_lines[current_line]):
                         current_line += 1
                         current_pos = 0
@@ -1969,9 +1354,9 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                             break
                         continue
 
-                    stmt, new_pos, new_line = parse_stmt(current_tokens, current_pos, all_lines, current_line)
-                    if stmt:
-                        body.append(stmt)
+                    stmt_node, new_pos, new_line = parse_stmt(current_tokens, current_pos, all_lines, current_line)
+                    if stmt_node:
+                        body.append(stmt_node)
 
                     if new_line > current_line:
                         current_line = new_line
@@ -1992,19 +1377,18 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
             # 处理 fn 语句（函数定义）
             if t['type'] == 'name' and t['value'] == 'fn':
                 hint = None
-
                 pos += 1
 
-                # 函数名
                 if pos >= len(tokens) or tokens[pos]['type'] != 'name':
                     raise KeiError("SyntaxError", "函数定义需要名字")
                 func_name = tokens[pos]['value']
+                if func_name in keywords:
+                    raise KeiError("SyntaxError", f"无法使用关键字 '{func_name}' 作为函数名")
                 pos += 1
 
                 __kei__.stack.append(func_name)
 
                 try:
-                    # 参数列表
                     if pos >= len(tokens) or tokens[pos]['type'] != 'symbol' or tokens[pos]['value'] != '(':
                         raise KeiError("SyntaxError", "期待 (")
                     pos += 1
@@ -2019,7 +1403,7 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
 
                             if pos < len(tokens) and tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '=':
                                 pos += 1
-                                default_val, pos = parse_expr(tokens, pos)
+                                default_val, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
                                 defaults[param_name] = default_val
 
                             params.append(param_name)
@@ -2027,13 +1411,10 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
 
                         elif tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '*':
                             pos += 1
-                            # 检查后面是否有名字
                             if pos < len(tokens) and tokens[pos]['type'] == 'name':
-                                # 有名字：*args
                                 params.append('*' + tokens[pos]['value'])
                                 pos += 1
                             else:
-                                # 没有名字：*
                                 params.append('*')
                             continue
 
@@ -2043,7 +1424,6 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                                 params.append('**' + tokens[pos]['value'])
                                 pos += 1
                             else:
-                                # 没有名字：**
                                 params.append('**')
                             continue
 
@@ -2055,36 +1435,26 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
 
                     pos += 1  # 跳过 )
 
-                    #检查类型断言
                     if pos < len(tokens) and tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '->':
                         pos += 1
-                        expr, pos = parse_expr(tokens, pos)
-
+                        expr, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
                         hint = expr
 
-                    # 检查箭头函数
                     if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '=>':
                         pos += 1
-
-                        # 解析箭头函数体（单个表达式）
-                        expr, pos = parse_expr(tokens, pos)
-                        body = [{
-                            'type': 'return',
-                            'value': expr
-                        }]
-
+                        expr, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
+                        body = [{'type': 'return', 'value': expr}]
                         __kei__.stack.pop()
-
-                        return {
+                        node = {
                             'type': 'function',
                             'name': func_name,
                             'params': params,
                             'defaults': defaults,
                             'body': body,
                             'hint': hint
-                        }, pos, linepos
+                        }
+                        return node, pos, linepos
 
-                    # 普通函数体
                     if pos >= len(tokens) or tokens[pos]['type'] != 'symbol' or tokens[pos]['value'] != '{':
                         raise KeiError("SyntaxError", "期待 {")
 
@@ -2094,7 +1464,6 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
 
                 try:
                     pos += 1
-
                     body = []
                     brace_count = 1
                     current_line = linepos
@@ -2103,7 +1472,6 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                     while brace_count > 0:
                         if current_line >= len(all_lines):
                             break
-
                         if current_pos >= len(all_lines[current_line]):
                             current_line += 1
                             current_pos = 0
@@ -2118,10 +1486,9 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                                 break
                             continue
 
-                        stmt, new_pos, new_line = parse_stmt(current_tokens, current_pos, all_lines, current_line)
-
-                        if stmt:
-                            body.append(stmt)
+                        stmt_node, new_pos, new_line = parse_stmt(current_tokens, current_pos, all_lines, current_line)
+                        if stmt_node:
+                            body.append(stmt_node)
 
                         if new_line > current_line:
                             current_line = new_line
@@ -2132,15 +1499,15 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                                 current_pos += 1
 
                     __kei__.stack.pop()
-
-                    return {
+                    node = {
                         'type': 'function',
                         'name': func_name,
                         'params': params,
                         'defaults': defaults,
                         'body': body,
                         'hint': hint
-                    }, current_pos, current_line
+                    }
+                    return node, current_pos, current_line
                 except:
                     raise
 
@@ -2196,13 +1563,13 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                     else:
                         break
 
-                return {'type': sentencename, 'modules': modules}, pos, linepos
+                node = {'type': sentencename, 'modules': modules}
+                return node, pos, linepos
 
             # 处理 from ... import ... 语句
             if t['type'] == 'name' and t['value'] == 'from':
                 pos += 1
 
-                # 解析模块名
                 if pos >= len(tokens) or tokens[pos]['type'] != 'name':
                     raise KeiError("SyntaxError", "from 后面需要模块名")
 
@@ -2220,15 +1587,12 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
 
                 module_name = '.'.join(module_parts)
 
-                # 检查 import
                 if pos >= len(tokens) or tokens[pos].get('type') != 'name' or tokens[pos].get('value') != 'import':
                     raise KeiError("SyntaxError", "from ... 后面需要 import")
                 pos += 1
 
-                # 解析要导入的内容
                 imports = []
 
-                # 检查是否是 import *
                 if pos < len(tokens) and tokens[pos].get('type') == 'op' and tokens[pos].get('value') == '*':
                     imports.append({
                         'type': 'wildcard',
@@ -2237,7 +1601,6 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                     })
                     pos += 1
                 else:
-                    # 解析导入列表
                     while pos < len(tokens):
                         if tokens[pos]['type'] == 'name':
                             name = tokens[pos]['value']
@@ -2256,7 +1619,6 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                                 'alias': alias
                             })
 
-                            # 检查逗号
                             if pos < len(tokens) and tokens[pos].get('type') == 'symbol' and tokens[pos].get('value') == ',':
                                 pos += 1
                                 continue
@@ -2265,7 +1627,8 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                         else:
                             break
 
-                return {'type': 'fromimport', 'module': module_name, 'imports': imports}, pos, linepos
+                node = {'type': 'fromimport', 'module': module_name, 'imports': imports}
+                return node, pos, linepos
 
             # 处理 break/continue
             if t['type'] == 'name' and t['value'] in {'break', 'continue'}:
@@ -2273,33 +1636,33 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                 pos += 1
                 if pos < len(tokens) and tokens[pos].get('type') == 'op' and tokens[pos].get('value') == ';':
                     pos += 1
-                return {'type': stmt_type}, pos, linepos
+                node = {'type': stmt_type}
+                return node, pos, linepos
 
             # 处理 return 语句
             if t['type'] == 'name' and t['value'] == 'return':
                 pos += 1
-
                 if pos >= len(tokens) or (tokens[pos]['type'] == 'op' and tokens[pos]['value'] == ';'):
-                    return {'type': 'return', 'value': None}, pos, linepos
+                    node = {'type': 'return', 'value': None}
+                    return node, pos, linepos
 
-                first, pos = parse_expr(tokens, pos)
-
+                first, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
                 values = [first]
                 while pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
                     pos += 1
-                    next_val, pos = parse_expr(tokens, pos)
+                    next_val, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
                     values.append(next_val)
 
                 if len(values) == 1:
-                    return {'type': 'return', 'value': values[0]}, pos, linepos
-
-                return {'type': 'return', 'value': {'type': 'list', 'elements': values}}, pos, linepos
+                    node = {'type': 'return', 'value': values[0]}
+                else:
+                    node = {'type': 'return', 'value': {'type': 'list', 'elements': values}}
+                return node, pos, linepos
 
             # 处理 with 语句
             if t['type'] == 'name' and t['value'] == 'with':
                 pos += 1
-
-                expr, pos = parse_expr(tokens, pos)
+                expr, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
 
                 as_var = None
                 if pos < len(tokens) and tokens[pos]['type'] == 'name' and tokens[pos]['value'] == 'as':
@@ -2335,9 +1698,9 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                             break
                         continue
 
-                    stmt, new_pos, new_line = parse_stmt(current_tokens, current_pos, all_lines, current_line)
-                    if stmt:
-                        body.append(stmt)
+                    stmt_node, new_pos, new_line = parse_stmt(current_tokens, current_pos, all_lines, current_line)
+                    if stmt_node:
+                        body.append(stmt_node)
 
                     if new_line > current_line:
                         current_line = new_line
@@ -2347,12 +1710,13 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                         if new_pos == current_pos:
                             current_pos += 1
 
-                return {
+                node = {
                     'type': 'with',
                     'expr': expr,
                     'as_var': as_var,
                     'body': body
-                }, current_pos, current_line
+                }
+                return node, current_pos, current_line
 
             # 处理 namespace 语句
             if t['type'] == 'name' and t['value'] == 'namespace':
@@ -2361,6 +1725,8 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                 if pos >= len(tokens) or tokens[pos]['type'] != 'name':
                     raise KeiError("SyntaxError", "命名空间需要名字")
                 ns_name = tokens[pos]['value']
+                if ns_name in keywords:
+                    raise KeiError("SyntaxError", f"无法使用关键字 '{ns_name}' 作为命名空间名")
                 pos += 1
 
                 if pos >= len(tokens) or tokens[pos]['type'] != 'symbol' or tokens[pos]['value'] != '{':
@@ -2389,9 +1755,9 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                             break
                         continue
 
-                    stmt, new_pos, new_line = parse_stmt(current_tokens, current_pos, all_lines, current_line)
-                    if stmt:
-                        body.append(stmt)
+                    stmt_node, new_pos, new_line = parse_stmt(current_tokens, current_pos, all_lines, current_line)
+                    if stmt_node:
+                        body.append(stmt_node)
 
                     if new_line > current_line:
                         current_line = new_line
@@ -2401,11 +1767,12 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                         if new_pos == current_pos:
                             current_pos += 1
 
-                return {
+                node = {
                     'type': 'namespace',
                     'name': ns_name,
                     'body': body
-                }, current_pos, current_line
+                }
+                return node, current_pos, current_line
 
             # 处理 global/del/raise/use
             if t['type'] == 'name' and t['value'] in {'global', 'del', 'raise', 'use'}:
@@ -2414,7 +1781,7 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                 targets = []
 
                 while pos < len(tokens):
-                    target, new_pos = parse_expr(tokens, pos, allow_assign=True)
+                    target, new_pos, linepos = parse_expr(tokens, pos, allow_assign=True, all_lines=all_lines, linepos=linepos)
                     if target:
                         targets.append(target)
                         pos = new_pos
@@ -2431,13 +1798,14 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                 if len(targets) > 2 and sentencename == "raise":
                     raise KeiError("SyntaxError", "raise 只能抛出一个错误字符串和可选类型")
 
-                return {'type': sentencename, 'names': targets}, pos, linepos
+                node = {'type': sentencename, 'names': targets}
+                return node, pos, linepos
 
             # 处理 if/while/unless/until
             if t['type'] == 'name' and t['value'] in {'if', 'while', 'unless', 'until'}:
                 sentencename = t['value']
                 pos += 1
-                cond, pos = parse_expr(tokens, pos)
+                cond, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
 
                 if pos >= len(tokens) or tokens[pos]['type'] != 'symbol' or tokens[pos]['value'] != '{':
                     raise KeiError("SyntaxError", f"{sentencename} 后面缺少 {{")
@@ -2451,7 +1819,6 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                 while brace_count > 0:
                     if current_line >= len(all_lines):
                         break
-
                     if current_pos >= len(all_lines[current_line]):
                         current_line += 1
                         current_pos = 0
@@ -2466,9 +1833,9 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                             break
                         continue
 
-                    stmt, new_pos, new_line = parse_stmt(current_tokens, current_pos, all_lines, current_line)
-                    if stmt:
-                        body.append(stmt)
+                    stmt_node, new_pos, new_line = parse_stmt(current_tokens, current_pos, all_lines, current_line)
+                    if stmt_node:
+                        body.append(stmt_node)
 
                     if new_line > current_line:
                         current_line = new_line
@@ -2498,7 +1865,7 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
 
                         if next_token['type'] == 'name' and next_token['value'] == 'elif':
                             current_pos += 1
-                            elif_cond, current_pos = parse_expr(all_lines[current_line], current_pos)
+                            elif_cond, current_pos, linepos = parse_expr(all_lines[current_line], current_pos, all_lines=all_lines, linepos=linepos)
 
                             if current_pos >= len(all_lines[current_line]) or all_lines[current_line][current_pos]['type'] != 'symbol' or all_lines[current_line][current_pos]['value'] != '{':
                                 raise KeiError("SyntaxError", "elif 后面缺少 {")
@@ -2528,9 +1895,9 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                                         break
                                     continue
 
-                                stmt, new_pos, new_line = parse_stmt(elif_tokens, elif_pos, all_lines, elif_line)
-                                if stmt:
-                                    elif_body.append(stmt)
+                                stmt_node, new_pos, new_line = parse_stmt(elif_tokens, elif_pos, all_lines, elif_line)
+                                if stmt_node:
+                                    elif_body.append(stmt_node)
 
                                 if new_line > elif_line:
                                     elif_line = new_line
@@ -2576,9 +1943,9 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                                         break
                                     continue
 
-                                stmt, new_pos, new_line = parse_stmt(else_tokens, else_pos, all_lines, else_line)
-                                if stmt:
-                                    else_body.append(stmt)
+                                stmt_node, new_pos, new_line = parse_stmt(else_tokens, else_pos, all_lines, else_line)
+                                if stmt_node:
+                                    else_body.append(stmt_node)
 
                                 if new_line > else_line:
                                     else_line = new_line
@@ -2600,32 +1967,28 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                         'else_body': else_body
                     }
                     return node, current_pos, current_line
-
                 else:
-                    return {
+                    node = {
                         'type': sentencename,
                         'cond': cond,
                         'body': body
-                    }, current_pos, current_line
+                    }
+                    return node, current_pos, current_line
 
+            # 处理 match 语句
             if t['type'] == 'name' and t['value'] == 'match':
                 pos += 1
+                value_expr, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
 
-                # 解析要匹配的值（表达式）
-                value_expr, pos = parse_expr(tokens, pos)
-
-                # 检查 {
                 if pos >= len(tokens) or tokens[pos]['type'] != 'symbol' or tokens[pos]['value'] != '{':
                     raise KeiError("SyntaxError", "match 后面需要 {")
                 pos += 1
 
-                # 解析所有 case 分支
                 arms = []
                 current_line = linepos
                 current_pos = pos
 
                 while True:
-                    # 跳过空行和分号
                     while current_line < len(all_lines) and current_pos < len(all_lines[current_line]):
                         if all_lines[current_line][current_pos]['type'] == 'op' and all_lines[current_line][current_pos]['value'] == ';':
                             current_pos += 1
@@ -2638,34 +2001,24 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                             break
                         continue
 
-                    # 检查是否是 case
                     if all_lines[current_line][current_pos]['type'] == 'name' and all_lines[current_line][current_pos]['value'] == 'case':
                         current_pos += 1
-
-                        # 解析 patterns（支持 | 分隔）
                         patterns = []
-
-                        # 解析第一个 pattern
-                        pattern, current_pos = parse_match_pattern(all_lines[current_line], current_pos)
+                        pattern, current_pos, linepos = parse_match_pattern(all_lines[current_line], current_pos, all_lines, linepos)
                         patterns.append(pattern)
-
-                        # 继续解析 | 后面的 patterns
                         while current_pos < len(all_lines[current_line]):
-                            # 检查是否是 |
                             if (all_lines[current_line][current_pos]['type'] == 'op' and
                                 all_lines[current_line][current_pos]['value'] == '|'):
                                 current_pos += 1
-                                pattern, current_pos = parse_match_pattern(all_lines[current_line], current_pos)
+                                pattern, current_pos, linepos = parse_match_pattern(all_lines[current_line], current_pos, all_lines, linepos)
                                 patterns.append(pattern)
                             else:
                                 break
 
-                        # 检查 {
                         if current_pos >= len(all_lines[current_line]) or all_lines[current_line][current_pos]['type'] != 'symbol' or all_lines[current_line][current_pos]['value'] != '{':
                             raise KeiError("SyntaxError", "case 后面需要 {")
                         current_pos += 1
 
-                        # 解析 case 的 body
                         body = []
                         brace_count = 1
                         case_line = current_line
@@ -2690,9 +2043,9 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                                     break
                                 continue
 
-                            stmt, new_pos, new_line = parse_stmt(case_tokens, case_pos, all_lines, case_line)
-                            if stmt:
-                                body.append(stmt)
+                            stmt_node, new_pos, new_line = parse_stmt(case_tokens, case_pos, all_lines, case_line)
+                            if stmt_node:
+                                body.append(stmt_node)
 
                             if new_line > case_line:
                                 case_line = new_line
@@ -2706,20 +2059,19 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                             'patterns': patterns,
                             'body': body
                         })
-
                     else:
-                        # 不是 case，可能是 }
                         if all_lines[current_line][current_pos]['type'] == 'symbol' and all_lines[current_line][current_pos]['value'] == '}':
                             current_pos += 1
                             break
                         else:
                             raise KeiError("SyntaxError", "match 块内只能有 case 语句")
 
-                return {
+                node = {
                     'type': 'match',
                     'value': value_expr,
                     'arms': arms
-                }, current_pos, current_line
+                }
+                return node, current_pos, current_line
 
             # 查找复合赋值
             compound_ops = {"+=", "-=", "*=", "/="}
@@ -2730,64 +2082,57 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
             compound_op = None
 
             for i in range(pos, len(tokens)):
-                token = tokens[i]
-                if token['type'] == 'symbol':
-                    if token['value'] == '(':
+                toke = tokens[i]
+                if toke['type'] == 'symbol':
+                    if toke['value'] == '(':
                         paren_count += 1
-                    elif token['value'] == ')':
+                    elif toke['value'] == ')':
                         paren_count -= 1
-                    elif token['value'] == '[':
+                    elif toke['value'] == '[':
                         bracket_count += 1
-                    elif token['value'] == ']':
+                    elif toke['value'] == ']':
                         bracket_count -= 1
-                    elif token['value'] == '{':
+                    elif toke['value'] == '{':
                         brace_count += 1
-                    elif token['value'] == '}':
+                    elif toke['value'] == '}':
                         brace_count -= 1
 
-                if (token.get('type') == 'op' and token.get('value') in compound_ops
+                if (toke.get('type') == 'op' and toke.get('value') in compound_ops
                     and paren_count == 0 and bracket_count == 0 and brace_count == 0):
                     assig_pos = i
-                    compound_op = token.get('value')
+                    compound_op = toke.get('value')
                     break
 
             if assig_pos != -1 and assig_pos > pos:
-                # ===== 解析左边（和 = 完全一致）=====
+                # 解析左边
                 left_tokens = tokens[pos:assig_pos]
 
-                # 检查左边是否有逗号（多变量赋值）
                 left_comma_positions = []
-                paren_count = 0
-                bracket_count = 0
-                brace_count = 0
-
-                for i, token in enumerate(left_tokens):
-                    if token['type'] == 'symbol':
-                        if token['value'] == '(':
+                paren_count = bracket_count = brace_count = 0
+                for i, tok in enumerate(left_tokens):
+                    if tok['type'] == 'symbol':
+                        if tok['value'] == '(':
                             paren_count += 1
-                        elif token['value'] == ')':
+                        elif tok['value'] == ')':
                             paren_count -= 1
-                        elif token['value'] == '[':
+                        elif tok['value'] == '[':
                             bracket_count += 1
-                        elif token['value'] == ']':
+                        elif tok['value'] == ']':
                             bracket_count -= 1
-                        elif token['value'] == '{':
+                        elif tok['value'] == '{':
                             brace_count += 1
-                        elif token['value'] == '}':
+                        elif tok['value'] == '}':
                             brace_count -= 1
-                    if token['type'] == 'symbol' and token['value'] == ',' and paren_count == 0 and bracket_count == 0 and brace_count == 0:
+                    if tok['type'] == 'symbol' and tok['value'] == ',' and paren_count == 0 and bracket_count == 0 and brace_count == 0:
                         left_comma_positions.append(i)
 
                 if left_comma_positions:
-                    # 多变量赋值左边
-                    vars = []
+                    vars_list = []
                     rest_var = None
                     kwargs_var = None
                     last_pos = 0
-
                     for comma_pos in left_comma_positions:
                         var_tokens = left_tokens[last_pos:comma_pos]
-
                         if len(var_tokens) == 2 and var_tokens[0]['type'] == 'op' and var_tokens[0]['value'] == '**':
                             if var_tokens[1]['type'] == 'name':
                                 kwargs_var = var_tokens[1]['value']
@@ -2799,12 +2144,10 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                             else:
                                 raise KeiError("SyntaxError", f"* 后面必须是变量名, 得到 {var_tokens[1]}")
                         elif len(var_tokens) == 1 and var_tokens[0]['type'] == 'name':
-                            vars.append(var_tokens[0]['value'])
+                            vars_list.append(var_tokens[0]['value'])
                         elif len(var_tokens) > 0:
                             raise KeiError("SyntaxError", f"多变量赋值左边必须是变量名、*rest 或 **kwargs, 得到 {var_tokens}")
-
                         last_pos = comma_pos + 1
-
                     var_tokens = left_tokens[last_pos:]
                     if len(var_tokens) == 2 and var_tokens[0]['type'] == 'op' and var_tokens[0]['value'] == '**':
                         if var_tokens[1]['type'] == 'name':
@@ -2817,84 +2160,69 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                         else:
                             raise KeiError("SyntaxError", f"* 后面必须是变量名, 得到 {var_tokens[1]}")
                     elif len(var_tokens) == 1 and var_tokens[0]['type'] == 'name':
-                        vars.append(var_tokens[0]['value'])
+                        vars_list.append(var_tokens[0]['value'])
                     elif len(var_tokens) > 0:
                         raise KeiError("SyntaxError", f"多变量赋值左边必须是变量名、*rest 或 **kwargs, 得到 {var_tokens}")
-
-                    left_node = {'type': 'multiassign', 'vars': vars, 'rest': rest_var, 'kwargs': kwargs_var}
+                    left_node = {'type': 'multiassign', 'vars': vars_list, 'rest': rest_var, 'kwargs': kwargs_var}
                 else:
-                    # 单变量或表达式
-                    left_node, left_new_pos = parse_expr(left_tokens, 0, allow_assign=True)
+                    left_node, left_new_pos, _ = parse_expr(left_tokens, 0, allow_assign=True, all_lines=all_lines, linepos=linepos)
                     if not left_node or left_new_pos != len(left_tokens):
                         raise KeiError("SyntaxError", f"无效的赋值左边: {left_tokens}")
 
-                # ===== 解析右边（和 = 完全一致）=====
+                # 解析右边
                 right_tokens = tokens[assig_pos + 1:]
-
                 right_comma_positions = []
-                paren_count = 0
-                bracket_count = 0
-                brace_count = 0
-
-                for i, token in enumerate(right_tokens):
-                    if token['type'] == 'symbol':
-                        if token['value'] == '(':
+                paren_count = bracket_count = brace_count = 0
+                for i, tok in enumerate(right_tokens):
+                    if tok['type'] == 'symbol':
+                        if tok['value'] == '(':
                             paren_count += 1
-                        elif token['value'] == ')':
+                        elif tok['value'] == ')':
                             paren_count -= 1
-                        elif token['value'] == '[':
+                        elif tok['value'] == '[':
                             bracket_count += 1
-                        elif token['value'] == ']':
+                        elif tok['value'] == ']':
                             bracket_count -= 1
-                        elif token['value'] == '{':
+                        elif tok['value'] == '{':
                             brace_count += 1
-                        elif token['value'] == '}':
+                        elif tok['value'] == '}':
                             brace_count -= 1
-
-                    if token['type'] == 'symbol' and token['value'] == ',' and paren_count == 0 and bracket_count == 0 and brace_count == 0:
+                    if tok['type'] == 'symbol' and tok['value'] == ',' and paren_count == 0 and bracket_count == 0 and brace_count == 0:
                         right_comma_positions.append(i)
 
                 if right_comma_positions:
-                    # 多值右边
                     elements = []
                     last_pos = 0
-
                     for comma_pos in right_comma_positions:
                         value_tokens = right_tokens[last_pos:comma_pos]
-
                         if value_tokens and value_tokens[0]['type'] == 'symbol' and value_tokens[0]['value'] == '[':
-                            val_node, _ = parse_list(value_tokens, 0)
+                            val_node, _, _ = parse_list(value_tokens, 0, all_lines, linepos)
                         elif value_tokens and value_tokens[0]['type'] == 'symbol' and value_tokens[0]['value'] == '{':
-                            val_node, _ = parse_dict(value_tokens, 0)
+                            val_node, _, _ = parse_dict(value_tokens, 0, all_lines, linepos)
                         else:
-                            val_node, _ = parse_expr(value_tokens, 0, allow_assign=False)
-
+                            val_node, _, _ = parse_expr(value_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
                         if val_node:
                             elements.append(val_node)
                         last_pos = comma_pos + 1
-
                     value_tokens = right_tokens[last_pos:]
                     if value_tokens:
                         if value_tokens and value_tokens[0]['type'] == 'symbol' and value_tokens[0]['value'] == '[':
-                            val_node, _ = parse_list(value_tokens, 0)
+                            val_node, _, _ = parse_list(value_tokens, 0, all_lines, linepos)
                         elif value_tokens and value_tokens[0]['type'] == 'symbol' and value_tokens[0]['value'] == '{':
-                            val_node, _ = parse_dict(value_tokens, 0)
+                            val_node, _, _ = parse_dict(value_tokens, 0, all_lines, linepos)
                         else:
-                            val_node, _ = parse_expr(value_tokens, 0, allow_assign=False)
+                            val_node, _, _ = parse_expr(value_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
                         if val_node:
                             elements.append(val_node)
-
                     right_node = {'type': 'list', 'elements': elements}
                     final_pos = assig_pos + 1 + len(right_tokens)
                 else:
-                    # 单值右边
                     if right_tokens and right_tokens[0]['type'] == 'symbol' and right_tokens[0]['value'] == '{':
-                        right_node, right_new_pos = parse_dict(right_tokens, 0)
+                        right_node, right_new_pos, _ = parse_dict(right_tokens, 0, all_lines, linepos)
                     elif right_tokens and right_tokens[0]['type'] == 'symbol' and right_tokens[0]['value'] == '[':
-                        right_node, right_new_pos = parse_list(right_tokens, 0)
+                        right_node, right_new_pos, _ = parse_list(right_tokens, 0, all_lines, linepos)
                     else:
-                        right_node, right_new_pos = parse_expr(right_tokens, 0, allow_assign=False)
-
+                        right_node, right_new_pos, _ = parse_expr(right_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
                     if not right_node:
                         raise KeiError("SyntaxError", "无效的赋值右边")
                     final_pos = assig_pos + 1 + right_new_pos
@@ -2907,29 +2235,26 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                 }
                 return node, final_pos, linepos
 
-            # 查找 = 位置
+            # 查找普通赋值 =
             assig_pos = -1
-            paren_count = 0
-            bracket_count = 0
-            brace_count = 0
-
+            paren_count = bracket_count = brace_count = 0
             for i in range(pos, len(tokens)):
-                token = tokens[i]
-                if token['type'] == 'symbol':
-                    if token['value'] == '(':
+                toke = tokens[i]
+                if toke['type'] == 'symbol':
+                    if toke['value'] == '(':
                         paren_count += 1
-                    elif token['value'] == ')':
+                    elif toke['value'] == ')':
                         paren_count -= 1
-                    elif token['value'] == '[':
+                    elif toke['value'] == '[':
                         bracket_count += 1
-                    elif token['value'] == ']':
+                    elif toke['value'] == ']':
                         bracket_count -= 1
-                    elif token['value'] == '{':
+                    elif toke['value'] == '{':
                         brace_count += 1
-                    elif token['value'] == '}':
+                    elif toke['value'] == '}':
                         brace_count -= 1
 
-                if (token.get('type') == 'op' and token.get('value') == "="
+                if (toke.get('type') == 'op' and toke.get('value') == "="
                     and paren_count == 0 and bracket_count == 0 and brace_count == 0):
                     assig_pos = i
                     break
@@ -2938,36 +2263,31 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                 left_tokens = tokens[pos:assig_pos]
 
                 left_comma_positions = []
-                paren_count = 0
-                bracket_count = 0
-                brace_count = 0
-
-                for i, token in enumerate(left_tokens):
-                    if token['type'] == 'symbol':
-                        if token['value'] == '(':
+                paren_count = bracket_count = brace_count = 0
+                for i, tok in enumerate(left_tokens):
+                    if tok['type'] == 'symbol':
+                        if tok['value'] == '(':
                             paren_count += 1
-                        elif token['value'] == ')':
+                        elif tok['value'] == ')':
                             paren_count -= 1
-                        elif token['value'] == '[':
+                        elif tok['value'] == '[':
                             bracket_count += 1
-                        elif token['value'] == ']':
+                        elif tok['value'] == ']':
                             bracket_count -= 1
-                        elif token['value'] == '{':
+                        elif tok['value'] == '{':
                             brace_count += 1
-                        elif token['value'] == '}':
+                        elif tok['value'] == '}':
                             brace_count -= 1
-                    if token['type'] == 'symbol' and token['value'] == ',' and paren_count == 0 and bracket_count == 0 and brace_count == 0:
+                    if tok['type'] == 'symbol' and tok['value'] == ',' and paren_count == 0 and bracket_count == 0 and brace_count == 0:
                         left_comma_positions.append(i)
 
                 if left_comma_positions:
-                    vars = []
+                    vars_list = []
                     rest_var = None
                     kwargs_var = None
                     last_pos = 0
-
                     for comma_pos in left_comma_positions:
                         var_tokens = left_tokens[last_pos:comma_pos]
-
                         if len(var_tokens) == 2 and var_tokens[0]['type'] == 'op' and var_tokens[0]['value'] == '**':
                             if var_tokens[1]['type'] == 'name':
                                 kwargs_var = var_tokens[1]['value']
@@ -2979,12 +2299,10 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                             else:
                                 raise KeiError("SyntaxError", f"* 后面必须是变量名, 得到 {var_tokens[1]}")
                         elif len(var_tokens) == 1 and var_tokens[0]['type'] == 'name':
-                            vars.append(var_tokens[0]['value'])
+                            vars_list.append(var_tokens[0]['value'])
                         elif len(var_tokens) > 0:
                             raise KeiError("SyntaxError", f"多变量赋值左边必须是变量名、*rest 或 **kwargs, 得到 {var_tokens}")
-
                         last_pos = comma_pos + 1
-
                     var_tokens = left_tokens[last_pos:]
                     if len(var_tokens) == 2 and var_tokens[0]['type'] == 'op' and var_tokens[0]['value'] == '**':
                         if var_tokens[1]['type'] == 'name':
@@ -2997,80 +2315,68 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                         else:
                             raise KeiError("SyntaxError", f"* 后面必须是变量名, 得到 {var_tokens[1]}")
                     elif len(var_tokens) == 1 and var_tokens[0]['type'] == 'name':
-                        vars.append(var_tokens[0]['value'])
+                        vars_list.append(var_tokens[0]['value'])
                     elif len(var_tokens) > 0:
                         raise KeiError("SyntaxError", f"多变量赋值左边必须是变量名、*rest 或 **kwargs, 得到 {var_tokens}")
-
-                    left_node = {'type': 'multiassign', 'vars': vars, 'rest': rest_var, 'kwargs': kwargs_var}
+                    left_node = {'type': 'multiassign', 'vars': vars_list, 'rest': rest_var, 'kwargs': kwargs_var}
                 else:
-                    left_node, left_new_pos = parse_expr(left_tokens, 0, allow_assign=True)
+                    left_node, left_new_pos, _ = parse_expr(left_tokens, 0, allow_assign=True, all_lines=all_lines, linepos=linepos)
                     if not left_node or left_new_pos != len(left_tokens):
                         raise KeiError("SyntaxError", f"无效的赋值左边: {left_tokens}")
 
                 right_tokens = tokens[assig_pos + 1:]
-
                 right_comma_positions = []
-                paren_count = 0
-                bracket_count = 0
-                brace_count = 0
-
-                for i, token in enumerate(right_tokens):
-                    if token['type'] == 'symbol':
-                        if token['value'] == '(':
+                paren_count = bracket_count = brace_count = 0
+                for i, tok in enumerate(right_tokens):
+                    if tok['type'] == 'symbol':
+                        if tok['value'] == '(':
                             paren_count += 1
-                        elif token['value'] == ')':
+                        elif tok['value'] == ')':
                             paren_count -= 1
-                        elif token['value'] == '[':
+                        elif tok['value'] == '[':
                             bracket_count += 1
-                        elif token['value'] == ']':
+                        elif tok['value'] == ']':
                             bracket_count -= 1
-                        elif token['value'] == '{':
+                        elif tok['value'] == '{':
                             brace_count += 1
-                        elif token['value'] == '}':
+                        elif tok['value'] == '}':
                             brace_count -= 1
-
-                    if token['type'] == 'symbol' and token['value'] == ',' and paren_count == 0 and bracket_count == 0 and brace_count == 0:
+                    if tok['type'] == 'symbol' and tok['value'] == ',' and paren_count == 0 and bracket_count == 0 and brace_count == 0:
                         right_comma_positions.append(i)
 
                 if right_comma_positions:
                     elements = []
                     last_pos = 0
-
                     for comma_pos in right_comma_positions:
                         value_tokens = right_tokens[last_pos:comma_pos]
-
                         if value_tokens and value_tokens[0]['type'] == 'symbol' and value_tokens[0]['value'] == '[':
-                            val_node, _ = parse_list(value_tokens, 0)
+                            val_node, _, _ = parse_list(value_tokens, 0, all_lines, linepos)
                         elif value_tokens and value_tokens[0]['type'] == 'symbol' and value_tokens[0]['value'] == '{':
-                            val_node, _ = parse_dict(value_tokens, 0)
+                            val_node, _, _ = parse_dict(value_tokens, 0, all_lines, linepos)
                         else:
-                            val_node, _ = parse_expr(value_tokens, 0, allow_assign=False)
-
+                            val_node, _, _ = parse_expr(value_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
                         if val_node:
                             elements.append(val_node)
                         last_pos = comma_pos + 1
-
                     value_tokens = right_tokens[last_pos:]
                     if value_tokens:
                         if value_tokens and value_tokens[0]['type'] == 'symbol' and value_tokens[0]['value'] == '[':
-                            val_node, _ = parse_list(value_tokens, 0)
+                            val_node, _, _ = parse_list(value_tokens, 0, all_lines, linepos)
                         elif value_tokens and value_tokens[0]['type'] == 'symbol' and value_tokens[0]['value'] == '{':
-                            val_node, _ = parse_dict(value_tokens, 0)
+                            val_node, _, _ = parse_dict(value_tokens, 0, all_lines, linepos)
                         else:
-                            val_node, _ = parse_expr(value_tokens, 0, allow_assign=False)
+                            val_node, _, _ = parse_expr(value_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
                         if val_node:
                             elements.append(val_node)
-
                     right_node = {'type': 'list', 'elements': elements}
                     final_pos = assig_pos + 1 + len(right_tokens)
                 else:
                     if right_tokens and right_tokens[0]['type'] == 'symbol' and right_tokens[0]['value'] == '{':
-                        right_node, right_new_pos = parse_dict(right_tokens, 0)
+                        right_node, right_new_pos, _ = parse_dict(right_tokens, 0, all_lines, linepos)
                     elif right_tokens and right_tokens[0]['type'] == 'symbol' and right_tokens[0]['value'] == '[':
-                        right_node, right_new_pos = parse_list(right_tokens, 0)
+                        right_node, right_new_pos, _ = parse_list(right_tokens, 0, all_lines, linepos)
                     else:
-                        right_node, right_new_pos = parse_expr(right_tokens, 0, allow_assign=False)
-
+                        right_node, right_new_pos, _ = parse_expr(right_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
                     if not right_node:
                         raise KeiError("SyntaxError", "无效的赋值右边")
                     final_pos = assig_pos + 1 + right_new_pos
@@ -3079,22 +2385,21 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
                 return node, final_pos, linepos
 
             # 不是赋值语句，作为表达式解析
-            node, new_pos = parse_expr(tokens, pos, allow_assign=False)
+            node, new_pos, linepos = parse_expr(tokens, pos, allow_assign=False, all_lines=all_lines, linepos=linepos)
             if node is None:
                 if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '}':
                     return None, pos, linepos
-
                 raise KeiError("SyntaxError", f"无效的语法: {tokens[pos]['value'] if pos < len(tokens) else 'EOF'}")
             return node, new_pos, linepos
 
         node, new_pos, new_line = stmt()
         if node is not None:
-            return node | {'source':code,'linenum':tokens[pos]['linenum']}, new_pos, new_line
+            return node | {'source': code, 'linenum': tokens[pos]['linenum']}, new_pos, new_line
         else:
             return None, new_pos, new_line
 
     except Exception as e:
-        # 错误类型映射
+        # 错误处理保持不变
         error_config = {
             ZeroDivisionError: ("ZeroDivisionError", "无法对 0 进行除法"),
             OverflowError: ("OverflowError", f"数值过大, 无法处理: {e}"),
@@ -3119,13 +2424,12 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
             KeiError: (e.types, e.value) if isinstance(e, KeiError) else ()
         }
 
-        # 获取错误类型
         for exc_type, (err_name, err_msg) in error_config.items():
             if isinstance(e, exc_type):
                 error(
-                    err_name if err_name is not err_msg else None,  # info
+                    err_name if err_name is not err_msg else None,
                     err_msg,
-                    __kei__.stack.copy(),  # stack - 直接用 __kei__.stack
+                    __kei__.stack.copy(),
                     globals()['source'],
                     globals()['linenum']+1,
                     __kei__.get('file', '未知文件')
@@ -3138,7 +2442,7 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
             error(
                 type(e).__name__,
                 str(e),
-                __kei__.stack.copy(),  # stack
+                __kei__.stack.copy(),
                 globals()['source'],
                 globals()['linenum']+1,
                 __kei__.get('file', '未知文件')
@@ -3148,216 +2452,592 @@ def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-
             else:
                 raise
 
-def parse_match_pattern(tokens: list, pos: int, all_lines=None, linepos=None) -> tuple:
-    """解析 match pattern，按 | 分割后再解析"""
+def parse_call(name, tokens, pos, is_attr=False, all_lines=None, linepos=0):
+    """解析函数调用，返回 (node, new_pos, new_linepos)"""
+    pos += 1  # 跳过 '('
+    arguments = []
 
+    if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ')':
+        pos += 1
+        node = {
+            'type': 'methodcall' if is_attr else 'call',
+            'obj' if is_attr else 'name': name,
+            'arguments': arguments,
+        }
+        return node, pos, linepos
+
+    while True:
+        # 处理 **kwargs
+        if (pos < len(tokens) and tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '**' and
+              pos + 1 < len(tokens)):
+            pos += 1
+            val, pos, linepos = parse_expr(tokens, pos, in_call=True, all_lines=all_lines, linepos=linepos)
+            arguments.append({'type': 'starkwargs', 'value': val})
+
+        # 处理 *args
+        elif (pos < len(tokens) and tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '*' and
+              pos + 1 < len(tokens)):
+            pos += 1
+            val, pos, linepos = parse_expr(tokens, pos, in_call=True, all_lines=all_lines, linepos=linepos)
+            arguments.append({'type': 'starargs', 'value': val})
+
+        # 关键字参数 name=value
+        elif (pos < len(tokens) and tokens[pos]['type'] == 'name' and
+              pos + 1 < len(tokens) and tokens[pos+1]['type'] == 'op' and
+              tokens[pos+1]['value'] == "="):
+            kwarg_name = tokens[pos]['value']
+            pos += 2
+            kwarg_value, pos, linepos = parse_expr(tokens, pos, in_call=True, all_lines=all_lines, linepos=linepos)
+            arguments.append({'type': 'keyword', 'name': kwarg_name, 'value': kwarg_value})
+
+        else:
+            arg, pos, linepos = parse_expr(tokens, pos, in_call=True, all_lines=all_lines, linepos=linepos)
+            arguments.append({'type': 'positional', 'value': arg})
+
+        # 检查逗号或结束
+        if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
+            pos += 1
+            continue
+        elif pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ')':
+            pos += 1
+            break
+        elif pos < len(tokens) and tokens[pos]['type'] == 'name':
+            raise KeiError("SyntaxError", f"非预期的名称: {tokens[pos]['value']}")
+        elif pos >= len(tokens):
+            raise KeiError("SyntaxError", "缺少右括号 ')'")
+        else:
+            break
+
+    node = {
+        'type': 'methodcall' if is_attr else 'call',
+        'obj' if is_attr else 'name': name,
+        'arguments': arguments,
+    }
+    return node, pos, linepos
+
+def parse_call_attr(obj_node, tokens, pos, in_call=False, all_lines=None, linepos=0):
+    """解析方法调用，直接调用 parse_call"""
+    return parse_call(obj_node, tokens, pos, is_attr=True, all_lines=all_lines, linepos=linepos)
+
+def parse_atom(tokens: list, pos: int, in_call=False, all_lines=None, linepos=0) -> tuple:
+    debug_print(f"parse_atom: pos={pos}, token={tokens[pos] if pos < len(tokens) else 'EOF'}")
     if pos >= len(tokens):
-        raise KeiError("SyntaxError", "case 后面缺少 pattern")
-
+        return None, pos, linepos
     t = tokens[pos]
 
-    # 通配符 _
-    if t['type'] == 'name' and t['value'] == '_':
-        return {'type': 'wildcard'}, pos + 1
+    if t["type"] == "symbol" and t["value"] == "}":
+        return None, pos, linepos
 
-    # 1. 按 | 分割 tokens
+    # lambda 函数
+    if t['type'] == 'name' and t['value'] == 'fn':
+        pos += 1
+        params = []
+        while pos < len(tokens):
+            if tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '=>':
+                pos += 1
+                break
+            elif tokens[pos]['type'] == 'name':
+                params.append(tokens[pos]['value'])
+                pos += 1
+                if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
+                    pos += 1
+            else:
+                break
+        expr, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
+        node = {'type': 'lambda', 'params': params, 'body': expr}
+        return node, pos, linepos
+
+    # 关键字直接返回 None，让上层 parse_stmt 处理
+    if t["type"] == "name" and t["value"] in keywords:
+        return None, pos, linepos
+
+    # 字面量
+    if t["type"] in {"int", "float", "str", "bool", "null", "list", "dict"}:
+        node = t
+        pos += 1
+        # 处理后缀操作
+        while pos < len(tokens):
+            current = tokens[pos]
+            if current['type'] == 'symbol' and current['value'] == '.':
+                pos += 1
+                if pos >= len(tokens) or tokens[pos]['type'] != 'name':
+                    raise KeiError("SyntaxError", "属性访问语法错误")
+                node = {'type': 'attr', 'obj': node, 'attr': tokens[pos]['value']}
+                pos += 1
+                if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '(':
+                    node, pos, linepos = parse_call_attr(node, tokens, pos, in_call, all_lines, linepos)
+            elif current['type'] == 'symbol' and current['value'] == '[':
+                node, pos, linepos = parse_index_with_obj(node, tokens, pos, all_lines, linepos)
+            elif current['type'] == 'symbol' and current['value'] == '(':
+                node, pos, linepos = parse_call_attr(node, tokens, pos, in_call, all_lines, linepos)
+            else:
+                break
+        return node, pos, linepos
+
+    # 名字（标识符）
+    if t["type"] == "name":
+        name = t["value"]
+        pos += 1
+        # 检查是否是 key=value 形式（在字典或参数列表中）
+        if pos < len(tokens) and tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '=':
+            if {'type': 'name', 'value': 'type'} not in tokens:
+                pos -= 1
+                return None, pos, linepos
+
+        node = {'type': 'name', 'value': name}
+        # 处理属性链和方法调用
+        while pos < len(tokens):
+            if tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '.':
+                if pos + 1 < len(tokens) and tokens[pos+1]['type'] == 'symbol' and tokens[pos+1]['value'] == '.':
+                    break
+                pos += 1
+                if pos >= len(tokens) or tokens[pos]['type'] != 'name':
+                    raise KeiError("SyntaxError", "属性访问语法错误：'.' 后面缺少属性名")
+                attr_name = tokens[pos]['value']
+                pos += 1
+                node = {'type': 'attr', 'obj': node, 'attr': attr_name}
+                if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '(':
+                    node, pos, linepos = parse_call_attr(node, tokens, pos, in_call, all_lines, linepos)
+            elif tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '(':
+                node, pos, linepos = parse_call(name, tokens, pos, all_lines=all_lines, linepos=linepos)
+            elif tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '[':
+                node, pos, linepos = parse_index_with_obj(node, tokens, pos, all_lines, linepos)
+            else:
+                break
+        return node, pos, linepos
+
+    # 括号表达式
+    if t["type"] == "symbol" and t["value"] == "(":
+        pos += 1
+        expr, pos, linepos = parse_expr(tokens, pos, in_call, all_lines=all_lines, linepos=linepos)
+        if pos >= len(tokens) or tokens[pos]["type"] != "symbol" or tokens[pos]["value"] != ")":
+            raise KeiError("SyntaxError", "缺少右括号")
+        pos += 1
+        node = expr
+        while pos < len(tokens):
+            if tokens[pos]["type"] == "symbol" and tokens[pos]["value"] == ".":
+                pos += 1
+                if pos >= len(tokens) or tokens[pos]["type"] != "name":
+                    raise KeiError("SyntaxError", "属性访问语法错误")
+                attr = tokens[pos]["value"]
+                pos += 1
+                if pos < len(tokens) and tokens[pos]["type"] == "symbol" and tokens[pos]["value"] == "(":
+                    node = {'type': 'attr', 'obj': node, 'attr': attr}
+                    node, pos, linepos = parse_call_attr(node, tokens, pos, in_call, all_lines, linepos)
+                else:
+                    node = {"type": "attr", "obj": node, "attr": attr}
+            elif tokens[pos]["type"] == "symbol" and tokens[pos]["value"] == "(":
+                node, pos, linepos = parse_call_attr(node, tokens, pos, in_call, all_lines, linepos)
+            elif tokens[pos]["type"] == "symbol" and tokens[pos]["value"] == "[":
+                node, pos, linepos = parse_index_with_obj(node, tokens, pos, all_lines, linepos)
+            else:
+                break
+        return node, pos, linepos
+
+    # 列表
+    if t["type"] == "symbol" and t["value"] == "[":
+        node, pos, linepos = parse_list(tokens, pos, all_lines, linepos)
+        # 处理后缀属性/调用
+        while pos < len(tokens):
+            if tokens[pos]["type"] == "symbol" and tokens[pos]["value"] == ".":
+                pos += 1
+                if pos >= len(tokens) or tokens[pos]["type"] != "name":
+                    raise KeiError("SyntaxError", "属性访问语法错误")
+                attr = tokens[pos]["value"]
+                pos += 1
+                node = {'type': 'attr', 'obj': node, 'attr': attr}
+                if pos < len(tokens) and tokens[pos]["type"] == "symbol" and tokens[pos]["value"] == "(":
+                    node, pos, linepos = parse_call_attr(node, tokens, pos, all_lines=all_lines, linepos=linepos)
+            else:
+                break
+        return node, pos, linepos
+
+    # 字典
+    if t["type"] == "symbol" and t["value"] == "{":
+        if pos + 1 < len(tokens) and tokens[pos+1]["type"] == "name" and tokens[pos+1]["value"] in keywords:
+            return None, pos, linepos
+        node, pos, linepos = parse_dict(tokens, pos, all_lines, linepos)
+        return node, pos, linepos
+
+    return None, pos, linepos
+
+def parse_index_with_obj(obj_node, tokens, pos, all_lines=None, linepos=0):
+    """解析索引访问，返回 (node, new_pos, new_linepos)"""
+    pos += 1  # 跳过 '['
+    bracket_count = 1
+    end_pos = pos
+    while end_pos < len(tokens):
+        current = tokens[end_pos]
+        if current == '[' or (isinstance(current, dict) and current.get('value') == '['):
+            bracket_count += 1
+        elif current == ']' or (isinstance(current, dict) and current.get('value') == ']'):
+            bracket_count -= 1
+            if bracket_count == 0:
+                break
+        end_pos += 1
+    if end_pos >= len(tokens) or bracket_count != 0:
+        raise KeiError("SyntaxError", "缺少 ]")
+    inner_tokens = tokens[pos:end_pos]
+
+    # 按顶层 ':' 分割（忽略嵌套括号内的冒号）
+    parts = []
+    current = []
+    colon_count = 0
+    paren_count = 0
+    bracket_count = 0
+    brace_count = 0
+
+    for toke in inner_tokens:
+        # 检查是否是顶层的冒号
+        is_colon = (token == ':' or (isinstance(token, dict) and token.get('value') == ':'))
+        if is_colon and paren_count == 0 and bracket_count == 0 and brace_count == 0:
+            parts.append(current)
+            current = []
+            colon_count += 1
+        else:
+            # 更新括号计数
+            if isinstance(toke, dict) and toke['type'] == 'symbol':
+                if toke['value'] == '(':
+                    paren_count += 1
+                elif toke['value'] == ')':
+                    paren_count -= 1
+                elif toke['value'] == '[':
+                    bracket_count += 1
+                elif toke['value'] == ']':
+                    bracket_count -= 1
+                elif toke['value'] == '{':
+                    brace_count += 1
+                elif toke['value'] == '}':
+                    brace_count -= 1
+            current.append(toke)
+    parts.append(current)
+
+    start = None
+    end = None
+    step = None
+    if len(parts) >= 1 and parts[0]:
+        start, _, _ = parse_expr(parts[0], 0, all_lines=all_lines, linepos=linepos)
+    if len(parts) >= 2 and parts[1]:
+        end, _, _ = parse_expr(parts[1], 0, all_lines=all_lines, linepos=linepos)
+    if len(parts) >= 3 and parts[2]:
+        step, _, _ = parse_expr(parts[2], 0, all_lines=all_lines, linepos=linepos)
+
+    is_slice = colon_count > 0
+    if is_slice:
+        node = {'type': 'slice', 'obj': obj_node, 'start': start, 'end': end, 'step': step}
+    else:
+        node = {'type': 'index', 'obj': obj_node, 'index': start}
+    new_pos = end_pos + 1
+    return node, new_pos, linepos
+def parse_assign(tokens: list, pos: int, all_lines=None, linepos=0) -> tuple:
+    # 检查 ** 赋值
+    if (pos + 1 < len(tokens) and
+        tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '*' and
+        tokens[pos + 1]['type'] == 'op' and tokens[pos + 1]['value'] == '*'):
+        if pos + 2 >= len(tokens) or tokens[pos + 2]['type'] != 'name':
+            raise KeiError("SyntaxError", "** 后面必须是变量名")
+        left = {'type': 'starstarassign', 'name': tokens[pos + 2]['value']}
+        pos += 3
+    elif tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '*':
+        if pos + 1 >= len(tokens) or tokens[pos + 1]['type'] != 'name':
+            raise KeiError("SyntaxError", "* 后面必须是变量名")
+        left = {'type': 'starassign', 'name': tokens[pos + 1]['value']}
+        pos += 2
+    else:
+        left = tokens[pos]
+        pos += 1
+
+    if pos >= len(tokens) or tokens[pos].get('type') != 'op' or tokens[pos].get('value') != '=':
+        raise KeiError("SyntaxError", "需要 =")
+    pos += 1
+
+    right, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
+    node = {'type': 'assign', 'left': left, 'right': right}
+    return node, pos, linepos
+
+def parse_term(tokens, pos, in_call=False, all_lines=None, linepos=0):
+    left, pos, linepos = parse_pow(tokens, pos, in_call, all_lines, linepos)
+    while pos < len(tokens):
+        t = tokens[pos]
+        if t["type"] != "op":
+            break
+        if t["value"] in {"*", "/", "//", "%", "|"}:
+            op = t["value"]
+            pos += 1
+            right, new_pos, linepos = parse_pow(tokens, pos, all_lines=all_lines, linepos=linepos)
+            if right is None:
+                raise KeiError("SyntaxError", f"运算符 '{op}' 后面缺少表达式")
+            left = {"type": "binop", "op": op, "left": left, "right": right}
+            pos = new_pos
+        else:
+            break
+    return left, pos, linepos
+
+def parse_pow(tokens, pos, in_call=False, all_lines=None, linepos=0):
+    left, pos, linepos = parse_unary(tokens, pos, in_call, all_lines, linepos)
+    while pos < len(tokens):
+        t = tokens[pos]
+        if t["type"] != "op":
+            break
+        if t["value"] == "**":
+            op = t["value"]
+            pos += 1
+            right, new_pos, linepos = parse_unary(tokens, pos, all_lines=all_lines, linepos=linepos)
+            if right is None:
+                raise KeiError("SyntaxError", f"运算符 '{op}' 后面缺少表达式")
+            left = {"type": "binop", "op": op, "left": left, "right": right}
+            pos = new_pos
+        else:
+            break
+    return left, pos, linepos
+
+def parse_expr(tokens: list, pos: int, in_call=False, allow_assign=False, in_comp=False, all_lines=None, linepos=0) -> tuple:
+    left, pos, linepos = parse_logic(tokens, pos, in_call, allow_assign, in_comp, all_lines, linepos)
+
+    # 三目 if/unless
+    while pos < len(tokens):
+        t = tokens[pos]
+        if t['value'] == 'if' and not in_comp:
+            true_val = left
+            pos += 1
+            cond, pos, linepos = parse_expr(tokens, pos, in_call, allow_assign, in_comp, all_lines, linepos)
+            if pos >= len(tokens) or tokens[pos].get('value') != 'else':
+                raise KeiError("SyntaxError", "三目运算符需要 else 分支")
+            pos += 1
+            false_val, pos, linepos = parse_expr(tokens, pos, in_call, allow_assign, in_comp, all_lines, linepos)
+            node = {'type': 'ternary', 'cond': cond, 'true_val': true_val, 'false_val': false_val}
+            return node, pos, linepos
+        if t['value'] == 'unless' and not in_comp:
+            true_val = left
+            pos += 1
+            cond, pos, linepos = parse_expr(tokens, pos, in_call, allow_assign, in_comp, all_lines, linepos)
+            if pos >= len(tokens) or tokens[pos].get('value') != 'else':
+                raise KeiError("SyntaxError", "三目运算符需要 else 分支")
+            pos += 1
+            false_val, pos, linepos = parse_expr(tokens, pos, in_call, allow_assign, in_comp, all_lines, linepos)
+            node = {'type': 'unternary', 'cond': cond, 'true_val': true_val, 'false_val': false_val}
+            return node, pos, linepos
+        break
+
+    # ? 和 ! 后缀
+    if pos < len(tokens) and tokens[pos].get('type') == 'op' and tokens[pos].get('value') == '?':
+        pos += 1
+        node = {'type': 'trysingle', 'expr': left}
+        return node, pos, linepos
+    if pos < len(tokens) and tokens[pos].get('type') == 'op' and tokens[pos].get('value') == '!':
+        pos += 1
+        node = {'type': 'notnullassert', 'expr': left}
+        return node, pos, linepos
+
+    return left, pos, linepos
+
+def parse_logic(tokens, pos, in_call=False, allow_assign=False, in_comp=False, all_lines=None, linepos=0):
+    left, pos, linepos = parse_compare(tokens, pos, in_call, allow_assign, in_comp, all_lines, linepos)
+    while pos < len(tokens):
+        t = tokens[pos]
+        if t["type"] != "op":
+            break
+        if t["value"] in {"and", "or"}:
+            op = t["value"]
+            pos += 1
+            right, new_pos, linepos = parse_compare(tokens, pos, in_call, allow_assign, in_comp, all_lines, linepos)
+            if right is None:
+                raise KeiError("SyntaxError", f"运算符 '{op}' 后面缺少表达式")
+            left = {"type": "binop", "op": op, "left": left, "right": right}
+            pos = new_pos
+        else:
+            break
+    return left, pos, linepos
+
+def parse_compare(tokens, pos, in_call=False, allow_assign=False, in_comp=False, all_lines=None, linepos=0):
+    left, pos, linepos = parse_addsub(tokens, pos, in_call, allow_assign, in_comp, all_lines, linepos)
+    while pos < len(tokens):
+        t = tokens[pos]
+        if t["type"] != "op":
+            break
+        if t["value"] in {"==", "!=", "<", ">", "<=", ">=", "in", "is"}:
+            op = t["value"]
+            pos += 1
+            right, new_pos, linepos = parse_addsub(tokens, pos, in_call, allow_assign, in_comp, all_lines, linepos)
+            if right is None:
+                raise KeiError("SyntaxError", f"运算符 '{op}' 后面缺少表达式")
+            left = {"type": "binop", "op": op, "left": left, "right": right}
+            pos = new_pos
+        else:
+            break
+    return left, pos, linepos
+
+def parse_addsub(tokens, pos, in_call=False, allow_assign=False, in_comp=False, all_lines=None, linepos=0):
+    left, pos, linepos = parse_term(tokens, pos, in_call, all_lines, linepos)
+    while pos < len(tokens):
+        t = tokens[pos]
+        if t["type"] != "op":
+            break
+        if t["value"] in {"+", "-"}:
+            op = t["value"]
+            pos += 1
+            right, new_pos, linepos = parse_term(tokens, pos, in_call, all_lines, linepos)
+            if right is None:
+                raise KeiError("SyntaxError", f"运算符 '{op}' 后面缺少表达式")
+            left = {"type": "binop", "op": op, "left": left, "right": right}
+            pos = new_pos
+        elif t["value"] == "..":
+            pos += 1
+            right, new_pos, linepos = parse_addsub(tokens, pos, in_call, allow_assign, in_comp, all_lines, linepos)
+            if right is None:
+                raise KeiError("SyntaxError", f"运算符 '..' 后面缺少表达式")
+            left = {'type': 'listscope', 'start': left, 'end': right}
+            pos = new_pos
+        elif t["value"] == "=" and allow_assign:
+            break
+        else:
+            break
+    return left, pos, linepos
+
+def parse_match_pattern(tokens: list, pos: int, all_lines=None, linepos=0) -> tuple:
+    if pos >= len(tokens):
+        raise KeiError("SyntaxError", "case 后面缺少 pattern")
+    t = tokens[pos]
+    if t['type'] == 'name' and t['value'] == '_':
+        return {'type': 'wildcard'}, pos + 1, linepos
+
+    # 按 | 分割 pattern 块
     pattern_blocks = []
     current_block = []
     i = pos
-
     while i < len(tokens):
-        token = tokens[i]
-
-        # 遇到 | 就分割
-        if token['type'] == 'op' and token['value'] == '|':
+        toke = tokens[i]
+        if toke['type'] == 'op' and toke['value'] == '|':
             if current_block:
                 pattern_blocks.append(current_block)
                 current_block = []
             i += 1
             continue
-
-        # 遇到 { 就停止（case body 开始）
-        if token['type'] == 'symbol' and token['value'] == '{':
+        if toke['type'] == 'symbol' and toke['value'] == '{':
             break
-
-        current_block.append(token)
+        current_block.append(toke)
         i += 1
-
-    # 保存最后一个块
     if current_block:
         pattern_blocks.append(current_block)
-
     if not pattern_blocks:
         raise KeiError("SyntaxError", "case 后面缺少 pattern")
 
-    # 2. 分别解析每个 pattern 块
     patterns = []
     for block in pattern_blocks:
         if not block:
             raise KeiError("SyntaxError", "| 之间不能为空")
-
-        # 解析表达式（不会遇到 |）
-        expr, _ = parse_expr(block, 0, allow_assign=False)
+        expr, _, _ = parse_expr(block, 0, all_lines=all_lines, linepos=linepos)
         if expr is None:
             raise KeiError("SyntaxError", f"无效的 pattern: {block}")
         patterns.append(expr)
 
-    # 3. 返回结果
     if len(patterns) == 1:
-        return {'type': 'expr', 'value': patterns[0]}, i
+        node = {'type': 'expr', 'value': patterns[0]}
     else:
-        return {'type': 'or_pattern', 'patterns': patterns}, i
+        node = {'type': 'or_pattern', 'patterns': patterns}
+    return node, i, linepos
 
-def parse_index(tokens: list, pos: int) -> tuple:
-    """解析索引访问, 递归解析整个链条"""
-
-    # 1. 先解析出左边的对象（可能是名字、属性访问、另一个索引等）
-    obj_node, pos = parse_expr(tokens, pos)  # ← 关键！先递归解析左边！
-
-    # 2. 然后解析索引
+def parse_index(tokens: list, pos: int, all_lines=None, linepos=0) -> tuple:
+    obj_node, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
     if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '[':
-        pos += 1  # 跳过 '['
-
-        # 解析索引表达式
-        index, pos = parse_expr(tokens, pos)
-
-        # 检查 ']'
+        pos += 1
+        index, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
         if pos >= len(tokens) or tokens[pos]['type'] != 'symbol' or tokens[pos]['value'] != ']':
             raise KeiError("SyntaxError", "缺少 ]")
         pos += 1
-
-        # 创建索引节点
-        node = {
-            'type': 'index',
-            'obj': obj_node,  # 左边是解析出来的节点
-            'index': index
-        }
-
-        # 3. 递归处理后续的索引（比如 [1][2]）
+        node = {'type': 'index', 'obj': obj_node, 'index': index}
         while pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '[':
             pos += 1
-            index, pos = parse_expr(tokens, pos)
+            index, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
             if pos >= len(tokens) or tokens[pos]['type'] != 'symbol' or tokens[pos]['value'] != ']':
                 raise KeiError("SyntaxError", "缺少 ]")
             pos += 1
-            node = {
-                'type': 'index',
-                'obj': node,  # 上一层的索引节点
-                'index': index
-            }
+            node = {'type': 'index', 'obj': node, 'index': index}
+        return node, pos, linepos
+    return obj_node, pos, linepos
 
-        return node, pos
-
-    # 如果没有索引, 返回左边解析的结果
-    return obj_node, pos
-
-def parse_dictcomp(tokens, pos):
-    """解析字典生成式 {key: value for var in iterable}"""
+def parse_dictcomp(tokens, pos, all_lines=None, linepos=0):
     ifunless = None
     pos += 1  # 跳过 '{'
-
-    # 先找到 'for' 的位置
+    # 找到 'for' 的位置
     for_pos = -1
     paren_count = 0
     bracket_count = 0
     brace_count = 1
-
     for i in range(pos, len(tokens)):
-        token = tokens[i]
-
-        if token.get('value') == 'for' and paren_count == 0 and bracket_count == 0 and brace_count == 1:
+        toke = tokens[i]
+        if toke.get('value') == 'for' and paren_count == 0 and bracket_count == 0 and brace_count == 1:
             for_pos = i
             break
-
-        if token['type'] == 'symbol':
-            if token['value'] == '(':
+        if toke['type'] == 'symbol':
+            if toke['value'] == '(':
                 paren_count += 1
-            elif token['value'] == ')':
+            elif toke['value'] == ')':
                 paren_count -= 1
-            elif token['value'] == '[':
+            elif toke['value'] == '[':
                 bracket_count += 1
-            elif token['value'] == ']':
+            elif toke['value'] == ']':
                 bracket_count -= 1
-            elif token['value'] == '{':
+            elif toke['value'] == '{':
                 brace_count += 1
-            elif token['value'] == '}':
+            elif toke['value'] == '}':
                 brace_count -= 1
-
     if for_pos == -1:
         raise KeiError("SyntaxError", "字典生成式需要 'for'")
 
-    # 提取键值对 tokens（for 之前的部分）
     pairs_tokens = tokens[pos:for_pos]
-
     if not pairs_tokens:
         raise KeiError("SyntaxError", "字典生成式需要键值对")
 
-    # 按逗号分割键值对
+    # 分割键值对
     pairs = []
     current_pair = []
-    paren_count = 0
-    bracket_count = 0
-    brace_count = 0
-
-    for token in pairs_tokens:
-        if (token['type'] == 'symbol' and token['value'] == ',' and
+    paren_count = bracket_count = brace_count = 0
+    for toke in pairs_tokens:
+        if (toke['type'] == 'symbol' and toke['value'] == ',' and
             paren_count == 0 and bracket_count == 0 and brace_count == 0):
             if current_pair:
                 pairs.append(current_pair)
                 current_pair = []
             continue
-
-        if token['type'] == 'symbol':
-            if token['value'] == '(':
+        if toke['type'] == 'symbol':
+            if toke['value'] == '(':
                 paren_count += 1
-            elif token['value'] == ')':
+            elif toke['value'] == ')':
                 paren_count -= 1
-            elif token['value'] == '[':
+            elif toke['value'] == '[':
                 bracket_count += 1
-            elif token['value'] == ']':
+            elif toke['value'] == ']':
                 bracket_count -= 1
-            elif token['value'] == '{':
+            elif toke['value'] == '{':
                 brace_count += 1
-            elif token['value'] == '}':
+            elif toke['value'] == '}':
                 brace_count -= 1
-
-        current_pair.append(token)
-
+        current_pair.append(toke)
     if current_pair:
         pairs.append(current_pair)
 
-    # 解析每个键值对
     kv_pairs = []
     for pair_tokens in pairs:
         colon_pos = -1
-        for i, token in enumerate(pair_tokens):
-            if token['type'] == 'symbol' and token['value'] == ':':
+        for i, t in enumerate(pair_tokens):
+            if t['type'] == 'symbol' and t['value'] == ':':
                 colon_pos = i
                 break
-
         if colon_pos == -1:
             raise KeiError("SyntaxError", "字典生成式需要 ':'")
-
         key_tokens = pair_tokens[:colon_pos]
-        value_tokens = pair_tokens[colon_pos + 1:]
-
-        if not key_tokens or not value_tokens:
-            raise KeiError("SyntaxError", "键和值不能为空")
-
-        key, _ = parse_expr(key_tokens, 0, in_comp=True)
-        value, _ = parse_expr(value_tokens, 0, in_comp=True)
+        value_tokens = pair_tokens[colon_pos+1:]
+        key, _, _ = parse_expr(key_tokens, 0, in_comp=True, all_lines=all_lines, linepos=linepos)
+        value, _, _ = parse_expr(value_tokens, 0, in_comp=True, all_lines=all_lines, linepos=linepos)
         kv_pairs.append({'key': key, 'value': value})
 
     pos = for_pos
-
-    # 检查 'for'
     if pos >= len(tokens) or tokens[pos].get('value') != 'for':
         raise KeiError("SyntaxError", "字典生成式需要 'for'")
     pos += 1
 
-    # 解析变量（支持 i, j, k 或 (i, j, k)）
     vars = []
-
     if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '(':
         pos += 1
         while pos < len(tokens):
@@ -3386,82 +3066,79 @@ def parse_dictcomp(tokens, pos):
                     break
             else:
                 break
-
     if not vars:
         raise KeiError("SyntaxError", "字典生成式需要变量名")
-
-    # 检查 'in'
     if pos >= len(tokens) or tokens[pos].get('value') != 'in':
-        raise KeiError("SyntaxError", f"字典生成式需要 'in'")
+        raise KeiError("SyntaxError", "字典生成式需要 'in'")
     pos += 1
-
-    # 解析可迭代对象
-    iterable, pos = parse_expr(tokens, pos, in_comp=True)
-
-    # 可选的条件
+    iterable, pos, linepos = parse_expr(tokens, pos, in_comp=True, all_lines=all_lines, linepos=linepos)
     cond = None
     if pos < len(tokens) and tokens[pos].get('value') == 'if':
         ifunless = tokens[pos]['value']
         pos += 1
-        cond, pos = parse_expr(tokens, pos, in_comp=True)
-
-    # 检查 '}'
+        cond, pos, linepos = parse_expr(tokens, pos, in_comp=True, all_lines=all_lines, linepos=linepos)
     if pos < len(tokens) and tokens[pos].get('value') == '}':
         pos += 1
     else:
-        # 跳过可能的分号等
         while pos < len(tokens) and tokens[pos].get('value') != '}':
             pos += 1
         if pos < len(tokens):
             pos += 1
+    rettype = 'dictcomp' if ifunless != "unless" else 'undictcomp'
+    node = {'type': rettype, 'pairs': kv_pairs, 'vars': vars, 'iterable': iterable, 'cond': cond}
+    return node, pos, linepos
 
-    rettype = 'dictcomp'
-    if ifunless == "unless":
-        rettype = 'undictcomp'
-
-    return {
-        'type': rettype,
-        'pairs': kv_pairs,
-        'vars': vars,
-        'iterable': iterable,
-        'cond': cond
-    }, pos
-
-def parse_dict(tokens: list, pos: int) -> tuple:
-    """解析字典 {"key": value} 或 {key: value for x in iterable}"""
+def parse_dict(tokens: list, pos: int, all_lines=None, linepos=0) -> tuple:
     start_pos = pos
     pos += 1  # 跳过 '{'
 
-    # 先看看是不是字典生成式
-    bracket_count = 1
-    for i in range(pos, len(tokens)):
-        if tokens[i].get('value') == '{':
-            bracket_count += 1
-        elif tokens[i].get('value') == '}':
-            bracket_count -= 1
-            if bracket_count == 0:
-                break
-        elif tokens[i].get('value') == 'for' and bracket_count == 1:
-            return parse_dictcomp(tokens, start_pos)
-
-    # 普通字典
-    pairs = []
-
-    # 空字典
+    # 如果是空字典
     if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '}':
         pos += 1
-        return {'type': 'dict', 'pairs': pairs}, pos
+        return {'type': 'dict', 'pairs': []}, pos, linepos
 
-    # 解析键值对
+    # 向前查看，判断是否是字典生成式
+    temp_pos = pos
+    bracket_count = 1
+    paren_count = 0
+    square_count = 0
+
+    while temp_pos < len(tokens):
+        tok = tokens[temp_pos]
+        if tok['type'] == 'symbol':
+            if tok['value'] == '{':
+                bracket_count += 1
+            elif tok['value'] == '}':
+                bracket_count -= 1
+                if bracket_count == 0:
+                    break
+            elif tok['value'] == '(':
+                paren_count += 1
+            elif tok['value'] == ')':
+                paren_count -= 1
+            elif tok['value'] == '[':
+                square_count += 1
+            elif tok['value'] == ']':
+                square_count -= 1
+
+        # 如果在顶层遇到 for，且不在其他括号内，就是字典生成式
+        if (tok.get('value') == 'for' and
+            bracket_count == 1 and
+            paren_count == 0 and
+            square_count == 0):
+            return parse_dictcomp(tokens, start_pos, all_lines, linepos)
+
+        temp_pos += 1
+
+    # 不是生成式，正常解析字典
+    pairs = []
+
     while pos < len(tokens):
-        # 如果遇到 }, 结束解析
         if tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '}':
             pos += 1
             break
 
-        # 键可以是字符串数字或名字
-        if tokens[pos]['type'] == 'str':
-            key = tokens[pos]['value']
+        # 解析键
         if tokens[pos]['type'] == 'str':
             key = tokens[pos]['value']
         elif tokens[pos]['type'] == 'int':
@@ -3469,296 +3146,206 @@ def parse_dict(tokens: list, pos: int) -> tuple:
         elif tokens[pos]['type'] == 'float':
             key = float(tokens[pos]['value'])
         else:
-            raise KeiError("SyntaxError", f"字典键必须是字符串或数字或名字, 得到 {tokens[pos]['value']}")
+            raise KeiError("SyntaxError", f"字典键必须是字符串或数字, 得到 {tokens[pos]['value']}")
         pos += 1
 
-        # 检查冒号
-        if pos >= len(tokens):
+        if pos >= len(tokens) or tokens[pos]['type'] != 'symbol' or tokens[pos]['value'] != ':':
             raise KeiError("SyntaxError", "字典键值对缺少 :")
-        if tokens[pos]['type'] != 'symbol' or tokens[pos]['value'] != ':':
-            raise KeiError("SyntaxError", f"字典键值对缺少 :, 得到 {tokens[pos]['value']}")
-
         pos += 1
 
-        # 解析值
-        value, new_pos = parse_expr(tokens, pos)
-
+        value, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
         if value is None:
             raise KeiError("SyntaxError", "字典值不能为空")
-
         pairs.append({'key': key, 'value': value})
-        pos = new_pos
 
-        # 检查逗号或结束
-        if pos < len(tokens):
-            if tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
-                pos += 1
-                continue
-            elif tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '}':
-                pos += 1
-                break
-            else:
-                continue
-        else:
-            break
-
-    return {'type': 'dict', 'pairs': pairs}, pos
-
-def parse_unary(tokens: list, pos: int, in_call=False) -> tuple:
-    """新的 parse_unary：处理后缀 ->（优先级最高）"""
-
-    # 1. 先解析前缀一元（not, -, ++, --）和原子
-    left, pos = parse_unary_prefix(tokens, pos, in_call)
-
-    debug_print(f"parse_unary: pos={pos}, token={tokens[pos] if pos < len(tokens) else 'EOF'}")
-
-    # 2. 处理后缀操作符（优先级从高到低）
-    while pos < len(tokens):
-        t = tokens[pos]
-
-        if t.get('type') == 'symbol' and t.get('value') == '(':
-            left, pos = parse_call_attr(left, tokens, pos, in_call)
+        if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
+            pos += 1
             continue
 
-        # 处理 ->（类型断言，优先级最高）
-        if t.get('type') == 'op' and t.get('value') == '->':
-            pos += 1
-            type_node, pos = parse_atom(tokens, pos, in_call)
-            left = {
-                'type': 'typeassert',
-                'expr': left,
-                'hint': type_node
-            }
+    return {'type': 'dict', 'pairs': pairs}, pos, linepos
 
-        # 处理 ??（空值合并后缀，优先级次高）
+def parse_unary(tokens: list, pos: int, in_call=False, all_lines=None, linepos=0) -> tuple:
+    left, pos, linepos = parse_unary_prefix(tokens, pos, in_call, all_lines, linepos)
+    while pos < len(tokens):
+        t = tokens[pos]
+        if t.get('type') == 'symbol' and t.get('value') == '(':
+            left, pos, linepos = parse_call_attr(left, tokens, pos, in_call, all_lines, linepos)
+        elif t.get('type') == 'op' and t.get('value') == '->':
+            pos += 1
+            type_node, pos, linepos = parse_atom(tokens, pos, in_call, all_lines, linepos)
+            left = {'type': 'typeassert', 'expr': left, 'hint': type_node}
         elif t.get('type') == 'op' and t.get('value') == '??':
             pos += 1
-
-            right, pos = parse_atom(tokens, pos, in_call)
-            left = {
-                'type': 'coalesce',
-                'left': left,
-                'right': right
-            }
-
+            right, pos, linepos = parse_atom(tokens, pos, in_call, all_lines, linepos)
+            left = {'type': 'coalesce', 'left': left, 'right': right}
         else:
             break
+    return left, pos, linepos
 
-    return left, pos
-
-def parse_unary_prefix(tokens, pos, in_call=False):
-    """处理前缀和后缀一元运算符"""
-
-    debug_print(f"parse_unary_prefix: pos={pos}, token={tokens[pos] if pos < len(tokens) else 'EOF'}")
-
+def parse_unary_prefix(tokens, pos, in_call=False, all_lines=None, linepos=0):
     if pos >= len(tokens):
-        return None, pos
-
+        return None, pos, linepos
     t = tokens[pos]
-
-    # ========== 处理前缀运算符 ==========
-    # 前缀 not
     if t["type"] == "op" and t["value"] == "not":
         pos += 1
-        expr, pos = parse_unary_prefix(tokens, pos, in_call)
-        return {"type": "unary", "op": "not", "expr": expr}, pos
-
-    # 前缀负号
+        expr, pos, linepos = parse_unary_prefix(tokens, pos, in_call, all_lines, linepos)
+        return {"type": "unary", "op": "not", "expr": expr}, pos, linepos
     if t["type"] == "op" and t["value"] == "-":
         pos += 1
-        expr, pos = parse_unary_prefix(tokens, pos, in_call)
+        expr, pos, linepos = parse_unary_prefix(tokens, pos, in_call, all_lines, linepos)
         if expr and expr.get('type') in ('int', 'float'):
             if expr['type'] == 'int':
                 expr['value'] = str(-int(expr['value']))
             else:
                 expr['value'] = str(-float(expr['value']))
-            return expr, pos
-        return {"type": "unary", "op": "-", "expr": expr}, pos
-
-    # 前缀 +
+            return expr, pos, linepos
+        return {"type": "unary", "op": "-", "expr": expr}, pos, linepos
     if t["type"] == "op" and t["value"] == "+":
         pos += 1
-        expr, pos = parse_unary_prefix(tokens, pos, in_call)
-        return expr, pos  # + 直接忽略
+        expr, pos, linepos = parse_unary_prefix(tokens, pos, in_call, all_lines, linepos)
+        return expr, pos, linepos
 
-    # ========== 解析原子 ==========
-    expr, pos = parse_atom(tokens, pos, in_call)
-
-    # ========== 处理后缀运算符 ==========
+    expr, pos, linepos = parse_atom(tokens, pos, in_call, all_lines, linepos)
+    # 处理后缀运算符
     while pos < len(tokens):
         t = tokens[pos]
-
-        # 后缀 ++/--
         if t.get('type') == 'op' and t.get('value') in {"++", "--"}:
             op = t['value']
             pos += 1
             expr = {"type": "postfix", "op": op, "expr": expr}
-            continue
-
-        # 处理 !（非空断言后缀）
-        if t.get('type') == 'op' and t.get('value') == '!':
+        elif t.get('type') == 'op' and t.get('value') == '!':
             pos += 1
             expr = {"type": "notnullassert", "expr": expr}
-
-        # 🔥 新增：处理 . 属性访问
-        if t.get('type') == 'symbol' and t.get('value') == '.':
+        elif t.get('type') == 'symbol' and t.get('value') == '.':
             pos += 1
             if pos >= len(tokens) or tokens[pos]['type'] != 'name':
                 raise KeiError("SyntaxError", "属性访问语法错误")
             attr = tokens[pos]['value']
             pos += 1
-
-            # 如果是方法调用
             if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '(':
                 expr = {'type': 'attr', 'obj': expr, 'attr': attr}
-                expr, pos = parse_call_attr(expr, tokens, pos, in_call)
+                expr, pos, linepos = parse_call_attr(expr, tokens, pos, in_call, all_lines, linepos)
             else:
                 expr = {'type': 'attr', 'obj': expr, 'attr': attr}
-            continue
+        elif t.get('type') == 'symbol' and t.get('value') == '(':
+            expr, pos, linepos = parse_call_attr(expr, tokens, pos, in_call, all_lines, linepos)
+        elif t.get('type') == 'symbol' and t.get('value') == '[':
+            expr, pos, linepos = parse_index_with_obj(expr, tokens, pos, all_lines, linepos)
+        else:
+            break
+    return expr, pos, linepos
 
-        # 🔥 新增：处理 ( 函数调用
-        if t.get('type') == 'symbol' and t.get('value') == '(':
-            expr, pos = parse_call_attr(expr, tokens, pos, in_call)
-            continue
-
-        # 🔥 新增：处理 [ 索引访问
-        if t.get('type') == 'symbol' and t.get('value') == '[':
-            expr, new_pos = parse_index_with_obj(expr, tokens, pos)
-            pos = new_pos
-            continue
-
-        break
-
-    return expr, pos
-
-def parse_methodcall(parts: list, tokens: list, pos: int) -> tuple:
-    """解析方法调用（处理链式调用）"""
-    # 获取方法名
+def parse_methodcall(parts: list, tokens: list, pos: int, all_lines=None, linepos=0) -> tuple:
     method_name = parts[-1] if isinstance(parts[-1], str) else parts[-1].get('method')
-
-    pos += 1  # 跳过 '('
-
+    pos += 1
     args = []
-
-    # 如果没有参数
     if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ')':
         pos += 1
-        return {
-            'type': 'methodcall',
-            'obj_parts': parts[:-1],
-            'method': method_name,
-            'args': args
-        }, pos
-
-    # 解析第一个参数
-    arg, pos = parse_expr(tokens, pos)
+        node = {'type': 'methodcall', 'obj_parts': parts[:-1], 'method': method_name, 'args': args}
+        return node, pos, linepos
+    arg, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
     if arg:
         args.append(arg)
-
-    # 继续解析后续参数
     while pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
         pos += 1
-        arg, pos = parse_expr(tokens, pos)
+        arg, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
         if arg:
             args.append(arg)
-
-    # 跳过 ')'
     if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ')':
         pos += 1
+    node = {'type': 'methodcall', 'obj_parts': parts[:-1], 'method': method_name, 'args': args}
+    return node, pos, linepos
 
-    return {
-        'type': 'methodcall',
-        'obj_parts': parts[:-1],
-        'method': method_name,
-        'args': args
-    }, pos
-
-def parse_listcomp(tokens, pos):
-    """解析列表生成式 [expr for var in iterable] 支持 [i, j for i, j in d]"""
+def parse_listcomp(tokens, pos, all_lines=None, linepos=0):
+    """解析列表生成式 [expr for var in iterable if cond]"""
     ifunless = None
     start_pos = pos
     pos += 1  # 跳过 '['
 
-    # 解析表达式 tokens，直到遇到 'for'
+    # 收集表达式部分（直到遇到 'for'）
     expr_tokens = []
     paren_count = 0
     bracket_count = 0
+    brace_count = 0
     temp_pos = pos
 
     while temp_pos < len(tokens):
-        token = tokens[temp_pos]
+        toke = tokens[temp_pos]
 
-        if token.get('value') == 'for' and paren_count == 0 and bracket_count == 0:
+        # 更新括号计数
+        if toke['type'] == 'symbol':
+            if toke['value'] == '(':
+                paren_count += 1
+            elif toke['value'] == ')':
+                paren_count -= 1
+            elif toke['value'] == '[':
+                bracket_count += 1
+            elif toke['value'] == ']':
+                bracket_count -= 1
+            elif toke['value'] == '{':
+                brace_count += 1
+            elif toke['value'] == '}':
+                brace_count -= 1
+
+        # 找到顶层的 'for' 时停止
+        if (toke.get('value') == 'for' and
+            paren_count == 0 and
+            bracket_count == 0 and
+            brace_count == 0):
             break
 
-        if token['type'] == 'symbol':
-            if token['value'] == '(':
-                paren_count += 1
-            elif token['value'] == ')':
-                paren_count -= 1
-            elif token['value'] == '[':
-                bracket_count += 1
-            elif token['value'] == ']':
-                bracket_count -= 1
-
-        expr_tokens.append(token)
+        expr_tokens.append(toke)
         temp_pos += 1
 
     if not expr_tokens:
         raise KeiError("SyntaxError", "列表生成式需要表达式")
 
-    # 检查是否有逗号（不在括号内）
+    # 解析表达式（可能包含多个用逗号分隔的表达式）
     has_comma = False
     comma_positions = []
-    paren_count = 0
-    bracket_count = 0
-    for i, token in enumerate(expr_tokens):
-        if token['type'] == 'symbol':
-            if token['value'] == '(':
+    paren_count = bracket_count = brace_count = 0
+
+    for i, tok in enumerate(expr_tokens):
+        if tok['type'] == 'symbol':
+            if tok['value'] == '(':
                 paren_count += 1
-            elif token['value'] == ')':
+            elif tok['value'] == ')':
                 paren_count -= 1
-            elif token['value'] == '[':
+            elif tok['value'] == '[':
                 bracket_count += 1
-            elif token['value'] == ']':
+            elif tok['value'] == ']':
                 bracket_count -= 1
-            elif token['value'] == ',' and paren_count == 0 and bracket_count == 0:
+            elif tok['value'] == '{':
+                brace_count += 1
+            elif tok['value'] == '}':
+                brace_count -= 1
+            elif tok['value'] == ',' and paren_count == 0 and bracket_count == 0 and brace_count == 0:
                 has_comma = True
                 comma_positions.append(i)
 
-    # 如果有逗号，分割成多个表达式
     if has_comma:
         exprs = []
         start = 0
-        for comma_pos in comma_positions:
-            sub_tokens = expr_tokens[start:comma_pos]
-            if sub_tokens:
-                expr, _ = parse_expr(sub_tokens, 0, in_comp=True)
-                exprs.append(expr)
-            start = comma_pos + 1
-        # 最后一个
+        for cp in comma_positions:
+            sub = expr_tokens[start:cp]
+            if sub:
+                e, _, _ = parse_expr(sub, 0, in_comp=True, all_lines=all_lines, linepos=linepos)
+                exprs.append(e)
+            start = cp + 1
         if start < len(expr_tokens):
-            sub_tokens = expr_tokens[start:]
-            if sub_tokens:
-                expr, _ = parse_expr(sub_tokens, 0, in_comp=True)
-                exprs.append(expr)
-
-        # 用列表存储多个表达式
+            e, _, _ = parse_expr(expr_tokens[start:], 0, in_comp=True, all_lines=all_lines, linepos=linepos)
+            exprs.append(e)
         expr_node = exprs
     else:
-        expr_node, _ = parse_expr(expr_tokens, 0, in_comp=True)
+        expr_node, _, _ = parse_expr(expr_tokens, 0, in_comp=True, all_lines=all_lines, linepos=linepos)
 
     pos = temp_pos
-
-    # 检查 'for'
     if pos >= len(tokens) or tokens[pos].get('value') != 'for':
         raise KeiError("SyntaxError", "列表生成式需要 'for'")
     pos += 1
 
-    # 解析变量（支持 i, j, k 或 (i, j, k)）
+    # 解析变量名（支持解包）
     vars = []
-
-    # 检查是否是 '(' 解包
     if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '(':
         pos += 1
         while pos < len(tokens):
@@ -3776,7 +3363,6 @@ def parse_listcomp(tokens, pos):
             else:
                 raise KeiError("SyntaxError", f"解包需要变量名，得到 {tokens[pos]}")
     else:
-        # 普通变量（支持 i, j, k 不带括号）
         while pos < len(tokens):
             if tokens[pos]['type'] == 'name':
                 vars.append(tokens[pos]['value'])
@@ -3792,97 +3378,102 @@ def parse_listcomp(tokens, pos):
     if not vars:
         raise KeiError("SyntaxError", "列表生成式需要变量名")
 
-    # 检查 'in'
     if pos >= len(tokens) or tokens[pos].get('value') != 'in':
-        raise KeiError("SyntaxError", f"列表生成式需要 'in'，得到 {tokens[pos] if pos < len(tokens) else 'EOF'}")
+        raise KeiError("SyntaxError", "列表生成式需要 'in'")
     pos += 1
 
     # 解析可迭代对象
-    iterable, pos = parse_expr(tokens, pos, in_comp=True)
+    iterable, pos, linepos = parse_expr(tokens, pos, in_comp=True, all_lines=all_lines, linepos=linepos)
 
-    # 可选的条件
+    # 解析可选的条件
     cond = None
     if pos < len(tokens) and tokens[pos].get('value') == 'if':
         ifunless = tokens[pos]['value']
         pos += 1
-        cond, pos = parse_expr(tokens, pos, in_comp=True)
+        cond, pos, linepos = parse_expr(tokens, pos, in_comp=True, all_lines=all_lines, linepos=linepos)
 
-    # 检查 ']'
-    if pos >= len(tokens) or tokens[pos].get('value') != ']':
+    # 跳过可能的空格或分号直到 ']'
+    while pos < len(tokens):
+        if tokens[pos].get('value') == ']':
+            pos += 1
+            break
+        pos += 1
+    else:
         raise KeiError("SyntaxError", "列表生成式缺少 ']'")
-    pos += 1
 
-    rettype = 'listcomp'
-    if ifunless == "unless":
-        rettype = 'unlistcomp'
+    rettype = 'listcomp' if ifunless != "unless" else 'unlistcomp'
+    node = {'type': rettype, 'expr': expr_node, 'vars': vars, 'iterable': iterable, 'cond': cond}
+    return node, pos, linepos
 
-    return {
-        'type': rettype,
-        'expr': expr_node,
-        'vars': vars,
-        'iterable': iterable,
-        'cond': cond
-    }, pos
-
-def parse_list(tokens: list, pos: int) -> tuple:
-    """解析列表 [1, 2, 3] 或生成器 [expr for var in iterable]"""
-
+def parse_list(tokens: list, pos: int, all_lines=None, linepos=0) -> tuple:
     start_pos = pos
     pos += 1  # 跳过 '['
 
-    # 先看看是不是生成器
-    bracket_count = 1
-    for i in range(pos, len(tokens)):
-        if tokens[i].get('value') == '[':
-            bracket_count += 1
-        elif tokens[i].get('value') == ']':
-            bracket_count -= 1
-            if bracket_count == 0:
-                break
-        elif tokens[i].get('value') == 'for' and bracket_count == 1:
-            # 是生成器，重新解析
-            return parse_listcomp(tokens, start_pos)
-
-    # 不是生成器，按普通列表解析
-    elements = []
-
-    # 如果直接遇到 ], 返回空列表
+    # 如果是空列表
     if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ']':
         pos += 1
-        return {'type': 'list', 'elements': elements}, pos
+        return {'type': 'list', 'elements': []}, pos, linepos
 
-    # 循环解析所有元素
+    # 向前查看，判断是否是列表生成式
+    temp_pos = pos
+    bracket_count = 1
+    paren_count = 0
+    brace_count = 0
+
+    while temp_pos < len(tokens):
+        tok = tokens[temp_pos]
+        if tok['type'] == 'symbol':
+            if tok['value'] == '[':
+                bracket_count += 1
+            elif tok['value'] == ']':
+                bracket_count -= 1
+                if bracket_count == 0:
+                    break
+            elif tok['value'] == '(':
+                paren_count += 1
+            elif tok['value'] == ')':
+                paren_count -= 1
+            elif tok['value'] == '{':
+                brace_count += 1
+            elif tok['value'] == '}':
+                brace_count -= 1
+
+        # 如果在顶层遇到 for，且不在其他括号内，就是列表生成式
+        if (tok.get('value') == 'for' and
+            bracket_count == 1 and
+            paren_count == 0 and
+            brace_count == 0):
+            return parse_listcomp(tokens, start_pos, all_lines, linepos)
+
+        temp_pos += 1
+
+    # 不是生成式，正常解析列表
+    elements = []
+
     while True:
-        # 保存当前位置
-        current_pos = pos
-
-        # 解析当前元素
-        elem, new_pos = parse_expr(tokens, pos)
-
+        elem, new_pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
         if elem:
             elements.append(elem)
             pos = new_pos
         else:
-            pos = current_pos + 1  # 跳过当前 token
+            # 如果解析失败，可能是遇到 ] 或 , 等
+            if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ']':
+                pos += 1
+                break
+            pos += 1
 
-        # 检查下一个 token
         if pos >= len(tokens):
             break
 
-        # 如果是逗号, 跳过并继续
         if tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
             pos += 1
             continue
 
-        # 如果是 ], 结束
         if tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ']':
             pos += 1
             break
 
-        # 其他情况, 退出循环
-        break
-
-    return {'type': 'list', 'elements': elements}, pos
+    return {'type': 'list', 'elements': elements}, pos, linepos
 
 def escape(s):
     """手动处理常见的转义序列, 其他原样保留"""
@@ -6465,7 +6056,7 @@ def main():
             if sys.argv[1] == "-c" or sys.argv[1] == "--code":
                 singlecode = sys.argv[2:]
 
-            if sys.argv[1] == "--complie":
+            if sys.argv[1] == "--compile":
                 compile = True
                 sys.argv = [sys.argv[0]] + sys.argv[2:]
 
