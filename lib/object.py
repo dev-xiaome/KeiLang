@@ -2128,7 +2128,13 @@ class KeiDict(KeiBase):
             "length": self._length,
             "update": self._update,
             "map": self._map,
+            "items": self._items,
         }
+
+    def _items(self):
+        return KeiList([KeiList([KeiString(k), v]) for k, v in self.items.items()])
+    def items(self):
+        return self._items()
 
     def __len__(self):
         method = self._get_method('__len__')
