@@ -2432,6 +2432,24 @@ class KeiFunction(KeiBase):
         if remaining_kwargs and not starstar_param_name:
             raise KeiError("SyntaxError", f"函数 {self.__name__} 收到未预料的关键字参数: {list(remaining_kwargs.keys())}")
 
+        type_hints = self.func_obj.get('typehints', {})
+
+        for param_name, type_node in type_hints.items():
+            if param_name in new_env:
+                val = new_env[param_name]
+                # 计算期望的类型
+                expected_type, _ = runtoken(type_node, self.__env__)
+
+                # 检查类型
+                if not isinstance(val, expected_type):
+                    # 获取类型名称
+                    expected_name = expected_type.__name__ if hasattr(expected_type, '__name__') else str(expected_type)
+                    actual_name = type(val).__name__
+
+                    # 抛出错误，指向调用点
+                    raise KeiError("TypeError",
+                        f"参数 '{param_name}' 期望 {content(expected_type)}, 得到 {content(type(val))}")
+
         try:
             result = null
             for stmt in self.func_obj['body']:
@@ -2440,27 +2458,26 @@ class KeiFunction(KeiBase):
                     result = val
                     break
 
-            if bool(get_from_env('__typeassert__', new_env)) and typeassert is not None:
-                from kei import runtoken
-                hint = runtoken(typeassert, new_env)[0]
+            from kei import runtoken
+            hint = runtoken(typeassert, new_env)[0]
 
-                if isinstance(hint, KeiList):
-                    for h in hint.items:
-                        if type(result) is KeiInt and h is KeiFloat:
-                            break
-                        if not isinstance(h, type):
-                            h = type(h)
-                        if (isinstance(result, h) or (isinstance(result, type) and issubclass(result, h))):
-                            break
-                    else:
-                        raise KeiError("TypeError", f"类型错误: 期望 {content(hint)}, 得到 {content(type(result))}")
+            if isinstance(hint, KeiList):
+                for h in hint.items:
+                    if type(result) is KeiInt and h is KeiFloat:
+                        break
+                    if not isinstance(h, type):
+                        h = type(h)
+                    if (isinstance(result, h) or (isinstance(result, type) and issubclass(result, h))):
+                        break
                 else:
-                    if type(result) is KeiInt and hint is KeiFloat:
-                        return result
-                    if not isinstance(hint, type):
-                        hint = type(hint)
-                    if not (isinstance(result, hint) or (isinstance(result, type) and issubclass(result, hint))):
-                        raise KeiError("TypeError", f"类型错误: 期望 {content(hint)}, 得到 {content(type(result))}")
+                    raise KeiError("TypeError", f"类型错误: 期望 {content(hint)}, 得到 {content(type(result))}")
+            else:
+                if type(result) is KeiInt and hint is KeiFloat:
+                    return result
+                if not isinstance(hint, type):
+                    hint = type(hint)
+                if not (isinstance(result, hint) or (isinstance(result, type) and issubclass(result, hint))):
+                    raise KeiError("TypeError", f"类型错误: 期望 {content(hint)}, 得到 {content(type(result))}")
 
             return result
         except:

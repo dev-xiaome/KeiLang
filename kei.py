@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.7-3"
+__version__ = "1.7-4"
 
 class KeiState:
     stack: List[Any]
@@ -963,72 +963,76 @@ def parse_block(tokens: list, pos: int, all_lines: list, linepos: int,
 def parse_stmt(tokens: list, pos: int, all_lines: list | None = None, linepos: int = -1) -> tuple:
     """解析语句"""
     try:
-        if all_lines is None:
-            all_lines = [tokens]
-            linepos = 0
+        def stmt(tokens: list, pos: int, all_lines: list | None = None, linepos: int = -1) -> tuple:
+            if all_lines is None:
+                all_lines = [tokens]
+                linepos = 0
 
-        if pos >= len(tokens):
-            return None, pos, linepos
-
-        t = tokens[pos]
-        source_line = __kei__.get('code', [''])[t['linenum']] if __kei__.get('code') else ''
-
-        globals()['source'] = source_line
-        globals()['linenum'] = t['linenum']
-
-        # 结束符
-        if t['type'] == 'symbol' and t['value'] == '}':
-            return None, pos, linepos
-
-        # 装饰器
-        if t['type'] == 'op' and t['value'] == '@':
-            return parse_decorator(tokens, pos, all_lines, linepos, source_line)
-
-        # 语句分发
-        stmt_handlers = {
-            'try': parse_try_stmt,
-            'class': parse_class_stmt,
-            'for': parse_for_stmt,
-            'fn': parse_fn_stmt,
-            'import': parse_import_stmt,
-            'from': parse_from_stmt,
-            'break': lambda t,p,al,ln,sl: ({'type': 'break'}, p+1, ln),
-            'continue': lambda t,p,al,ln,sl: ({'type': 'continue'}, p+1, ln),
-            'return': parse_return_stmt,
-            'with': parse_with_stmt,
-            'namespace': parse_namespace_stmt,
-            'global': parse_global_del_raise_use,
-            'del': parse_global_del_raise_use,
-            'raise': parse_global_del_raise_use,
-            'use': parse_global_del_raise_use,
-            'if': parse_if_while_stmt,
-            'while': parse_if_while_stmt,
-            'unless': parse_if_while_stmt,
-            'until': parse_if_while_stmt,
-            'match': parse_match_stmt,
-        }
-
-        if t['type'] == 'name' and t['value'] in stmt_handlers:
-            return stmt_handlers[t['value']](tokens, pos, all_lines, linepos, source_line)
-
-        # 复合赋值
-        compound_op = find_compound_op(tokens, pos)
-        if compound_op:
-            return parse_compound_assign(tokens, pos, all_lines, linepos, compound_op, source_line)
-
-        # 普通赋值
-        assign_pos = find_assign_pos(tokens, pos)
-        if assign_pos != -1:
-            return parse_assign(tokens, pos, assign_pos, all_lines, linepos, source_line)
-
-        # 表达式
-        node, new_pos, linepos = parse_expr(tokens, pos, allow_assign=False, all_lines=all_lines, linepos=linepos)
-        if node is None:
-            if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '}':
+            if pos >= len(tokens):
                 return None, pos, linepos
-            raise KeiError("SyntaxError", f"无效的语法: {tokens[pos]['value'] if pos < len(tokens) else 'EOF'}")
 
-        node['source'] = source_line
+            t = tokens[pos]
+            source_line = __kei__.get('code', [''])[t['linenum']] if __kei__.get('code') else ''
+
+            globals()['source'] = source_line
+            globals()['linenum'] = t['linenum']
+
+            # 结束符
+            if t['type'] == 'symbol' and t['value'] == '}':
+                return None, pos, linepos
+
+            # 装饰器
+            if t['type'] == 'op' and t['value'] == '@':
+                return parse_decorator(tokens, pos, all_lines, linepos, source_line)
+
+            # 语句分发
+            stmt_handlers = {
+                'try': parse_try_stmt,
+                'class': parse_class_stmt,
+                'for': parse_for_stmt,
+                'fn': parse_fn_stmt,
+                'import': parse_import_stmt,
+                'from': parse_from_stmt,
+                'break': lambda t,p,al,ln,sl: ({'type': 'break'}, p+1, ln),
+                'continue': lambda t,p,al,ln,sl: ({'type': 'continue'}, p+1, ln),
+                'return': parse_return_stmt,
+                'with': parse_with_stmt,
+                'namespace': parse_namespace_stmt,
+                'global': parse_global_del_raise_use,
+                'del': parse_global_del_raise_use,
+                'raise': parse_global_del_raise_use,
+                'use': parse_global_del_raise_use,
+                'if': parse_if_while_stmt,
+                'while': parse_if_while_stmt,
+                'unless': parse_if_while_stmt,
+                'until': parse_if_while_stmt,
+                'match': parse_match_stmt,
+            }
+
+            if t['type'] == 'name' and t['value'] in stmt_handlers:
+                return stmt_handlers[t['value']](tokens, pos, all_lines, linepos, source_line)
+
+            # 复合赋值
+            compound_op = find_compound_op(tokens, pos)
+            if compound_op:
+                return parse_compound_assign(tokens, pos, all_lines, linepos, compound_op, source_line)
+
+            # 普通赋值
+            assign_pos = find_assign_pos(tokens, pos)
+            if assign_pos != -1:
+                return parse_assign(tokens, pos, assign_pos, all_lines, linepos, source_line)
+
+            # 表达式
+            node, new_pos, linepos = parse_expr(tokens, pos, allow_assign=False, all_lines=all_lines, linepos=linepos)
+            if node is None:
+                if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '}':
+                    return None, pos, linepos
+                raise KeiError("SyntaxError", f"无效的语法: {tokens[pos]['value'] if pos < len(tokens) else 'EOF'}")
+
+            return node, new_pos, linepos
+
+        node, new_pos, linepos = stmt(tokens, pos, all_lines, linepos)
+        node['source'] = __kei__.get('code', [''])[tokens[pos]['linenum']] if __kei__.get('code') else ''
         node['linenum'] = tokens[pos]['linenum']
         return node, new_pos, linepos
 
@@ -1285,16 +1289,28 @@ def parse_fn_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_
 
         params = []
         defaults = {}
+        type_hints = {}  # 新增：存储类型注解
 
         while pos < len(tokens) and not (tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ')'):
             if tokens[pos]['type'] == 'name':
                 param_name = tokens[pos]['value']
                 pos += 1
+
+                # 检查类型注解 : type
+                if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ':':
+                    pos += 1
+                    # 解析类型表达式
+                    type_node, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
+                    type_hints[param_name] = type_node
+
+                # 检查默认值
                 if pos < len(tokens) and tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '=':
                     pos += 1
                     default_val, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
                     defaults[param_name] = default_val
+
                 params.append(param_name)
+
             elif tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '*':
                 pos += 1
                 if pos < len(tokens) and tokens[pos]['type'] == 'name':
@@ -1328,7 +1344,8 @@ def parse_fn_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_
             __kei__.stack.pop()
             return {
                 'type': 'function', 'name': func_name, 'params': params,
-                'defaults': defaults, 'body': body, 'hint': hint,
+                'defaults': defaults, 'type_hints': type_hints, 'hint': hint,
+                'body': body,
                 'source': source_line, 'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
             }, pos, linepos
 
@@ -1337,7 +1354,8 @@ def parse_fn_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_
         __kei__.stack.pop()
         return {
             'type': 'function', 'name': func_name, 'params': params,
-            'defaults': defaults, 'body': body, 'hint': hint,
+            'defaults': defaults, 'typehints': type_hints, 'hint': hint,
+            'body': body,
             'source': source_line, 'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
         }, pos, linepos
     except:
@@ -4367,7 +4385,8 @@ def runtoken(node, env) -> tuple:
                 'body': node['body'],
                 'globals': global_names,
                 'closure': env,
-                'typeassert': node.get('hint', None)
+                'typeassert': node.get('hint', None),
+                'typehints': node.get('typehints', {})
             }
 
             kei_func = KeiFunction(func_obj, env)
@@ -4463,7 +4482,6 @@ def runtoken(node, env) -> tuple:
                                 "__name__": KeiString(f"__{module_name}__"),
                                 "__env__": KeiDict(env),
                                 "__osname__": KeiString(platform.system().lower()),
-                                "__typeassert__": KeiBool(True),
                             }
 
                             module_env.update({
@@ -4543,7 +4561,6 @@ def runtoken(node, env) -> tuple:
                         "__name__": KeiString(f"__{module_short_name}__"),
                         "__env__": KeiDict(env),
                         "__osname__": KeiString(platform.system().lower()),
-                        "__typeassert__": KeiBool(True),
                     }
 
                     module_env.update({
@@ -4821,30 +4838,28 @@ def runtoken(node, env) -> tuple:
             val, flag = runtoken(node['expr'], env)
             hint = runtoken(node['hint'], env)[0]
 
-            typeassert = get_from_env("__typeassert__", env)
-            if typeassert is not undefined and typeassert.value:
-                if isinstance(hint, KeiList):
-                    for h in hint.items:
-                        if type(val) is KeiInt and h is KeiFloat:
-                            break
+            if isinstance(hint, KeiList):
+                for h in hint.items:
+                    if type(val) is KeiInt and h is KeiFloat:
+                        break
 
-                        if not isinstance(h, type):
-                            h = type(h)
+                    if not isinstance(h, type):
+                        h = type(h)
 
-                        if (isinstance(val, h) or (isinstance(val, type) and issubclass(val, h))):
-                            break
-                    else:
-                        raise KeiError("TypeError", f"类型错误: 期望 {content(hint)}, 得到 {content(type(val))}")
-
+                    if (isinstance(val, h) or (isinstance(val, type) and issubclass(val, h))):
+                        break
                 else:
-                    if type(val) is KeiInt and hint is KeiFloat:
-                        return val, flag
+                    raise KeiError("TypeError", f"类型错误: 期望 {content(hint)}, 得到 {content(type(val))}")
 
-                    if not isinstance(hint, type):
-                        hint = type(hint)
+            else:
+                if type(val) is KeiInt and hint is KeiFloat:
+                    return val, flag
 
-                    if not (isinstance(val, hint) or (isinstance(val, type) and issubclass(val, hint))):
-                        raise KeiError("TypeError", f"类型错误: 期望 {content(hint)}, 得到 {content(type(val))}")
+                if not isinstance(hint, type):
+                    hint = type(hint)
+
+                if not (isinstance(val, hint) or (isinstance(val, type) and issubclass(val, hint))):
+                    raise KeiError("TypeError", f"类型错误: 期望 {content(hint)}, 得到 {content(type(val))}")
 
             return val, flag
 
@@ -5121,7 +5136,6 @@ def exec(code, env=None):
         "__name__": KeiString("__main__"),
         "__env__": KeiDict(env),
         "__osname__": KeiString(platform.system().lower()),
-        "__typeassert__": KeiBool(True),
     })
 
     for name, func in stdlib.func.items():
