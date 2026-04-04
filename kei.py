@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.7"
+__version__ = "1.7-1"
 
 class KeiState:
     stack: List[Any]
@@ -215,8 +215,8 @@ def error(errtype: str | None, info: str, stack: list=[], code:str|None=None, li
 
     print(f"{space} ·")
 
-    import traceback
-    traceback.print_exc()
+    #import traceback
+    #traceback.print_exc()
 
     if not __kei__.repl:
         sys.exit(1)
@@ -956,7 +956,6 @@ def parse_block(tokens: list, pos: int, all_lines: list, linepos: int,
 
     return body, current_pos, current_line
 
-
 def parse_stmt(tokens: list, pos: int, all_lines: list | None = None, linepos: int = -1) -> tuple:
     """解析语句"""
     if all_lines is None:
@@ -1025,9 +1024,6 @@ def parse_stmt(tokens: list, pos: int, all_lines: list | None = None, linepos: i
     node['linenum'] = tokens[pos]['linenum']
     return node, new_pos, linepos
 
-
-# ========== 语句解析辅助函数 ==========
-
 def parse_decorator(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
     """解析装饰器"""
     decorators = []
@@ -1075,7 +1071,6 @@ def parse_decorator(tokens: list, pos: int, all_lines: list, linepos: int, sourc
     else:
         raise KeiError("SyntaxError", "装饰器只能用于函数")
 
-
 def parse_try_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
     """解析 try 语句"""
     pos += 1
@@ -1114,7 +1109,6 @@ def parse_try_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source
     }
     return node, pos, linepos
 
-
 def parse_class_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
     """解析 class 语句"""
     pos += 1
@@ -1149,7 +1143,6 @@ def parse_class_stmt(tokens: list, pos: int, all_lines: list, linepos: int, sour
         'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
     }
     return node, pos, linepos
-
 
 def parse_for_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
     """解析 for 语句"""
@@ -1210,7 +1203,6 @@ def parse_for_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source
         'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
     }
     return node, pos, linepos
-
 
 def parse_fn_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
     """解析 fn 函数定义"""
@@ -1306,7 +1298,6 @@ def parse_fn_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_
         __kei__.stack.pop()
         raise
 
-
 def parse_if_while_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
     """解析 if/while/unless/until 语句"""
     stmt_type = tokens[pos]['value']
@@ -1360,7 +1351,6 @@ def parse_if_while_stmt(tokens: list, pos: int, all_lines: list, linepos: int, s
         node['else_body'] = else_body
 
     return node, pos, linepos
-
 
 def parse_match_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
     """解析 match 语句"""
@@ -1426,7 +1416,6 @@ def parse_match_stmt(tokens: list, pos: int, all_lines: list, linepos: int, sour
     }
     return node, current_pos, current_line
 
-
 def parse_return_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
     """解析 return 语句"""
     pos += 1
@@ -1449,7 +1438,6 @@ def parse_return_stmt(tokens: list, pos: int, all_lines: list, linepos: int, sou
     node['source'] = source_line
     node['linenum'] = tokens[pos]['linenum'] if pos < len(tokens) else linepos
     return node, pos, linepos
-
 
 def parse_with_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
     """解析 with 语句"""
@@ -1476,7 +1464,6 @@ def parse_with_stmt(tokens: list, pos: int, all_lines: list, linepos: int, sourc
     }
     return node, pos, linepos
 
-
 def parse_namespace_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
     """解析 namespace 语句"""
     pos += 1
@@ -1498,7 +1485,6 @@ def parse_namespace_stmt(tokens: list, pos: int, all_lines: list, linepos: int, 
         'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
     }
     return node, pos, linepos
-
 
 def parse_global_del_raise_use(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
     """解析 global/del/raise/use 语句"""
@@ -1531,7 +1517,6 @@ def parse_global_del_raise_use(tokens: list, pos: int, all_lines: list, linepos:
         'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
     }
     return node, pos, linepos
-
 
 def parse_import_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
     """解析 import 语句"""
@@ -1582,7 +1567,6 @@ def parse_import_stmt(tokens: list, pos: int, all_lines: list, linepos: int, sou
         'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
     }
     return node, pos, linepos
-
 
 def parse_from_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
     """解析 from ... import 语句"""
@@ -1646,9 +1630,6 @@ def parse_from_stmt(tokens: list, pos: int, all_lines: list, linepos: int, sourc
     }
     return node, pos, linepos
 
-
-# ========== 辅助查找函数 ==========
-
 def find_compound_op(tokens: list, pos: int) -> Optional[str]:
     """查找复合赋值运算符"""
     compound_ops = {"+=", "-=", "*=", "/="}
@@ -1676,7 +1657,6 @@ def find_compound_op(tokens: list, pos: int) -> Optional[str]:
 
     return None
 
-
 def find_assign_pos(tokens: list, pos: int) -> int:
     """查找赋值运算符 = 的位置"""
     paren_count = bracket_count = brace_count = 0
@@ -1702,7 +1682,6 @@ def find_assign_pos(tokens: list, pos: int) -> int:
             return i
 
     return -1
-
 
 def parse_compound_assign(tokens: list, pos: int, all_lines: list, linepos: int,
                           compound_op: str, source_line: str) -> tuple:
@@ -1757,7 +1736,6 @@ def parse_compound_assign(tokens: list, pos: int, all_lines: list, linepos: int,
         'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
     }
     return node, final_pos, linepos
-
 
 def parse_assign(tokens: list, pos: int, assign_pos: int, all_lines: list,
                  linepos: int, source_line: str) -> tuple:
@@ -2042,30 +2020,30 @@ def parse_index_with_obj(obj_node, tokens, pos, all_lines=None, linepos=0):
     new_pos = end_pos + 1
     return node, new_pos, linepos
 
-def parse_assign(tokens: list, pos: int, all_lines=None, linepos=0) -> tuple:
-    if (pos + 1 < len(tokens) and
-        tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '*' and
-        tokens[pos + 1]['type'] == 'op' and tokens[pos + 1]['value'] == '*'):
-        if pos + 2 >= len(tokens) or tokens[pos + 2]['type'] != 'name':
-            raise KeiError("SyntaxError", "** 后面必须是变量名")
-        left = {'type': 'starstarassign', 'name': tokens[pos + 2]['value']}
-        pos += 3
-    elif tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '*':
-        if pos + 1 >= len(tokens) or tokens[pos + 1]['type'] != 'name':
-            raise KeiError("SyntaxError", "* 后面必须是变量名")
-        left = {'type': 'starassign', 'name': tokens[pos + 1]['value']}
-        pos += 2
-    else:
-        left = tokens[pos]
-        pos += 1
+def parse_assign(tokens: list, pos: int, assign_pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
+    """解析普通赋值语句"""
+    # 解析左边
+    left_tokens = tokens[pos:assign_pos]
+    left_node, left_new_pos, _ = parse_expr(left_tokens, 0, allow_assign=True, all_lines=all_lines, linepos=linepos)
+    if not left_node or left_new_pos != len(left_tokens):
+        raise KeiError("SyntaxError", f"无效的赋值左边: {left_tokens}")
 
-    if pos >= len(tokens) or tokens[pos].get('type') != 'op' or tokens[pos].get('value') != '=':
-        raise KeiError("SyntaxError", "需要 =")
-    pos += 1
+    # 解析右边
+    right_tokens = tokens[assign_pos + 1:]
+    right_node, right_new_pos, _ = parse_expr(right_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
+    if not right_node:
+        raise KeiError("SyntaxError", "无效的赋值右边")
 
-    right, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
-    node = {'type': 'assign', 'left': left, 'right': right}
-    return node, pos, linepos
+    final_pos = assign_pos + 1 + right_new_pos
+
+    node = {
+        'type': 'assign',
+        'left': left_node,
+        'right': right_node,
+        'source': source_line,
+        'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
+    }
+    return node, final_pos, linepos
 
 def parse_term(tokens, pos, in_call=False, all_lines=None, linepos=0):
     left, pos, linepos = parse_pow(tokens, pos, in_call, all_lines, linepos)
@@ -2443,14 +2421,8 @@ def parse_dict(tokens: list, pos: int, all_lines=None, linepos=0) -> tuple:
             pos += 1
             break
 
-        if tokens[pos]['type'] == 'str':
-            key = tokens[pos]['value']
-        elif tokens[pos]['type'] == 'int':
-            key = int(tokens[pos]['value'])
-        elif tokens[pos]['type'] == 'float':
-            key = float(tokens[pos]['value'])
-        else:
-            raise KeiError("SyntaxError", f"字典键必须是字符串或数字, 得到 {tokens[pos]['value']}")
+        key = tokens[pos]
+
         pos += 1
 
         if pos >= len(tokens) or tokens[pos]['type'] != 'symbol' or tokens[pos]['value'] != ':':
@@ -2907,8 +2879,15 @@ def runtoken(node, env) -> tuple:
                 if node['type'] == 'dict':
                     pairs = {}
                     for pair in node['pairs']:
+                        key_val, _ = runtoken(pair['key'], env)
                         val, _ = runtoken(pair['value'], env)
-                        pairs[pair['key']] = val
+
+                        # 检查键类型是否可哈希
+                        if not isinstance(key_val, (KeiInt, KeiString, KeiFloat)):
+                            raise KeiError("TypeError",
+                                f"字典键必须是整数、字符串或浮点数，得到 {type(key_val).__name__}")
+
+                        pairs[key_val] = val
                     return KeiDict(pairs), False
 
                 return None, False
