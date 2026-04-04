@@ -2441,6 +2441,9 @@ class KeiFunction(KeiBase):
                 expected_type, _ = runtoken(type_node, self.__env__)
 
                 # 检查类型
+                if not isinstance(expected_type, type):
+                    expected_type = type(expected_type)
+
                 if not isinstance(val, expected_type):
                     # 抛出错误，指向调用点
                     raise KeiError("TypeError",
@@ -2751,7 +2754,7 @@ class KeiNamespace(KeiBase):
         return undefined
 
     def __getitem__(self, key):
-        result = self.env.get(key, undefined)
+        result = self.env[self.__name__].get(key, undefined)
         return result
 
     def __setitem__(self, key, value):
@@ -2773,6 +2776,32 @@ class KeiNamespace(KeiBase):
             new_name = f"{self.name}+{other.name}"
             return KeiNamespace(new_name, new_env)
         return undefined
+
+class NamespaceEnv:
+    def __init__(self, outer_env, storage):
+        self.outer = outer_env
+        self.storage = storage
+
+    def __getitem__(self, key):
+        # 从 outer 读
+        return self.outer[key]
+
+    def __setitem__(self, key, value):
+        # 所有赋值都写入 storage
+        self.storage[key] = value
+
+    def __contains__(self, key):
+        return key in self.storage or key in self.outer
+
+    def get(self, key, default=None):
+        if key in self.storage:
+            return self.storage[key]
+        return self.outer.get(key, default)
+
+    def copy(self):
+        # 用于函数闭包
+        new = NamespaceEnv(self.outer, self.storage.copy())
+        return new
 
 # ========== 工厂函数 ==========
 
@@ -2924,7 +2953,7 @@ __all__ = [
     'undefined', 'null', 'true', 'false', 'omit',
     'KeiBase', 'KeiInt', 'KeiFloat', 'KeiString',
     'KeiList', 'KeiDict', 'KeiBool',
-    'KeiFunction', 'KeiClass', 'KeiNamespace',
+    'KeiFunction', 'KeiClass', 'KeiNamespace', 'NamespaceEnv',
     'KeiInstance', 'KeiMethod', 'KeiBoundMethod',
     'content',
     '_undefined', '_null',

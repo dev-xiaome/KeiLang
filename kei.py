@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.7-5"
+__version__ = "1.7-6"
 
 class KeiState:
     stack: List[Any]
@@ -3878,20 +3878,8 @@ def runtoken(node, env) -> tuple:
 
                     if method is not None and callable(method):
                         if isinstance(method, KeiFunction):
-                            result = method(linecode=call_source, *args, **kwargs)
+                            result = method(linecode=call_source, name=get_from_env('__caller__', env, '<global>'), *args, **kwargs)
                         else:
-                            try:
-                                sig = inspect.signature(method)
-                                required = [p for p in sig.parameters.values() if p.default == inspect.Parameter.empty and p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)]
-                                if len(args) + len(kwargs) < len(required):
-                                    missing = []
-                                    for p in required:
-                                        if p.name not in kwargs and len(args) <= required.index(p):
-                                            missing.append(p.name)
-                                    if missing:
-                                        raise KeiError("TypeError", f"{method_name}() 缺少参数: {', '.join(missing)}")
-                            except (ValueError, TypeError):
-                                pass
                             result = method(*args, **kwargs)
                         return result, False
                     raise KeiError("NameError", f"对象没有方法 {method_name}")
@@ -3957,7 +3945,10 @@ def runtoken(node, env) -> tuple:
                     raise KeiError("NameError", "对象未定义")
                 if method_name is None:
                     if callable(obj):
-                        result = obj(*args, **kwargs)
+                        if isinstance(obj, KeiFunction):
+                            result = obj(linecode=call_source, name=get_from_env('__caller__', env, '<global>'), *args, **kwargs)
+                        else:
+                            result = obj(*args, **kwargs)
                         return result, False
                     else:
                         if obj is undefined:
@@ -3989,9 +3980,15 @@ def runtoken(node, env) -> tuple:
 
                     if is_namespace_func:
                         if star_param:
-                            result = method(linecode=call_source, *args, **kwargs)
+                            if isinstance(method, KeiFunction):
+                                result = method(linecode=call_source, name=get_from_env('__caller__', env, '<global>'), *args, **kwargs)
+                            else:
+                                result = method(*args, **kwargs)
                         elif starstar_param:
-                            result = method(linecode=call_source, *args, **kwargs)
+                            if isinstance(method, KeiFunction):
+                                result = method(linecode=call_source, name=get_from_env('__caller__', env, '<global>'), *args, **kwargs)
+                            else:
+                                result = method(*args, **kwargs)
                         else:
                             call_args = []
                             remaining = kwargs.copy()
@@ -4004,16 +4001,25 @@ def runtoken(node, env) -> tuple:
                                     call_args.append(undefined)
                             if remaining:
                                 raise KeiError("SyntaxError", f"方法 {method_name} 不接受关键字参数: {list(remaining.keys())}")
-                            result = method(linecode=call_source, *call_args)
+                            if isinstance(method, KeiFunction):
+                                result = method(linecode=call_source, name=get_from_env('__caller__', env, '<global>'), *call_args)
+                            else:
+                                result = method(*call_args)
                         return result, False
 
                     is_bound = isinstance(method, KeiBoundMethod) or hasattr(method, '__self__')
 
                     if is_bound:
                         if star_param:
-                            result = method(*args, **kwargs)
+                            if isinstance(method, KeiFunction):
+                                result = method(linecode=call_source, name=get_from_env('__caller__', env, '<global>'), *args, **kwargs)
+                            else:
+                                result = method(*args, **kwargs)
                         elif starstar_param:
-                            result = method(*args, **kwargs)
+                            if isinstance(method, KeiFunction):
+                                result = method(linecode=call_source, name=get_from_env('__caller__', env, '<global>'), *args, **kwargs)
+                            else:
+                                result = method(*args, **kwargs)
                         else:
                             call_args = []
                             remaining = kwargs.copy()
@@ -4026,7 +4032,10 @@ def runtoken(node, env) -> tuple:
                                     call_args.append(undefined)
                             if remaining:
                                 raise KeiError("SyntaxError", f"方法 {method_name} 不接受关键字参数: {list(remaining.keys())}")
-                            result = method(*call_args)
+                            if isinstance(method, KeiFunction):
+                                result = method(linecode=call_source, name=get_from_env('__caller__', env, '<global>'), *call_args)
+                            else:
+                                result = method(*call_args)
                     else:
                         call_args = [obj]
                         remaining = kwargs.copy()
@@ -4039,29 +4048,25 @@ def runtoken(node, env) -> tuple:
                                 call_args.append(undefined)
                         if remaining:
                             raise KeiError("SyntaxError", f"方法 {method_name} 不接受关键字参数: {list(remaining.keys())}")
-                        result = method(*call_args)
+                        if isinstance(method, KeiFunction):
+                            result = method(linecode=call_source, name=get_from_env('__caller__', env, '<global>'), *call_args)
+                        else:
+                            result = method(*call_args)
 
                     return result, False
 
                 if callable(method):
-                    try:
-                        sig = inspect.signature(method)
-                        required = [p for p in sig.parameters.values() if p.default == inspect.Parameter.empty and p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)]
-                        if len(args) + len(kwargs) < len(required):
-                            missing = []
-                            for p in required:
-                                if p.name not in kwargs and len(args) <= required.index(p):
-                                    missing.append(p.name)
-                            if missing:
-                                if len(missing) == 1:
-                                    raise KeiError("TypeError", f"{method_name}() 缺少参数 '{missing[0]}'")
-                                else:
-                                    raise KeiError("TypeError", f"{method_name}() 缺少参数: {', '.join(missing)}")
-                    except (ValueError, TypeError):
-                        pass
-                    return method(*args, **kwargs), False
+                    if isinstance(method, KeiFunction):
+                        result = method(linecode=call_source, name=get_from_env('__caller__', env, '<global>'), *args, **kwargs)
+                    else:
+                        result = method(*args, **kwargs)
+                    return result, False
 
-                return method(*args, **kwargs), False
+                if isinstance(method, KeiFunction):
+                    result = method(linecode=call_source, name=get_from_env('__caller__', env, '<global>'), *args, **kwargs)
+                else:
+                    result = method(*args, **kwargs)
+                return result, False
 
         if node['type'] == 'assign':
             val, flag = runtoken(node['right'], env)
@@ -4701,11 +4706,16 @@ def runtoken(node, env) -> tuple:
             return None, False
 
         if node['type'] == 'namespace':
-            ns_env = {}
+            ns_data = {}
+            ns_env = NamespaceEnv(env, ns_data)
+
             for stmt in node['body']:
                 runtoken(stmt, ns_env)
 
-            env[node['name']] = KeiNamespace(node['name'], ns_env)
+            ns = env.copy()
+            ns[node['name']] = ns_data
+
+            env[node['name']] = KeiNamespace(node['name'], ns)
             return None, False
 
         if node['type'] == 'with':
