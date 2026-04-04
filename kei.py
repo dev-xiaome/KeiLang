@@ -5,16 +5,17 @@ from decimal import getcontext
 from typing import List, Any, Optional
 import platform
 import inspect
+import copy
 import sys
 import os
 
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.6-7"
+__version__ = "1.7"
 
 class KeiState:
-    stack: List[Any]  # 添加类型提示
+    stack: List[Any]
     catch: list
     code: Optional[List[str]]
     repl: bool
@@ -29,7 +30,6 @@ class KeiState:
     def __new__(cls) -> 'KeiState':
         if cls._instance is None:
             cls._instance = super().__new__(cls)
-            # 在 __new__ 中初始化属性
             cls._instance.stack = []
             cls._instance.catch = []
             cls._instance.code = None
@@ -43,7 +43,6 @@ class KeiState:
         return cls._instance
 
     def __init__(self) -> None:
-        # __init__ 会被多次调用，但我们已经初始化过了
         pass
 
     def __setattr__(self, name: str, value: Any) -> None:
@@ -58,7 +57,6 @@ class KeiState:
     def get(self, key: str, default: Any = None) -> Any:
         return getattr(self, key, default)
 
-# 创建单例
 __kei__: KeiState = KeiState()
 
 try:
@@ -83,46 +81,26 @@ __py_exec__ = exec
 
 import lib.stdlib as stdlib
 from lib.object import *
+from lib.kei2py import *
 
 DEBUG = False
 
 mapping = {}
 
 keywords = [
-   'class',
-   'namespace',
-   'if',
-   'while',
-   'fn',
-   'return',
-   'for',
-   'else',
-   'elif',
-   'try',
-   'catch',
-   'with',
-   'import',
-   'break',
-   'continue',
-   'global',
-   'raise',
-   'case',
-   'match',
-   'use',
-   'from'
+   'class', 'namespace', 'if', 'while', 'fn', 'return', 'for',
+   'else', 'elif', 'try', 'catch', 'with', 'import', 'break',
+   'continue', 'global', 'raise', 'case', 'match', 'use', 'from'
 ]
 
 sys.setrecursionlimit(1024)
 
 def check_python_call(func, args, kwargs, func_name):
-    """检查 Python 函数参数，提前抛出 KeiError"""
     try:
         sig = inspect.signature(func)
     except (ValueError, TypeError):
-        # 某些内置函数没有签名，跳过检查
         return
 
-    # 统计必需参数
     required_params = []
     var_positional = None
     var_keyword = None
@@ -135,27 +113,9 @@ def check_python_call(func, args, kwargs, func_name):
         elif param.default == inspect.Parameter.empty:
             required_params.append(name)
 
-    # 检查位置参数数量
-    pos_args_used = 0
-    for i, arg in enumerate(args):
-        if i < len(required_params):
-            pos_args_used += 1
-        elif var_positional is None:
-            # 多余的位置参数且没有 *args
-            break
-
-    # 检查关键字参数
-    kwargs_used = set()
-    for k in kwargs.keys():
-        if k in required_params:
-            kwargs_used.add(k)
-        elif var_keyword is None and k not in [p.name for p in sig.parameters.values() if p.kind != inspect.Parameter.VAR_KEYWORD]:
-            raise KeiError("TypeError", f"{func_name}() 收到未预料的关键字参数 '{k}'")
-
-    # 找出缺少的参数
     missing = []
-    for p in required_params:
-        if p not in kwargs_used and len(args) <= required_params.index(p):
+    for i, p in enumerate(required_params):
+        if p not in kwargs and i >= len(args):
             missing.append(p)
 
     if missing:
@@ -169,7 +129,6 @@ def debug_print(*args, **kwargs):
         print("[DEBUG]", *args, **kwargs)
 
 def getname(node, env):
-    """收集当前节点引用的变量，支持属性访问"""
     result = []
     seen = set()
 
@@ -179,7 +138,6 @@ def getname(node, env):
     }
 
     def get_full_name(n):
-        """从 attr 节点获取完整名称，如 math.pi"""
         if n.get("type") == "name":
             return n["value"]
         elif n.get("type") == "attr":
@@ -198,7 +156,6 @@ def getname(node, env):
                     traverse(n["iterable"], current_depth)
                 return
 
-            # 处理 name 节点
             if n.get("type") == "name":
                 name = n["value"]
                 if name not in seen:
@@ -206,14 +163,12 @@ def getname(node, env):
                     val = runtoken(n, env)[0]
                     result.append([name, val])
 
-            # 处理 attr 节点（如 math.pi）
             if n.get("type") == "attr":
                 full_name = get_full_name(n)
                 if full_name and full_name not in seen:
                     seen.add(full_name)
                     val = runtoken(n, env)[0]
                     result.append([full_name, val])
-
                 return result
 
             for v in n.values():
@@ -270,24 +225,20 @@ def dict_diff(d1, d2, path="", seen=None):
     if seen is None:
         seen = set()
 
-    # 跳过自引用键
     skip_keys = {'__env__', '__parent__', '__builtins__'}
 
     added = []
     removed = []
     changed = []
 
-    # 处理 d1
     for key in d1.keys():
         key_str = str(key)
 
-        # 跳过特殊键
         if key_str in skip_keys:
             continue
 
         full_path = f"{path}.{key_str}" if path else key_str
 
-        # 防止循环引用
         obj_id = id(d1[key])
         if obj_id in seen:
             continue
@@ -309,7 +260,6 @@ def dict_diff(d1, d2, path="", seen=None):
 
         seen.remove(obj_id)
 
-    # 处理 d2 新增
     for key in d2.keys():
         key_str = str(key)
         if key_str in skip_keys:
@@ -352,13 +302,11 @@ def token(original: str) -> list:
                     pos += 3
                     continue
 
-                # 重要：先检查 ** 操作符
                 if c == '*' and pos + 1 < length and codes[pos+1] == '*':
                     tokens.append("**")
                     pos += 2
                     continue
 
-                # 检查逗号
                 if c == ',':
                     tokens.append(",")
                     pos += 1
@@ -384,37 +332,31 @@ def token(original: str) -> list:
                     pos += 2
                     continue
 
-                # 检查 +=
                 if c == '+' and pos + 1 < length and codes[pos+1] == '=':
                     tokens.append("+=")
                     pos += 2
                     continue
 
-                # 检查 -=
                 if c == '-' and pos + 1 < length and codes[pos+1] == '=':
                     tokens.append("-=")
                     pos += 2
                     continue
 
-                # 检查 *=
                 if c == '*' and pos + 1 < length and codes[pos+1] == '=':
                     tokens.append("*=")
                     pos += 2
                     continue
 
-                # 检查 /=
                 if c == '/' and pos + 1 < length and codes[pos+1] == '=':
                     tokens.append("/=")
                     pos += 2
                     continue
 
-                # 检查冒号
                 if c == ':':
                     tokens.append(":")
                     pos += 1
                     continue
 
-                # 检查大括号
                 if c == '{':
                     tokens.append("{")
                     pos += 1
@@ -424,7 +366,6 @@ def token(original: str) -> list:
                     pos += 1
                     continue
 
-                # 检查中括号
                 if c == '[':
                     tokens.append("[")
                     pos += 1
@@ -434,7 +375,6 @@ def token(original: str) -> list:
                     pos += 1
                     continue
 
-                # 检查小括号
                 if c == '(':
                     tokens.append("(")
                     pos += 1
@@ -444,7 +384,6 @@ def token(original: str) -> list:
                     pos += 1
                     continue
 
-                # 普通单行字符串
                 if c in '"\'':
                     start = pos
                     quote = c
@@ -455,16 +394,14 @@ def token(original: str) -> list:
                         else:
                             pos += 1
 
-                    # 检查未闭合
                     if pos >= length:
                         raise KeiError("SyntaxError", f"未闭合的字符串: {codes[start:]}")
 
-                    pos += 1  # 跳过结束引号
+                    pos += 1
                     string = codes[start:pos]
                     tokens.append(('string', escape(string)))
                     continue
 
-                # rf-string 或 fr-string
                 if (c == 'r' and pos + 1 < length and codes[pos+1] == 'f') or \
                    (c == 'f' and pos + 1 < length and codes[pos+1] == 'r'):
                     temp_pos = pos + 2
@@ -475,21 +412,17 @@ def token(original: str) -> list:
                         quote = codes[temp_pos]
                         pos = temp_pos + 1
                         start = pos
-                        # rf-string: 不处理转义（原始字符串特性）
                         while pos < length and codes[pos] != quote:
                             pos += 1
 
-                        # 检查未闭合
                         if pos >= length:
                             raise KeiError("SyntaxError", f"未闭合的rf-string: {codes[start-3:]}")
 
                         pos += 1
-                        string = codes[start-3:pos]  # 包含 rf/fr 和引号
-                        # 标记为 rfstring，既是原始字符串又支持 f-string
-                        tokens.append(('rfstring', string[2:]))  # 去掉 rf/fr 和引号
+                        string = codes[start-3:pos]
+                        tokens.append(('rfstring', string[2:]))
                         continue
 
-                # r-string 单行
                 if c == 'r':
                     temp_pos = pos + 1
                     while temp_pos < length and codes[temp_pos] in ' \n\t':
@@ -502,16 +435,14 @@ def token(original: str) -> list:
                         while pos < length and codes[pos] != quote:
                             pos += 1
 
-                        # 检查未闭合
                         if pos >= length:
                             raise KeiError("SyntaxError", f"未闭合的r-string: {codes[start-2:]}")
 
                         pos += 1
-                        string = codes[start-2:pos]  # 包含 r 和引号
-                        tokens.append(('rstring', string[1:]))  # 去掉 r" 和 "
+                        string = codes[start-2:pos]
+                        tokens.append(('rstring', string[1:]))
                         continue
 
-                # f-string 单行
                 if c == 'f':
                     temp_pos = pos + 1
                     while temp_pos < length and codes[temp_pos] in ' \n\t':
@@ -527,7 +458,6 @@ def token(original: str) -> list:
                             else:
                                 pos += 1
 
-                        # 检查未闭合
                         if pos >= length:
                             raise KeiError("SyntaxError", f"未闭合的f-string: {codes[start-2:]}")
 
@@ -536,7 +466,6 @@ def token(original: str) -> list:
                         tokens.append(('fstring', escape(string[1:])))
                         continue
 
-                # 检查 .. 操作符
                 if c == '.' and pos + 1 < length and codes[pos+1] == '.':
                     tokens.append("..")
                     pos += 2
@@ -561,7 +490,6 @@ def token(original: str) -> list:
                     pos += 2
                     continue
 
-                # 处理数字
                 if "0" <= c <= "9":
                     start = pos
                     has_dot = False
@@ -579,7 +507,6 @@ def token(original: str) -> list:
                     tokens.append(number)
                     continue
 
-                # 检查比较运算符
                 if c in "<>!" and pos + 1 < length and codes[pos+1] == "=":
                     tokens.append(c + "=")
                     pos += 2
@@ -590,7 +517,6 @@ def token(original: str) -> list:
                     pos += 2
                     continue
 
-                # 基本运算符
                 if c == "+":
                     tokens.append("+")
                     pos += 1
@@ -616,7 +542,6 @@ def token(original: str) -> list:
                     pos += 1
                     continue
 
-                # 标识符
                 if c.isalpha() or c == '_':
                     start = pos
                     while pos < length and (codes[pos].isalnum() or codes[pos] == '_'):
@@ -625,12 +550,10 @@ def token(original: str) -> list:
                     tokens.append(word)
                     continue
 
-                # 空白字符
                 if c in ' \n\t':
                     pos += 1
                     continue
 
-                # 其他单个字符
                 tokens.append(c)
                 pos += 1
 
@@ -881,7 +804,6 @@ def ast(tokenlines: list) -> list:
     new = []
     if mapping is not None:
         for i in result:
-            # 复制一份，避免修改原对象
             new_token = i.copy()
 
             if new_token['type'] in {'name', 'op', 'symbol'}:
@@ -976,1485 +898,895 @@ def process_fstring(template, env):
 
     return ''.join(result)
 
-def parse_stmt(tokens: list, pos: int, all_lines: list|None=None, linepos: int=-1) -> tuple:
-    """解析语句，返回 (node, new_pos, new_linepos)"""
-    debug_print(f"parse_stmt: pos={pos}, linepos={linepos}, token={tokens[pos] if pos < len(tokens) else 'EOF'}")
+def parse_block(tokens: list, pos: int, all_lines: list, linepos: int,
+                start_token: dict = None, end_token: str = '}') -> tuple[list, int, int]:
+    """解析花括号块
 
-    globals()['all_lines'] = all_lines
-    globals()['pos']       = pos
-    globals()['linepos']   = linepos
-    globals()['source']    = __kei__.get('code', '未知行')[tokens[pos]['linenum']]
-    globals()['linenum']   = tokens[pos]['linenum']
+    Args:
+        tokens: 当前行的token列表
+        pos: 当前位置
+        all_lines: 所有行的tokens
+        linepos: 当前行号
+        start_token: 开始token（如果为None，假设当前位置已经跳过'{'）
+        end_token: 结束符号，默认'}'，也可用于其他块如']'
 
-    code = __kei__.get('code', '未知行')[tokens[pos]['linenum']]
+    Returns:
+        (body_statements, new_pos, new_linepos)
+    """
+    body = []
+    brace_count = 1
+
+    # 如果提供了start_token且当前token是'{'，先跳过
+    if start_token is not None:
+        if pos >= len(tokens) or tokens[pos]['type'] != 'symbol' or tokens[pos]['value'] != start_token.get('value', '{'):
+            raise KeiError("SyntaxError", f"需要 '{start_token.get('value', '{')}'")
+        pos += 1
+
+    current_line = linepos
+    current_pos = pos
+
+    while brace_count > 0:
+        if current_line >= len(all_lines):
+            break
+        if current_pos >= len(all_lines[current_line]):
+            current_line += 1
+            current_pos = 0
+            continue
+
+        current_tokens = all_lines[current_line]
+
+        if current_tokens[current_pos]["type"] == "symbol" and current_tokens[current_pos]["value"] == end_token:
+            brace_count -= 1
+            current_pos += 1
+            if brace_count == 0:
+                break
+            continue
+
+        stmt_node, new_pos, new_line = parse_stmt(current_tokens, current_pos, all_lines, current_line)
+        if stmt_node:
+            body.append(stmt_node)
+
+        if new_line > current_line:
+            current_line = new_line
+            current_pos = new_pos
+        else:
+            current_pos = new_pos
+            if new_pos == current_pos:
+                current_pos += 1
+
+    return body, current_pos, current_line
+
+
+def parse_stmt(tokens: list, pos: int, all_lines: list | None = None, linepos: int = -1) -> tuple:
+    """解析语句"""
+    if all_lines is None:
+        all_lines = [tokens]
+        linepos = 0
+
+    if pos >= len(tokens):
+        return None, pos, linepos
+
+    t = tokens[pos]
+    source_line = __kei__.get('code', [''])[t['linenum']] if __kei__.get('code') else ''
+
+    # 结束符
+    if t['type'] == 'symbol' and t['value'] == '}':
+        return None, pos, linepos
+
+    # 装饰器
+    if t['type'] == 'op' and t['value'] == '@':
+        return parse_decorator(tokens, pos, all_lines, linepos, source_line)
+
+    # 语句分发
+    stmt_handlers = {
+        'try': parse_try_stmt,
+        'class': parse_class_stmt,
+        'for': parse_for_stmt,
+        'fn': parse_fn_stmt,
+        'import': parse_import_stmt,
+        'from': parse_from_stmt,
+        'break': lambda t,p,al,ln,sl: ({'type': 'break'}, p+1, ln),
+        'continue': lambda t,p,al,ln,sl: ({'type': 'continue'}, p+1, ln),
+        'return': parse_return_stmt,
+        'with': parse_with_stmt,
+        'namespace': parse_namespace_stmt,
+        'global': parse_global_del_raise_use,
+        'del': parse_global_del_raise_use,
+        'raise': parse_global_del_raise_use,
+        'use': parse_global_del_raise_use,
+        'if': parse_if_while_stmt,
+        'while': parse_if_while_stmt,
+        'unless': parse_if_while_stmt,
+        'until': parse_if_while_stmt,
+        'match': parse_match_stmt,
+    }
+
+    if t['type'] == 'name' and t['value'] in stmt_handlers:
+        return stmt_handlers[t['value']](tokens, pos, all_lines, linepos, source_line)
+
+    # 复合赋值
+    compound_op = find_compound_op(tokens, pos)
+    if compound_op:
+        return parse_compound_assign(tokens, pos, all_lines, linepos, compound_op, source_line)
+
+    # 普通赋值
+    assign_pos = find_assign_pos(tokens, pos)
+    if assign_pos != -1:
+        return parse_assign(tokens, pos, assign_pos, all_lines, linepos, source_line)
+
+    # 表达式
+    node, new_pos, linepos = parse_expr(tokens, pos, allow_assign=False, all_lines=all_lines, linepos=linepos)
+    if node is None:
+        if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '}':
+            return None, pos, linepos
+        raise KeiError("SyntaxError", f"无效的语法: {tokens[pos]['value'] if pos < len(tokens) else 'EOF'}")
+
+    node['source'] = source_line
+    node['linenum'] = tokens[pos]['linenum']
+    return node, new_pos, linepos
+
+
+# ========== 语句解析辅助函数 ==========
+
+def parse_decorator(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
+    """解析装饰器"""
+    decorators = []
+    current_line = linepos
+    current_pos = pos
+
+    while current_line < len(all_lines) and current_pos < len(all_lines[current_line]):
+        toke = all_lines[current_line][current_pos]
+        if toke['type'] == 'op' and toke['value'] == '@':
+            current_pos += 1
+            if current_pos >= len(all_lines[current_line]):
+                current_line += 1
+                current_pos = 0
+                if current_line >= len(all_lines):
+                    raise KeiError("SyntaxError", "装饰器后面缺少表达式")
+
+            decorator, new_pos, new_line = parse_expr(all_lines[current_line], current_pos, all_lines=all_lines, linepos=current_line)
+            decorators.append(decorator)
+
+            if new_pos < len(all_lines[current_line]):
+                current_pos = new_pos
+            else:
+                current_line += 1
+                current_pos = 0
+
+            # 跳过分号
+            while current_line < len(all_lines) and current_pos < len(all_lines[current_line]) and \
+                  all_lines[current_line][current_pos]['type'] == 'op' and \
+                  all_lines[current_line][current_pos]['value'] == ';':
+                current_pos += 1
+                if current_pos >= len(all_lines[current_line]):
+                    current_line += 1
+                    current_pos = 0
+        else:
+            break
+
+    if current_line >= len(all_lines):
+        raise KeiError("SyntaxError", "装饰器后面缺少函数定义")
+
+    stmt_node, new_pos, new_line = parse_stmt(all_lines[current_line], current_pos, all_lines, current_line)
+
+    if stmt_node and stmt_node['type'] == 'function':
+        stmt_node['decorators'] = decorators
+        return stmt_node, new_pos, new_line
+    else:
+        raise KeiError("SyntaxError", "装饰器只能用于函数")
+
+
+def parse_try_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
+    """解析 try 语句"""
+    pos += 1
+
+    # try 块
+    try_body, pos, linepos = parse_block(tokens, pos, all_lines, linepos, {'type': 'symbol', 'value': '{'})
+
+    # catch 块
+    var = None
+    catch_body = None
+    if linepos < len(all_lines) and pos < len(all_lines[linepos]):
+        next_token = all_lines[linepos][pos]
+        if next_token['type'] == 'name' and next_token['value'] == 'catch':
+            pos += 1
+            if pos < len(all_lines[linepos]) and all_lines[linepos][pos]['type'] == 'name':
+                var = all_lines[linepos][pos]['value']
+                pos += 1
+            catch_body, pos, linepos = parse_block(all_lines[linepos], pos, all_lines, linepos, {'type': 'symbol', 'value': '{'})
+
+    # finally 块
+    finally_body = None
+    if linepos < len(all_lines) and pos < len(all_lines[linepos]):
+        next_token = all_lines[linepos][pos]
+        if next_token['type'] == 'name' and next_token['value'] == 'finally':
+            pos += 1
+            finally_body, pos, linepos = parse_block(all_lines[linepos], pos, all_lines, linepos, {'type': 'symbol', 'value': '{'})
+
+    node = {
+        'type': 'try',
+        'body': try_body,
+        'var': var,
+        'catchbody': catch_body,
+        'finallybody': finally_body,
+        'source': source_line,
+        'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
+    }
+    return node, pos, linepos
+
+
+def parse_class_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
+    """解析 class 语句"""
+    pos += 1
+
+    if pos >= len(tokens) or tokens[pos]['type'] != 'name':
+        raise KeiError("SyntaxError", "类需要名字")
+    class_name = tokens[pos]['value']
+    if class_name in keywords:
+        raise KeiError("SyntaxError", f"无法使用关键字 '{class_name}' 作为类名")
+    pos += 1
+
+    parent_class = None
+    if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '(':
+        pos += 1
+        if pos < len(tokens) and tokens[pos]['type'] == 'name':
+            parent_class = tokens[pos]['value']
+            pos += 1
+            if pos >= len(tokens) or tokens[pos]['type'] != 'symbol' or tokens[pos]['value'] != ')':
+                raise KeiError("SyntaxError", "继承语法错误：缺少 ')'")
+            pos += 1
+        else:
+            raise KeiError("SyntaxError", "继承需要父类名")
+
+    body, pos, linepos = parse_block(tokens, pos, all_lines, linepos, {'type': 'symbol', 'value': '{'})
+
+    node = {
+        'type': 'class',
+        'name': class_name,
+        'parent': parent_class,
+        'body': body,
+        'source': source_line,
+        'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
+    }
+    return node, pos, linepos
+
+
+def parse_for_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
+    """解析 for 语句"""
+    pos += 1
+
+    # 解析变量列表
+    vars = []
+    if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '(':
+        pos += 1
+        while pos < len(tokens):
+            if tokens[pos]['type'] == 'name':
+                vars.append(tokens[pos]['value'])
+                pos += 1
+            if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
+                pos += 1
+                continue
+            if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ')':
+                pos += 1
+                break
+    else:
+        first_var = None
+        if pos < len(tokens) and tokens[pos]['type'] == 'name':
+            first_var = tokens[pos]['value']
+            pos += 1
+
+        if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
+            vars.append(first_var)
+            pos += 1
+            if pos < len(tokens) and tokens[pos]['type'] == 'name':
+                vars.append(tokens[pos]['value'])
+                pos += 1
+            while pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
+                pos += 1
+                if pos < len(tokens) and tokens[pos]['type'] == 'name':
+                    vars.append(tokens[pos]['value'])
+                    pos += 1
+                else:
+                    break
+        elif first_var:
+            vars = [first_var]
+        else:
+            raise KeiError("SyntaxError", "for 循环需要变量名")
+
+    if pos >= len(tokens) or tokens[pos]['type'] != 'op' or tokens[pos]['value'] != 'in':
+        raise KeiError("SyntaxError", "for 需要 'in'")
+    pos += 1
+
+    iterable, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
+
+    body, pos, linepos = parse_block(tokens, pos, all_lines, linepos, {'type': 'symbol', 'value': '{'})
+
+    node = {
+        'type': 'for',
+        'vars': vars,
+        'iterable': iterable,
+        'body': body,
+        'source': source_line,
+        'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
+    }
+    return node, pos, linepos
+
+
+def parse_fn_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
+    """解析 fn 函数定义"""
+    pos += 1
+
+    if pos >= len(tokens) or tokens[pos]['type'] != 'name':
+        raise KeiError("SyntaxError", "函数定义需要名字")
+    func_name = tokens[pos]['value']
+    if func_name in keywords:
+        raise KeiError("SyntaxError", f"无法使用关键字 '{func_name}' 作为函数名")
+    pos += 1
+
+    __kei__.stack.append(func_name)
 
     try:
-        def stmt():
-            all_lines = globals()['all_lines']
-            pos       = globals()['pos']
-            linepos   = globals()['linepos']
+        if pos >= len(tokens) or tokens[pos]['type'] != 'symbol' or tokens[pos]['value'] != '(':
+            raise KeiError("SyntaxError", "期待 (")
+        pos += 1
 
-            if all_lines is None:
-                all_lines = [tokens]
-                linepos = 0
+        params = []
+        defaults = {}
 
-            if pos >= len(tokens):
-                return None, pos, linepos
-
-            t = tokens[pos]
-
-            # 如果是 }，返回 None
-            if t['type'] == 'symbol' and t['value'] == '}':
-                debug_print(f"parse_stmt: found '}}' at pos {pos}, returning None")
-                return None, pos, linepos
-
-            # 处理装饰器 @
-            if t['type'] == 'op' and t['value'] == '@':
-                decorators = []
-                current_line = linepos
-                current_pos = pos
-
-                # 收集所有装饰器
-                while current_line < len(all_lines) and current_pos < len(all_lines[current_line]):
-                    toke = all_lines[current_line][current_pos]
-                    if toke['type'] == 'op' and toke['value'] == '@':
-                        current_pos += 1
-
-                        if current_pos >= len(all_lines[current_line]):
-                            current_line += 1
-                            current_pos = 0
-                            if current_line >= len(all_lines):
-                                raise KeiError("SyntaxError", "装饰器后面缺少表达式")
-                            continue
-
-                        decorator, new_pos, new_line = parse_expr(all_lines[current_line], current_pos, all_lines=all_lines, linepos=current_line)
-                        decorators.append(decorator)
-
-                        if new_pos < len(all_lines[current_line]):
-                            current_pos = new_pos
-                        else:
-                            current_line += 1
-                            current_pos = 0
-
-                        while current_line < len(all_lines) and current_pos < len(all_lines[current_line]) and \
-                              all_lines[current_line][current_pos]['type'] == 'op' and \
-                              all_lines[current_line][current_pos]['value'] == ';':
-                            current_pos += 1
-                            if current_pos >= len(all_lines[current_line]):
-                                current_line += 1
-                                current_pos = 0
-                    else:
-                        break
-
-                if current_line >= len(all_lines):
-                    raise KeiError("SyntaxError", "装饰器后面缺少函数定义")
-
-                stmt_node, new_pos, new_line = parse_stmt(all_lines[current_line], current_pos, all_lines, current_line)
-
-                if stmt_node and stmt_node['type'] == 'function':
-                    stmt_node['decorators'] = decorators
-                    return stmt_node, new_pos, new_line
-                else:
-                    raise KeiError("SyntaxError", "装饰器只能用于函数")
-
-            # 处理 try 语句
-            if t['type'] == 'name' and t['value'] == 'try':
+        while pos < len(tokens) and not (tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ')'):
+            if tokens[pos]['type'] == 'name':
+                param_name = tokens[pos]['value']
                 pos += 1
 
-                if pos >= len(tokens) or tokens[pos]['type'] != 'symbol' or tokens[pos]['value'] != '{':
-                    raise KeiError("SyntaxError", "try 后面需要 '{'")
-                pos += 1
-
-                try_body = []
-                brace_count = 1
-                current_line = linepos
-                current_pos = pos
-
-                while brace_count > 0:
-                    if current_line >= len(all_lines):
-                        break
-                    if current_pos >= len(all_lines[current_line]):
-                        current_line += 1
-                        current_pos = 0
-                        continue
-
-                    current_tokens = all_lines[current_line]
-
-                    if current_tokens[current_pos]["type"] == "symbol" and current_tokens[current_pos]["value"] == "}":
-                        brace_count -= 1
-                        current_pos += 1
-                        if brace_count == 0:
-                            break
-                        continue
-
-                    stmt_node, new_pos, new_line = parse_stmt(current_tokens, current_pos, all_lines, current_line)
-                    if stmt_node:
-                        try_body.append(stmt_node)
-
-                    if new_line > current_line:
-                        current_line = new_line
-                        current_pos = new_pos
-                    else:
-                        current_pos = new_pos
-                        if new_pos == current_pos:
-                            current_pos += 1
-
-                # 解析 catch
-                var = None
-                catchbody = None
-                current_line = current_line
-                current_pos = current_pos
-
-                if current_line < len(all_lines) and current_pos < len(all_lines[current_line]):
-                    next_token = all_lines[current_line][current_pos]
-                    if next_token['type'] == 'name' and next_token['value'] == 'catch':
-                        current_pos += 1
-
-                        if current_pos < len(all_lines[current_line]) and all_lines[current_line][current_pos]['type'] == 'name':
-                            var = all_lines[current_line][current_pos]['value']
-                            current_pos += 1
-
-                        if current_pos >= len(all_lines[current_line]) or all_lines[current_line][current_pos]['type'] != 'symbol' or all_lines[current_line][current_pos]['value'] != '{':
-                            raise KeiError("SyntaxError", "catch 后面需要 '{'")
-                        current_pos += 1
-
-                        catchbody = []
-                        brace_count = 1
-                        catch_line = current_line
-                        catch_pos = current_pos
-
-                        while brace_count > 0:
-                            if catch_line >= len(all_lines):
-                                break
-                            if catch_pos >= len(all_lines[catch_line]):
-                                catch_line += 1
-                                catch_pos = 0
-                                continue
-
-                            catch_tokens = all_lines[catch_line]
-
-                            if catch_tokens[catch_pos]["type"] == "symbol" and catch_tokens[catch_pos]["value"] == "}":
-                                brace_count -= 1
-                                catch_pos += 1
-                                if brace_count == 0:
-                                    current_line = catch_line
-                                    current_pos = catch_pos
-                                    break
-                                continue
-
-                            stmt_node, new_pos, new_line = parse_stmt(catch_tokens, catch_pos, all_lines, catch_line)
-                            if stmt_node:
-                                catchbody.append(stmt_node)
-
-                            if new_line > catch_line:
-                                catch_line = new_line
-                                catch_pos = new_pos
-                            else:
-                                catch_pos = new_pos
-                                if new_pos == catch_pos:
-                                    catch_pos += 1
-
-                # 解析 finally
-                finallybody = None
-                if current_line < len(all_lines) and current_pos < len(all_lines[current_line]):
-                    next_token = all_lines[current_line][current_pos]
-                    if next_token['type'] == 'name' and next_token['value'] == 'finally':
-                        current_pos += 1
-
-                        if current_pos >= len(all_lines[current_line]) or all_lines[current_line][current_pos]['type'] != 'symbol' or all_lines[current_line][current_pos]['value'] != '{':
-                            raise KeiError("SyntaxError", "finally 后面需要 '{'")
-                        current_pos += 1
-
-                        finallybody = []
-                        brace_count = 1
-                        finally_line = current_line
-                        finally_pos = current_pos
-
-                        while brace_count > 0:
-                            if finally_line >= len(all_lines):
-                                break
-                            if finally_pos >= len(all_lines[finally_line]):
-                                finally_line += 1
-                                finally_pos = 0
-                                continue
-
-                            finally_tokens = all_lines[finally_line]
-
-                            if finally_tokens[finally_pos]["type"] == "symbol" and finally_tokens[finally_pos]["value"] == "}":
-                                brace_count -= 1
-                                finally_pos += 1
-                                if brace_count == 0:
-                                    current_line = finally_line
-                                    current_pos = finally_pos
-                                    break
-                                continue
-
-                            stmt_node, new_pos, new_line = parse_stmt(finally_tokens, finally_pos, all_lines, finally_line)
-                            if stmt_node:
-                                finallybody.append(stmt_node)
-
-                            if new_line > finally_line:
-                                finally_line = new_line
-                                finally_pos = new_pos
-                            else:
-                                finally_pos = new_pos
-                                if new_pos == finally_pos:
-                                    finally_pos += 1
-
-                node = {
-                    'type': 'try',
-                    'body': try_body,
-                    'var': var,
-                    'catchbody': catchbody,
-                    'finallybody': finallybody
-                }
-                return node, current_pos, current_line
-
-            # 处理 class 语句
-            if t['type'] == 'name' and t['value'] == 'class':
-                pos += 1
-
-                if pos >= len(tokens) or tokens[pos]['type'] != 'name':
-                    raise KeiError("SyntaxError", "类需要名字")
-                class_name = tokens[pos]['value']
-                if class_name in keywords:
-                    raise KeiError("SyntaxError", f"无法使用关键字 '{class_name}' 作为类名")
-                pos += 1
-
-                parent_class = None
-                if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '(':
+                if pos < len(tokens) and tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '=':
                     pos += 1
-                    if pos < len(tokens) and tokens[pos]['type'] == 'name':
-                        parent_class = tokens[pos]['value']
-                        pos += 1
-                        if pos >= len(tokens) or tokens[pos]['type'] != 'symbol' or tokens[pos]['value'] != ')':
-                            raise KeiError("SyntaxError", "继承语法错误：缺少 ')'")
-                        pos += 1
-                    else:
-                        raise KeiError("SyntaxError", "继承需要父类名")
+                    default_val, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
+                    defaults[param_name] = default_val
 
-                if pos >= len(tokens) or tokens[pos]['type'] != 'symbol' or tokens[pos]['value'] != '{':
-                    raise KeiError("SyntaxError", "class 后面缺少 {")
+                params.append(param_name)
+            elif tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '*':
                 pos += 1
-
-                body = []
-                brace_count = 1
-                current_line = linepos
-                current_pos = pos
-
-                while brace_count > 0:
-                    if current_line >= len(all_lines):
-                        break
-                    if current_pos >= len(all_lines[current_line]):
-                        current_line += 1
-                        current_pos = 0
-                        continue
-
-                    current_tokens = all_lines[current_line]
-
-                    if current_tokens[current_pos]["type"] == "symbol" and current_tokens[current_pos]["value"] == "}":
-                        brace_count -= 1
-                        current_pos += 1
-                        if brace_count == 0:
-                            break
-                        continue
-
-                    stmt_node, new_pos, new_line = parse_stmt(current_tokens, current_pos, all_lines, current_line)
-                    if stmt_node:
-                        body.append(stmt_node)
-
-                    if new_line > current_line:
-                        current_line = new_line
-                        current_pos = new_pos
-                    else:
-                        current_pos = new_pos
-                        if new_pos == current_pos:
-                            current_pos += 1
-
-                node = {
-                    'type': 'class',
-                    'name': class_name,
-                    'parent': parent_class,
-                    'body': body,
-                }
-                return node, current_pos, current_line
-
-            # 处理 for 语句
-            if t['type'] == 'name' and t['value'] == 'for':
-                pos += 1
-
-                vars = []
-                if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '(':
-                    pos += 1
-                    while pos < len(tokens):
-                        if tokens[pos]['type'] == 'name':
-                            vars.append(tokens[pos]['value'])
-                            pos += 1
-                        if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
-                            pos += 1
-                            continue
-                        if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ')':
-                            pos += 1
-                            break
-                else:
-                    first_var = None
-                    if pos < len(tokens) and tokens[pos]['type'] == 'name':
-                        first_var = tokens[pos]['value']
-                        pos += 1
-
-                    if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
-                        vars.append(first_var)
-                        pos += 1
-
-                        if pos < len(tokens) and tokens[pos]['type'] == 'name':
-                            vars.append(tokens[pos]['value'])
-                            pos += 1
-
-                        while pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
-                            pos += 1
-                            if pos < len(tokens) and tokens[pos]['type'] == 'name':
-                                vars.append(tokens[pos]['value'])
-                                pos += 1
-                            else:
-                                break
-                    elif first_var:
-                        vars = [first_var]
-                    else:
-                        raise KeiError("SyntaxError", "for 循环需要变量名")
-
-                if pos >= len(tokens) or tokens[pos]['type'] != 'op' or tokens[pos]['value'] != 'in':
-                    raise KeiError("SyntaxError", "for 需要 'in'")
-                pos += 1
-
-                iterable, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
-
-                if pos >= len(tokens) or tokens[pos]['type'] != 'symbol' or tokens[pos]['value'] != '{':
-                    raise KeiError("SyntaxError", "for 后面需要 '{'")
-                pos += 1
-
-                body = []
-                brace_count = 1
-                current_line = linepos
-                current_pos = pos
-
-                while brace_count > 0:
-                    if current_line >= len(all_lines):
-                        break
-                    if current_pos >= len(all_lines[current_line]):
-                        current_line += 1
-                        current_pos = 0
-                        continue
-
-                    current_tokens = all_lines[current_line]
-
-                    if current_tokens[current_pos]["type"] == "symbol" and current_tokens[current_pos]["value"] == "}":
-                        brace_count -= 1
-                        current_pos += 1
-                        if brace_count == 0:
-                            break
-                        continue
-
-                    stmt_node, new_pos, new_line = parse_stmt(current_tokens, current_pos, all_lines, current_line)
-                    if stmt_node:
-                        body.append(stmt_node)
-
-                    if new_line > current_line:
-                        current_line = new_line
-                        current_pos = new_pos
-                    else:
-                        current_pos = new_pos
-                        if new_pos == current_pos:
-                            current_pos += 1
-
-                node = {
-                    'type': 'for',
-                    'vars': vars,
-                    'iterable': iterable,
-                    'body': body
-                }
-                return node, current_pos, current_line
-
-            # 处理 fn 语句（函数定义）
-            if t['type'] == 'name' and t['value'] == 'fn':
-                hint = None
-                pos += 1
-
-                if pos >= len(tokens) or tokens[pos]['type'] != 'name':
-                    raise KeiError("SyntaxError", "函数定义需要名字")
-                func_name = tokens[pos]['value']
-                if func_name in keywords:
-                    raise KeiError("SyntaxError", f"无法使用关键字 '{func_name}' 作为函数名")
-                pos += 1
-
-                __kei__.stack.append(func_name)
-
-                try:
-                    if pos >= len(tokens) or tokens[pos]['type'] != 'symbol' or tokens[pos]['value'] != '(':
-                        raise KeiError("SyntaxError", "期待 (")
-                    pos += 1
-
-                    params = []
-                    defaults = {}
-
-                    while pos < len(tokens) and not (tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ')'):
-                        if tokens[pos]['type'] == 'name':
-                            param_name = tokens[pos]['value']
-                            pos += 1
-
-                            if pos < len(tokens) and tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '=':
-                                pos += 1
-                                default_val, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
-                                defaults[param_name] = default_val
-
-                            params.append(param_name)
-                            continue
-
-                        elif tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '*':
-                            pos += 1
-                            if pos < len(tokens) and tokens[pos]['type'] == 'name':
-                                params.append('*' + tokens[pos]['value'])
-                                pos += 1
-                            else:
-                                params.append('*')
-                            continue
-
-                        elif tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '**':
-                            pos += 1
-                            if pos < len(tokens) and tokens[pos]['type'] == 'name':
-                                params.append('**' + tokens[pos]['value'])
-                                pos += 1
-                            else:
-                                params.append('**')
-                            continue
-
-                        elif tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
-                            pos += 1
-                            continue
-                        else:
-                            raise KeiError("SyntaxError", f"未知的符号: \"{tokens[pos]['value']}\"")
-
-                    pos += 1  # 跳过 )
-
-                    if pos < len(tokens) and tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '->':
-                        pos += 1
-                        expr, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
-                        hint = expr
-
-                    if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '=>':
-                        pos += 1
-                        expr, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
-                        body = [{'type': 'return', 'value': expr}]
-                        __kei__.stack.pop()
-                        node = {
-                            'type': 'function',
-                            'name': func_name,
-                            'params': params,
-                            'defaults': defaults,
-                            'body': body,
-                            'hint': hint
-                        }
-                        return node, pos, linepos
-
-                    if pos >= len(tokens) or tokens[pos]['type'] != 'symbol' or tokens[pos]['value'] != '{':
-                        raise KeiError("SyntaxError", "期待 {")
-
-                except:
-                    __kei__.stack.pop()
-                    raise
-
-                try:
-                    pos += 1
-                    body = []
-                    brace_count = 1
-                    current_line = linepos
-                    current_pos = pos
-
-                    while brace_count > 0:
-                        if current_line >= len(all_lines):
-                            break
-                        if current_pos >= len(all_lines[current_line]):
-                            current_line += 1
-                            current_pos = 0
-                            continue
-
-                        current_tokens = all_lines[current_line]
-
-                        if current_tokens[current_pos]["type"] == "symbol" and current_tokens[current_pos]["value"] == "}":
-                            brace_count -= 1
-                            current_pos += 1
-                            if brace_count == 0:
-                                break
-                            continue
-
-                        stmt_node, new_pos, new_line = parse_stmt(current_tokens, current_pos, all_lines, current_line)
-                        if stmt_node:
-                            body.append(stmt_node)
-
-                        if new_line > current_line:
-                            current_line = new_line
-                            current_pos = new_pos
-                        else:
-                            current_pos = new_pos
-                            if new_pos == current_pos:
-                                current_pos += 1
-
-                    __kei__.stack.pop()
-                    node = {
-                        'type': 'function',
-                        'name': func_name,
-                        'params': params,
-                        'defaults': defaults,
-                        'body': body,
-                        'hint': hint
-                    }
-                    return node, current_pos, current_line
-                except:
-                    raise
-
-            # 处理 import 语句
-            if t['type'] == 'name' and t['value'] == 'import':
-                sentencename = t['value']
-                pos += 1
-                modules = []
-
-                while pos < len(tokens):
-                    if tokens[pos]['type'] == 'name':
-                        module_parts = [tokens[pos]['value']]
-                        pos += 1
-
-                        while (pos < len(tokens) and
-                               tokens[pos].get('type') == 'symbol' and
-                               tokens[pos].get('value') == '.' and
-                               pos + 1 < len(tokens) and
-                               tokens[pos + 1].get('type') == 'name'):
-                            pos += 1
-                            module_parts.append(tokens[pos]['value'])
-                            pos += 1
-
-                        module_name = '.'.join(module_parts)
-
-                        alias = None
-                        if pos < len(tokens) and tokens[pos].get('type') == 'name' and tokens[pos].get('value') == 'as':
-                            pos += 1
-                            if pos < len(tokens) and tokens[pos]['type'] == 'name':
-                                alias = tokens[pos]['value']
-                                pos += 1
-
-                        if (pos < len(tokens) and
-                            tokens[pos].get('type') == 'symbol' and tokens[pos].get('value') == '.' and
-                            pos + 1 < len(tokens) and
-                            tokens[pos + 1].get('type') == 'op' and tokens[pos + 1].get('value') == '*'):
-
-                            modules.append({
-                                'type': 'wildcard',
-                                'module': module_name,
-                                'alias': alias
-                            })
-                            pos += 2
-                        else:
-                            modules.append({
-                                'type': 'normal',
-                                'module': module_name,
-                                'alias': alias
-                            })
-
-                    if pos < len(tokens) and tokens[pos].get('type') == 'symbol' and tokens[pos].get('value') == ',':
-                        pos += 1
-                    else:
-                        break
-
-                node = {'type': sentencename, 'modules': modules}
-                return node, pos, linepos
-
-            # 处理 from ... import ... 语句
-            if t['type'] == 'name' and t['value'] == 'from':
-                pos += 1
-
-                if pos >= len(tokens) or tokens[pos]['type'] != 'name':
-                    raise KeiError("SyntaxError", "from 后面需要模块名")
-
-                module_parts = [tokens[pos]['value']]
-                pos += 1
-
-                while (pos < len(tokens) and
-                       tokens[pos].get('type') == 'symbol' and
-                       tokens[pos].get('value') == '.' and
-                       pos + 1 < len(tokens) and
-                       tokens[pos + 1].get('type') == 'name'):
-                    pos += 1
-                    module_parts.append(tokens[pos]['value'])
-                    pos += 1
-
-                module_name = '.'.join(module_parts)
-
-                if pos >= len(tokens) or tokens[pos].get('type') != 'name' or tokens[pos].get('value') != 'import':
-                    raise KeiError("SyntaxError", "from ... 后面需要 import")
-                pos += 1
-
-                imports = []
-
-                if pos < len(tokens) and tokens[pos].get('type') == 'op' and tokens[pos].get('value') == '*':
-                    imports.append({
-                        'type': 'wildcard',
-                        'name': None,
-                        'alias': None
-                    })
+                if pos < len(tokens) and tokens[pos]['type'] == 'name':
+                    params.append('*' + tokens[pos]['value'])
                     pos += 1
                 else:
-                    while pos < len(tokens):
-                        if tokens[pos]['type'] == 'name':
-                            name = tokens[pos]['value']
-                            pos += 1
-
-                            alias = None
-                            if pos < len(tokens) and tokens[pos].get('type') == 'name' and tokens[pos].get('value') == 'as':
-                                pos += 1
-                                if pos < len(tokens) and tokens[pos]['type'] == 'name':
-                                    alias = tokens[pos]['value']
-                                    pos += 1
-
-                            imports.append({
-                                'type': 'normal',
-                                'name': name,
-                                'alias': alias
-                            })
-
-                            if pos < len(tokens) and tokens[pos].get('type') == 'symbol' and tokens[pos].get('value') == ',':
-                                pos += 1
-                                continue
-                            else:
-                                break
-                        else:
-                            break
-
-                node = {'type': 'fromimport', 'module': module_name, 'imports': imports}
-                return node, pos, linepos
-
-            # 处理 break/continue
-            if t['type'] == 'name' and t['value'] in {'break', 'continue'}:
-                stmt_type = t['value']
+                    params.append('*')
+            elif tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '**':
                 pos += 1
-                if pos < len(tokens) and tokens[pos].get('type') == 'op' and tokens[pos].get('value') == ';':
+                if pos < len(tokens) and tokens[pos]['type'] == 'name':
+                    params.append('**' + tokens[pos]['value'])
                     pos += 1
-                node = {'type': stmt_type}
-                return node, pos, linepos
-
-            # 处理 return 语句
-            if t['type'] == 'name' and t['value'] == 'return':
-                pos += 1
-                if pos >= len(tokens) or (tokens[pos]['type'] == 'op' and tokens[pos]['value'] == ';'):
-                    node = {'type': 'return', 'value': None}
-                    return node, pos, linepos
-
-                first, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
-                values = [first]
-                while pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
-                    pos += 1
-                    next_val, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
-                    values.append(next_val)
-
-                if len(values) == 1:
-                    node = {'type': 'return', 'value': values[0]}
                 else:
-                    node = {'type': 'return', 'value': {'type': 'list', 'elements': values}}
-                return node, pos, linepos
-
-            # 处理 with 语句
-            if t['type'] == 'name' and t['value'] == 'with':
+                    params.append('**')
+            elif tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
                 pos += 1
-                expr, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
-
-                as_var = None
-                if pos < len(tokens) and tokens[pos]['type'] == 'name' and tokens[pos]['value'] == 'as':
-                    pos += 1
-                    if pos >= len(tokens) or tokens[pos]['type'] != 'name':
-                        raise KeiError("SyntaxError", "as 后面需要变量名")
-                    as_var = tokens[pos]['value']
-                    pos += 1
-
-                if pos >= len(tokens) or tokens[pos]['type'] != 'symbol' or tokens[pos]['value'] != '{':
-                    raise KeiError("SyntaxError", "with 后面需要 {")
-                pos += 1
-
-                body = []
-                brace_count = 1
-                current_line = linepos
-                current_pos = pos
-
-                while brace_count > 0:
-                    if current_line >= len(all_lines):
-                        break
-                    if current_pos >= len(all_lines[current_line]):
-                        current_line += 1
-                        current_pos = 0
-                        continue
-
-                    current_tokens = all_lines[current_line]
-
-                    if current_tokens[current_pos]["type"] == "symbol" and current_tokens[current_pos]["value"] == "}":
-                        brace_count -= 1
-                        current_pos += 1
-                        if brace_count == 0:
-                            break
-                        continue
-
-                    stmt_node, new_pos, new_line = parse_stmt(current_tokens, current_pos, all_lines, current_line)
-                    if stmt_node:
-                        body.append(stmt_node)
-
-                    if new_line > current_line:
-                        current_line = new_line
-                        current_pos = new_pos
-                    else:
-                        current_pos = new_pos
-                        if new_pos == current_pos:
-                            current_pos += 1
-
-                node = {
-                    'type': 'with',
-                    'expr': expr,
-                    'as_var': as_var,
-                    'body': body
-                }
-                return node, current_pos, current_line
-
-            # 处理 namespace 语句
-            if t['type'] == 'name' and t['value'] == 'namespace':
-                pos += 1
-
-                if pos >= len(tokens) or tokens[pos]['type'] != 'name':
-                    raise KeiError("SyntaxError", "命名空间需要名字")
-                ns_name = tokens[pos]['value']
-                if ns_name in keywords:
-                    raise KeiError("SyntaxError", f"无法使用关键字 '{ns_name}' 作为命名空间名")
-                pos += 1
-
-                if pos >= len(tokens) or tokens[pos]['type'] != 'symbol' or tokens[pos]['value'] != '{':
-                    raise KeiError("SyntaxError", "namespace 后面缺少 {")
-                pos += 1
-
-                body = []
-                brace_count = 1
-                current_line = linepos
-                current_pos = pos
-
-                while brace_count > 0:
-                    if current_line >= len(all_lines):
-                        break
-                    if current_pos >= len(all_lines[current_line]):
-                        current_line += 1
-                        current_pos = 0
-                        continue
-
-                    current_tokens = all_lines[current_line]
-
-                    if current_tokens[current_pos]["type"] == "symbol" and current_tokens[current_pos]["value"] == "}":
-                        brace_count -= 1
-                        current_pos += 1
-                        if brace_count == 0:
-                            break
-                        continue
-
-                    stmt_node, new_pos, new_line = parse_stmt(current_tokens, current_pos, all_lines, current_line)
-                    if stmt_node:
-                        body.append(stmt_node)
-
-                    if new_line > current_line:
-                        current_line = new_line
-                        current_pos = new_pos
-                    else:
-                        current_pos = new_pos
-                        if new_pos == current_pos:
-                            current_pos += 1
-
-                node = {
-                    'type': 'namespace',
-                    'name': ns_name,
-                    'body': body
-                }
-                return node, current_pos, current_line
-
-            # 处理 global/del/raise/use
-            if t['type'] == 'name' and t['value'] in {'global', 'del', 'raise', 'use'}:
-                sentencename = t['value']
-                pos += 1
-                targets = []
-
-                while pos < len(tokens):
-                    target, new_pos, linepos = parse_expr(tokens, pos, allow_assign=True, all_lines=all_lines, linepos=linepos)
-                    if target:
-                        targets.append(target)
-                        pos = new_pos
-
-                    if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
-                        pos += 1
-                        continue
-                    else:
-                        break
-
-                if not targets and sentencename != "raise":
-                    raise KeiError("SyntaxError", f"{sentencename} 需要至少一个参数")
-
-                if len(targets) > 2 and sentencename == "raise":
-                    raise KeiError("SyntaxError", "raise 只能抛出一个错误字符串和可选类型")
-
-                node = {'type': sentencename, 'names': targets}
-                return node, pos, linepos
-
-            # 处理 if/while/unless/until
-            if t['type'] == 'name' and t['value'] in {'if', 'while', 'unless', 'until'}:
-                sentencename = t['value']
-                pos += 1
-                cond, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
-
-                if pos >= len(tokens) or tokens[pos]['type'] != 'symbol' or tokens[pos]['value'] != '{':
-                    raise KeiError("SyntaxError", f"{sentencename} 后面缺少 {{")
-                pos += 1
-
-                body = []
-                brace_count = 1
-                current_line = linepos
-                current_pos = pos
-
-                while brace_count > 0:
-                    if current_line >= len(all_lines):
-                        break
-                    if current_pos >= len(all_lines[current_line]):
-                        current_line += 1
-                        current_pos = 0
-                        continue
-
-                    current_tokens = all_lines[current_line]
-
-                    if current_tokens[current_pos]["type"] == "symbol" and current_tokens[current_pos]["value"] == "}":
-                        brace_count -= 1
-                        current_pos += 1
-                        if brace_count == 0:
-                            break
-                        continue
-
-                    stmt_node, new_pos, new_line = parse_stmt(current_tokens, current_pos, all_lines, current_line)
-                    if stmt_node:
-                        body.append(stmt_node)
-
-                    if new_line > current_line:
-                        current_line = new_line
-                        current_pos = new_pos
-                    else:
-                        current_pos = new_pos
-                        if new_pos == current_pos:
-                            current_pos += 1
-
-                if sentencename in {'if', 'unless'}:
-                    elif_chain = []
-                    else_body = None
-                    current_line = current_line
-                    current_pos = current_pos
-
-                    while current_line < len(all_lines) and current_pos < len(all_lines[current_line]):
-                        while current_pos < len(all_lines[current_line]) and all_lines[current_line][current_pos]['type'] == 'op' and all_lines[current_line][current_pos]['value'] == ';':
-                            current_pos += 1
-                        if current_pos >= len(all_lines[current_line]):
-                            current_line += 1
-                            current_pos = 0
-                            if current_line >= len(all_lines):
-                                break
-                            continue
-
-                        next_token = all_lines[current_line][current_pos]
-
-                        if next_token['type'] == 'name' and next_token['value'] == 'elif':
-                            current_pos += 1
-                            elif_cond, current_pos, linepos = parse_expr(all_lines[current_line], current_pos, all_lines=all_lines, linepos=linepos)
-
-                            if current_pos >= len(all_lines[current_line]) or all_lines[current_line][current_pos]['type'] != 'symbol' or all_lines[current_line][current_pos]['value'] != '{':
-                                raise KeiError("SyntaxError", "elif 后面缺少 {")
-                            current_pos += 1
-
-                            elif_body = []
-                            elif_line = current_line
-                            elif_pos = current_pos
-                            elif_brace_count = 1
-
-                            while elif_brace_count > 0:
-                                if elif_line >= len(all_lines):
-                                    break
-                                if elif_pos >= len(all_lines[elif_line]):
-                                    elif_line += 1
-                                    elif_pos = 0
-                                    continue
-
-                                elif_tokens = all_lines[elif_line]
-
-                                if elif_tokens[elif_pos]["type"] == "symbol" and elif_tokens[elif_pos]["value"] == "}":
-                                    elif_brace_count -= 1
-                                    elif_pos += 1
-                                    if elif_brace_count == 0:
-                                        current_line = elif_line
-                                        current_pos = elif_pos
-                                        break
-                                    continue
-
-                                stmt_node, new_pos, new_line = parse_stmt(elif_tokens, elif_pos, all_lines, elif_line)
-                                if stmt_node:
-                                    elif_body.append(stmt_node)
-
-                                if new_line > elif_line:
-                                    elif_line = new_line
-                                    elif_pos = new_pos
-                                else:
-                                    elif_pos = new_pos
-                                    if new_pos == elif_pos:
-                                        elif_pos += 1
-
-                            elif_chain.append({
-                                'cond': elif_cond,
-                                'body': elif_body
-                            })
-
-                        elif next_token['type'] == 'name' and next_token['value'] == 'else':
-                            current_pos += 1
-
-                            if current_pos >= len(all_lines[current_line]) or all_lines[current_line][current_pos]['type'] != 'symbol' or all_lines[current_line][current_pos]['value'] != '{':
-                                raise KeiError("SyntaxError", "else 后面缺少 {")
-                            current_pos += 1
-
-                            else_body = []
-                            else_line = current_line
-                            else_pos = current_pos
-                            else_brace_count = 1
-
-                            while else_brace_count > 0:
-                                if else_line >= len(all_lines):
-                                    break
-                                if else_pos >= len(all_lines[else_line]):
-                                    else_line += 1
-                                    else_pos = 0
-                                    continue
-
-                                else_tokens = all_lines[else_line]
-
-                                if else_tokens[else_pos]["type"] == "symbol" and else_tokens[else_pos]["value"] == "}":
-                                    else_brace_count -= 1
-                                    else_pos += 1
-                                    if else_brace_count == 0:
-                                        current_line = else_line
-                                        current_pos = else_pos
-                                        break
-                                    continue
-
-                                stmt_node, new_pos, new_line = parse_stmt(else_tokens, else_pos, all_lines, else_line)
-                                if stmt_node:
-                                    else_body.append(stmt_node)
-
-                                if new_line > else_line:
-                                    else_line = new_line
-                                    else_pos = new_pos
-                                else:
-                                    else_pos = new_pos
-                                    if new_pos == else_pos:
-                                        else_pos += 1
-                            break
-
-                        else:
-                            break
-
-                    node = {
-                        'type': sentencename,
-                        'cond': cond,
-                        'body': body,
-                        'elif_chain': elif_chain,
-                        'else_body': else_body
-                    }
-                    return node, current_pos, current_line
-                else:
-                    node = {
-                        'type': sentencename,
-                        'cond': cond,
-                        'body': body
-                    }
-                    return node, current_pos, current_line
-
-            # 处理 match 语句
-            if t['type'] == 'name' and t['value'] == 'match':
-                pos += 1
-                value_expr, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
-
-                if pos >= len(tokens) or tokens[pos]['type'] != 'symbol' or tokens[pos]['value'] != '{':
-                    raise KeiError("SyntaxError", "match 后面需要 {")
-                pos += 1
-
-                arms = []
-                current_line = linepos
-                current_pos = pos
-
-                while True:
-                    while current_line < len(all_lines) and current_pos < len(all_lines[current_line]):
-                        if all_lines[current_line][current_pos]['type'] == 'op' and all_lines[current_line][current_pos]['value'] == ';':
-                            current_pos += 1
-                        else:
-                            break
-                    if current_pos >= len(all_lines[current_line]):
-                        current_line += 1
-                        current_pos = 0
-                        if current_line >= len(all_lines):
-                            break
-                        continue
-
-                    if all_lines[current_line][current_pos]['type'] == 'name' and all_lines[current_line][current_pos]['value'] == 'case':
-                        current_pos += 1
-                        patterns = []
-                        pattern, current_pos, linepos = parse_match_pattern(all_lines[current_line], current_pos, all_lines, linepos)
-                        patterns.append(pattern)
-                        while current_pos < len(all_lines[current_line]):
-                            if (all_lines[current_line][current_pos]['type'] == 'op' and
-                                all_lines[current_line][current_pos]['value'] == '|'):
-                                current_pos += 1
-                                pattern, current_pos, linepos = parse_match_pattern(all_lines[current_line], current_pos, all_lines, linepos)
-                                patterns.append(pattern)
-                            else:
-                                break
-
-                        if current_pos >= len(all_lines[current_line]) or all_lines[current_line][current_pos]['type'] != 'symbol' or all_lines[current_line][current_pos]['value'] != '{':
-                            raise KeiError("SyntaxError", "case 后面需要 {")
-                        current_pos += 1
-
-                        body = []
-                        brace_count = 1
-                        case_line = current_line
-                        case_pos = current_pos
-
-                        while brace_count > 0:
-                            if case_line >= len(all_lines):
-                                break
-                            if case_pos >= len(all_lines[case_line]):
-                                case_line += 1
-                                case_pos = 0
-                                continue
-
-                            case_tokens = all_lines[case_line]
-
-                            if case_tokens[case_pos]['type'] == 'symbol' and case_tokens[case_pos]['value'] == '}':
-                                brace_count -= 1
-                                case_pos += 1
-                                if brace_count == 0:
-                                    current_line = case_line
-                                    current_pos = case_pos
-                                    break
-                                continue
-
-                            stmt_node, new_pos, new_line = parse_stmt(case_tokens, case_pos, all_lines, case_line)
-                            if stmt_node:
-                                body.append(stmt_node)
-
-                            if new_line > case_line:
-                                case_line = new_line
-                                case_pos = new_pos
-                            else:
-                                case_pos = new_pos
-                                if new_pos == case_pos:
-                                    case_pos += 1
-
-                        arms.append({
-                            'patterns': patterns,
-                            'body': body
-                        })
-                    else:
-                        if all_lines[current_line][current_pos]['type'] == 'symbol' and all_lines[current_line][current_pos]['value'] == '}':
-                            current_pos += 1
-                            break
-                        else:
-                            raise KeiError("SyntaxError", "match 块内只能有 case 语句")
-
-                node = {
-                    'type': 'match',
-                    'value': value_expr,
-                    'arms': arms
-                }
-                return node, current_pos, current_line
-
-            # 查找复合赋值
-            compound_ops = {"+=", "-=", "*=", "/="}
-            assig_pos = -1
-            paren_count = 0
-            bracket_count = 0
-            brace_count = 0
-            compound_op = None
-
-            for i in range(pos, len(tokens)):
-                toke = tokens[i]
-                if toke['type'] == 'symbol':
-                    if toke['value'] == '(':
-                        paren_count += 1
-                    elif toke['value'] == ')':
-                        paren_count -= 1
-                    elif toke['value'] == '[':
-                        bracket_count += 1
-                    elif toke['value'] == ']':
-                        bracket_count -= 1
-                    elif toke['value'] == '{':
-                        brace_count += 1
-                    elif toke['value'] == '}':
-                        brace_count -= 1
-
-                if (toke.get('type') == 'op' and toke.get('value') in compound_ops
-                    and paren_count == 0 and bracket_count == 0 and brace_count == 0):
-                    assig_pos = i
-                    compound_op = toke.get('value')
-                    break
-
-            if assig_pos != -1 and assig_pos > pos:
-                # 解析左边
-                left_tokens = tokens[pos:assig_pos]
-
-                left_comma_positions = []
-                paren_count = bracket_count = brace_count = 0
-                for i, tok in enumerate(left_tokens):
-                    if tok['type'] == 'symbol':
-                        if tok['value'] == '(':
-                            paren_count += 1
-                        elif tok['value'] == ')':
-                            paren_count -= 1
-                        elif tok['value'] == '[':
-                            bracket_count += 1
-                        elif tok['value'] == ']':
-                            bracket_count -= 1
-                        elif tok['value'] == '{':
-                            brace_count += 1
-                        elif tok['value'] == '}':
-                            brace_count -= 1
-                    if tok['type'] == 'symbol' and tok['value'] == ',' and paren_count == 0 and bracket_count == 0 and brace_count == 0:
-                        left_comma_positions.append(i)
-
-                if left_comma_positions:
-                    vars_list = []
-                    rest_var = None
-                    kwargs_var = None
-                    last_pos = 0
-                    for comma_pos in left_comma_positions:
-                        var_tokens = left_tokens[last_pos:comma_pos]
-                        if len(var_tokens) == 2 and var_tokens[0]['type'] == 'op' and var_tokens[0]['value'] == '**':
-                            if var_tokens[1]['type'] == 'name':
-                                kwargs_var = var_tokens[1]['value']
-                            else:
-                                raise KeiError("SyntaxError", f"** 后面必须是变量名, 得到 {var_tokens[1]}")
-                        elif len(var_tokens) == 2 and var_tokens[0]['type'] == 'op' and var_tokens[0]['value'] == '*':
-                            if var_tokens[1]['type'] == 'name':
-                                rest_var = var_tokens[1]['value']
-                            else:
-                                raise KeiError("SyntaxError", f"* 后面必须是变量名, 得到 {var_tokens[1]}")
-                        elif len(var_tokens) == 1 and var_tokens[0]['type'] == 'name':
-                            vars_list.append(var_tokens[0]['value'])
-                        elif len(var_tokens) > 0:
-                            raise KeiError("SyntaxError", f"多变量赋值左边必须是变量名、*rest 或 **kwargs, 得到 {var_tokens}")
-                        last_pos = comma_pos + 1
-                    var_tokens = left_tokens[last_pos:]
-                    if len(var_tokens) == 2 and var_tokens[0]['type'] == 'op' and var_tokens[0]['value'] == '**':
-                        if var_tokens[1]['type'] == 'name':
-                            kwargs_var = var_tokens[1]['value']
-                        else:
-                            raise KeiError("SyntaxError", f"** 后面必须是变量名, 得到 {var_tokens[1]}")
-                    elif len(var_tokens) == 2 and var_tokens[0]['type'] == 'op' and var_tokens[0]['value'] == '*':
-                        if var_tokens[1]['type'] == 'name':
-                            rest_var = var_tokens[1]['value']
-                        else:
-                            raise KeiError("SyntaxError", f"* 后面必须是变量名, 得到 {var_tokens[1]}")
-                    elif len(var_tokens) == 1 and var_tokens[0]['type'] == 'name':
-                        vars_list.append(var_tokens[0]['value'])
-                    elif len(var_tokens) > 0:
-                        raise KeiError("SyntaxError", f"多变量赋值左边必须是变量名、*rest 或 **kwargs, 得到 {var_tokens}")
-                    left_node = {'type': 'multiassign', 'vars': vars_list, 'rest': rest_var, 'kwargs': kwargs_var}
-                else:
-                    left_node, left_new_pos, _ = parse_expr(left_tokens, 0, allow_assign=True, all_lines=all_lines, linepos=linepos)
-                    if not left_node or left_new_pos != len(left_tokens):
-                        raise KeiError("SyntaxError", f"无效的赋值左边: {left_tokens}")
-
-                # 解析右边
-                right_tokens = tokens[assig_pos + 1:]
-                right_comma_positions = []
-                paren_count = bracket_count = brace_count = 0
-                for i, tok in enumerate(right_tokens):
-                    if tok['type'] == 'symbol':
-                        if tok['value'] == '(':
-                            paren_count += 1
-                        elif tok['value'] == ')':
-                            paren_count -= 1
-                        elif tok['value'] == '[':
-                            bracket_count += 1
-                        elif tok['value'] == ']':
-                            bracket_count -= 1
-                        elif tok['value'] == '{':
-                            brace_count += 1
-                        elif tok['value'] == '}':
-                            brace_count -= 1
-                    if tok['type'] == 'symbol' and tok['value'] == ',' and paren_count == 0 and bracket_count == 0 and brace_count == 0:
-                        right_comma_positions.append(i)
-
-                if right_comma_positions:
-                    elements = []
-                    last_pos = 0
-                    for comma_pos in right_comma_positions:
-                        value_tokens = right_tokens[last_pos:comma_pos]
-                        if value_tokens and value_tokens[0]['type'] == 'symbol' and value_tokens[0]['value'] == '[':
-                            val_node, _, _ = parse_list(value_tokens, 0, all_lines, linepos)
-                        elif value_tokens and value_tokens[0]['type'] == 'symbol' and value_tokens[0]['value'] == '{':
-                            val_node, _, _ = parse_dict(value_tokens, 0, all_lines, linepos)
-                        else:
-                            val_node, _, _ = parse_expr(value_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
-                        if val_node:
-                            elements.append(val_node)
-                        last_pos = comma_pos + 1
-                    value_tokens = right_tokens[last_pos:]
-                    if value_tokens:
-                        if value_tokens and value_tokens[0]['type'] == 'symbol' and value_tokens[0]['value'] == '[':
-                            val_node, _, _ = parse_list(value_tokens, 0, all_lines, linepos)
-                        elif value_tokens and value_tokens[0]['type'] == 'symbol' and value_tokens[0]['value'] == '{':
-                            val_node, _, _ = parse_dict(value_tokens, 0, all_lines, linepos)
-                        else:
-                            val_node, _, _ = parse_expr(value_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
-                        if val_node:
-                            elements.append(val_node)
-                    right_node = {'type': 'list', 'elements': elements}
-                    final_pos = assig_pos + 1 + len(right_tokens)
-                else:
-                    if right_tokens and right_tokens[0]['type'] == 'symbol' and right_tokens[0]['value'] == '{':
-                        right_node, right_new_pos, _ = parse_dict(right_tokens, 0, all_lines, linepos)
-                    elif right_tokens and right_tokens[0]['type'] == 'symbol' and right_tokens[0]['value'] == '[':
-                        right_node, right_new_pos, _ = parse_list(right_tokens, 0, all_lines, linepos)
-                    else:
-                        right_node, right_new_pos, _ = parse_expr(right_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
-                    if not right_node:
-                        raise KeiError("SyntaxError", "无效的赋值右边")
-                    final_pos = assig_pos + 1 + right_new_pos
-
-                node = {
-                    'type': 'compound_assign',
-                    'left': left_node,
-                    'right': right_node,
-                    'op': compound_op
-                }
-                return node, final_pos, linepos
-
-            # 查找普通赋值 =
-            assig_pos = -1
-            paren_count = bracket_count = brace_count = 0
-            for i in range(pos, len(tokens)):
-                toke = tokens[i]
-                if toke['type'] == 'symbol':
-                    if toke['value'] == '(':
-                        paren_count += 1
-                    elif toke['value'] == ')':
-                        paren_count -= 1
-                    elif toke['value'] == '[':
-                        bracket_count += 1
-                    elif toke['value'] == ']':
-                        bracket_count -= 1
-                    elif toke['value'] == '{':
-                        brace_count += 1
-                    elif toke['value'] == '}':
-                        brace_count -= 1
-
-                if (toke.get('type') == 'op' and toke.get('value') == "="
-                    and paren_count == 0 and bracket_count == 0 and brace_count == 0):
-                    assig_pos = i
-                    break
-
-            if assig_pos != -1 and assig_pos > pos:
-                left_tokens = tokens[pos:assig_pos]
-
-                left_comma_positions = []
-                paren_count = bracket_count = brace_count = 0
-                for i, tok in enumerate(left_tokens):
-                    if tok['type'] == 'symbol':
-                        if tok['value'] == '(':
-                            paren_count += 1
-                        elif tok['value'] == ')':
-                            paren_count -= 1
-                        elif tok['value'] == '[':
-                            bracket_count += 1
-                        elif tok['value'] == ']':
-                            bracket_count -= 1
-                        elif tok['value'] == '{':
-                            brace_count += 1
-                        elif tok['value'] == '}':
-                            brace_count -= 1
-                    if tok['type'] == 'symbol' and tok['value'] == ',' and paren_count == 0 and bracket_count == 0 and brace_count == 0:
-                        left_comma_positions.append(i)
-
-                if left_comma_positions:
-                    vars_list = []
-                    rest_var = None
-                    kwargs_var = None
-                    last_pos = 0
-                    for comma_pos in left_comma_positions:
-                        var_tokens = left_tokens[last_pos:comma_pos]
-                        if len(var_tokens) == 2 and var_tokens[0]['type'] == 'op' and var_tokens[0]['value'] == '**':
-                            if var_tokens[1]['type'] == 'name':
-                                kwargs_var = var_tokens[1]['value']
-                            else:
-                                raise KeiError("SyntaxError", f"** 后面必须是变量名, 得到 {var_tokens[1]}")
-                        elif len(var_tokens) == 2 and var_tokens[0]['type'] == 'op' and var_tokens[0]['value'] == '*':
-                            if var_tokens[1]['type'] == 'name':
-                                rest_var = var_tokens[1]['value']
-                            else:
-                                raise KeiError("SyntaxError", f"* 后面必须是变量名, 得到 {var_tokens[1]}")
-                        elif len(var_tokens) == 1 and var_tokens[0]['type'] == 'name':
-                            vars_list.append(var_tokens[0]['value'])
-                        elif len(var_tokens) > 0:
-                            raise KeiError("SyntaxError", f"多变量赋值左边必须是变量名、*rest 或 **kwargs, 得到 {var_tokens}")
-                        last_pos = comma_pos + 1
-                    var_tokens = left_tokens[last_pos:]
-                    if len(var_tokens) == 2 and var_tokens[0]['type'] == 'op' and var_tokens[0]['value'] == '**':
-                        if var_tokens[1]['type'] == 'name':
-                            kwargs_var = var_tokens[1]['value']
-                        else:
-                            raise KeiError("SyntaxError", f"** 后面必须是变量名, 得到 {var_tokens[1]}")
-                    elif len(var_tokens) == 2 and var_tokens[0]['type'] == 'op' and var_tokens[0]['value'] == '*':
-                        if var_tokens[1]['type'] == 'name':
-                            rest_var = var_tokens[1]['value']
-                        else:
-                            raise KeiError("SyntaxError", f"* 后面必须是变量名, 得到 {var_tokens[1]}")
-                    elif len(var_tokens) == 1 and var_tokens[0]['type'] == 'name':
-                        vars_list.append(var_tokens[0]['value'])
-                    elif len(var_tokens) > 0:
-                        raise KeiError("SyntaxError", f"多变量赋值左边必须是变量名、*rest 或 **kwargs, 得到 {var_tokens}")
-                    left_node = {'type': 'multiassign', 'vars': vars_list, 'rest': rest_var, 'kwargs': kwargs_var}
-                else:
-                    left_node, left_new_pos, _ = parse_expr(left_tokens, 0, allow_assign=True, all_lines=all_lines, linepos=linepos)
-                    if not left_node or left_new_pos != len(left_tokens):
-                        raise KeiError("SyntaxError", f"无效的赋值左边: {left_tokens}")
-
-                right_tokens = tokens[assig_pos + 1:]
-                right_comma_positions = []
-                paren_count = bracket_count = brace_count = 0
-                for i, tok in enumerate(right_tokens):
-                    if tok['type'] == 'symbol':
-                        if tok['value'] == '(':
-                            paren_count += 1
-                        elif tok['value'] == ')':
-                            paren_count -= 1
-                        elif tok['value'] == '[':
-                            bracket_count += 1
-                        elif tok['value'] == ']':
-                            bracket_count -= 1
-                        elif tok['value'] == '{':
-                            brace_count += 1
-                        elif tok['value'] == '}':
-                            brace_count -= 1
-                    if tok['type'] == 'symbol' and tok['value'] == ',' and paren_count == 0 and bracket_count == 0 and brace_count == 0:
-                        right_comma_positions.append(i)
-
-                if right_comma_positions:
-                    elements = []
-                    last_pos = 0
-                    for comma_pos in right_comma_positions:
-                        value_tokens = right_tokens[last_pos:comma_pos]
-                        if value_tokens and value_tokens[0]['type'] == 'symbol' and value_tokens[0]['value'] == '[':
-                            val_node, _, _ = parse_list(value_tokens, 0, all_lines, linepos)
-                        elif value_tokens and value_tokens[0]['type'] == 'symbol' and value_tokens[0]['value'] == '{':
-                            val_node, _, _ = parse_dict(value_tokens, 0, all_lines, linepos)
-                        else:
-                            val_node, _, _ = parse_expr(value_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
-                        if val_node:
-                            elements.append(val_node)
-                        last_pos = comma_pos + 1
-                    value_tokens = right_tokens[last_pos:]
-                    if value_tokens:
-                        if value_tokens and value_tokens[0]['type'] == 'symbol' and value_tokens[0]['value'] == '[':
-                            val_node, _, _ = parse_list(value_tokens, 0, all_lines, linepos)
-                        elif value_tokens and value_tokens[0]['type'] == 'symbol' and value_tokens[0]['value'] == '{':
-                            val_node, _, _ = parse_dict(value_tokens, 0, all_lines, linepos)
-                        else:
-                            val_node, _, _ = parse_expr(value_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
-                        if val_node:
-                            elements.append(val_node)
-                    right_node = {'type': 'list', 'elements': elements}
-                    final_pos = assig_pos + 1 + len(right_tokens)
-                else:
-                    if right_tokens and right_tokens[0]['type'] == 'symbol' and right_tokens[0]['value'] == '{':
-                        right_node, right_new_pos, _ = parse_dict(right_tokens, 0, all_lines, linepos)
-                    elif right_tokens and right_tokens[0]['type'] == 'symbol' and right_tokens[0]['value'] == '[':
-                        right_node, right_new_pos, _ = parse_list(right_tokens, 0, all_lines, linepos)
-                    else:
-                        right_node, right_new_pos, _ = parse_expr(right_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
-                    if not right_node:
-                        raise KeiError("SyntaxError", "无效的赋值右边")
-                    final_pos = assig_pos + 1 + right_new_pos
-
-                node = {'type': 'assign', 'left': left_node, 'right': right_node}
-                return node, final_pos, linepos
-
-            # 不是赋值语句，作为表达式解析
-            node, new_pos, linepos = parse_expr(tokens, pos, allow_assign=False, all_lines=all_lines, linepos=linepos)
-            if node is None:
-                if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '}':
-                    return None, pos, linepos
-                raise KeiError("SyntaxError", f"无效的语法: {tokens[pos]['value'] if pos < len(tokens) else 'EOF'}")
-            return node, new_pos, linepos
-
-        node, new_pos, new_line = stmt()
-        if node is not None:
-            return node | {'source': code, 'linenum': tokens[pos]['linenum']}, new_pos, new_line
-        else:
-            return None, new_pos, new_line
-
-    except Exception as e:
-        # 错误处理保持不变
-        error_config = {
-            ZeroDivisionError: ("ZeroDivisionError", "无法对 0 进行除法"),
-            OverflowError: ("OverflowError", f"数值过大, 无法处理: {e}"),
-            FloatingPointError: ("FloatingPointError", f"浮点运算错误: {e}"),
-            ArithmeticError: ("ArithmeticError", f"运算错误: {e}"),
-            IndexError: ("IndexError", f"索引超出范围: {e}"),
-            KeyError: ("KeyError", f"键不存在: {e}"),
-            LookupError: ("LookupError", f"查找错误: {e}"),
-            TypeError: ("TypeError", f"类型错误: {e}"),
-            ValueError: ("ValueError", f"值错误: {e}"),
-            AttributeError: ("AttributeError", f"属性不存在: {e}"),
-            UnboundLocalError: ("UnboundLocalError", f"局部变量未绑定: {e}"),
-            NameError: ("NameError", f"名称未定义: {e}"),
-            FileNotFoundError: ("NotFoundError", f"文件未找到: {e}"),
-            PermissionError: ("PermissionError", f"权限不足无法访问文件: {e}"),
-            IsADirectoryError: ("IsDirError", f"预期文件但得到目录: {e}"),
-            NotADirectoryError: ("NotDirError", f"预期目录但得到文件: {e}"),
-            FileExistsError: ("FileExistsError", f"文件已存在: {e}"),
-            TimeoutError: ("TimeoutError", f"操作超时: {e}"),
-            OSError: ("OSError", f"操作系统错误: {e}"),
-            RecursionError: ("RecursionError", f"递归深度超过限制"),
-            KeiError: (e.types, e.value) if isinstance(e, KeiError) else ()
-        }
-
-        for exc_type, (err_name, err_msg) in error_config.items():
-            if isinstance(e, exc_type):
-                error(
-                    err_name if err_name is not err_msg else None,
-                    err_msg,
-                    __kei__.stack.copy(),
-                    globals()['source'],
-                    globals()['linenum']+1,
-                    __kei__.get('file', '未知文件')
-                )
-                if not __kei__.repl:
-                    sys.exit(1)
-                else:
-                    raise
-        else:
-            error(
-                type(e).__name__,
-                str(e),
-                __kei__.stack.copy(),
-                globals()['source'],
-                globals()['linenum']+1,
-                __kei__.get('file', '未知文件')
-            )
-            if not __kei__.repl:
-                sys.exit(1)
             else:
-                raise
+                raise KeiError("SyntaxError", f"未知的符号: \"{tokens[pos]['value']}\"")
+
+        pos += 1  # 跳过 ')'
+
+        hint = None
+        if pos < len(tokens) and tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '->':
+            pos += 1
+            hint, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
+
+        # 箭头函数
+        if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '=>':
+            pos += 1
+            expr, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
+            body = [{'type': 'return', 'value': expr}]
+            __kei__.stack.pop()
+            node = {
+                'type': 'function',
+                'name': func_name,
+                'params': params,
+                'defaults': defaults,
+                'body': body,
+                'hint': hint,
+                'source': source_line,
+                'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
+            }
+            return node, pos, linepos
+
+        body, pos, linepos = parse_block(tokens, pos, all_lines, linepos, {'type': 'symbol', 'value': '{'})
+
+        __kei__.stack.pop()
+        node = {
+            'type': 'function',
+            'name': func_name,
+            'params': params,
+            'defaults': defaults,
+            'body': body,
+            'hint': hint,
+            'source': source_line,
+            'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
+        }
+        return node, pos, linepos
+    except:
+        __kei__.stack.pop()
+        raise
+
+
+def parse_if_while_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
+    """解析 if/while/unless/until 语句"""
+    stmt_type = tokens[pos]['value']
+    pos += 1
+
+    cond, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
+
+    body, pos, linepos = parse_block(tokens, pos, all_lines, linepos, {'type': 'symbol', 'value': '{'})
+
+    node = {
+        'type': stmt_type,
+        'cond': cond,
+        'body': body,
+        'source': source_line,
+        'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
+    }
+
+    # if/unless 需要处理 elif/else
+    if stmt_type in {'if', 'unless'}:
+        elif_chain = []
+        else_body = None
+
+        while linepos < len(all_lines) and pos < len(all_lines[linepos]):
+            # 跳过分号
+            while pos < len(all_lines[linepos]) and all_lines[linepos][pos]['type'] == 'op' and all_lines[linepos][pos]['value'] == ';':
+                pos += 1
+            if pos >= len(all_lines[linepos]):
+                linepos += 1
+                pos = 0
+                if linepos >= len(all_lines):
+                    break
+                continue
+
+            next_token = all_lines[linepos][pos]
+
+            if next_token['type'] == 'name' and next_token['value'] == 'elif':
+                pos += 1
+                elif_cond, pos, linepos = parse_expr(all_lines[linepos], pos, all_lines=all_lines, linepos=linepos)
+                elif_body, pos, linepos = parse_block(all_lines[linepos], pos, all_lines, linepos, {'type': 'symbol', 'value': '{'})
+                elif_chain.append({'cond': elif_cond, 'body': elif_body})
+
+            elif next_token['type'] == 'name' and next_token['value'] == 'else':
+                pos += 1
+                else_body, pos, linepos = parse_block(all_lines[linepos], pos, all_lines, linepos, {'type': 'symbol', 'value': '{'})
+                break
+
+            else:
+                break
+
+        node['elif_chain'] = elif_chain
+        node['else_body'] = else_body
+
+    return node, pos, linepos
+
+
+def parse_match_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
+    """解析 match 语句"""
+    pos += 1
+
+    value_expr, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
+
+    if pos >= len(tokens) or tokens[pos]['type'] != 'symbol' or tokens[pos]['value'] != '{':
+        raise KeiError("SyntaxError", "match 后面需要 {")
+    pos += 1
+
+    arms = []
+    current_line = linepos
+    current_pos = pos
+
+    while True:
+        # 跳过空行和分号
+        while current_line < len(all_lines) and current_pos < len(all_lines[current_line]):
+            if all_lines[current_line][current_pos]['type'] == 'op' and all_lines[current_line][current_pos]['value'] == ';':
+                current_pos += 1
+            else:
+                break
+        if current_pos >= len(all_lines[current_line]):
+            current_line += 1
+            current_pos = 0
+            if current_line >= len(all_lines):
+                break
+            continue
+
+        if all_lines[current_line][current_pos]['type'] == 'name' and all_lines[current_line][current_pos]['value'] == 'case':
+            current_pos += 1
+
+            # 解析 pattern（支持 |）
+            patterns = []
+            pattern, current_pos, linepos = parse_match_pattern(all_lines[current_line], current_pos, all_lines, linepos)
+            patterns.append(pattern)
+            while current_pos < len(all_lines[current_line]):
+                if (all_lines[current_line][current_pos]['type'] == 'op' and
+                    all_lines[current_line][current_pos]['value'] == '|'):
+                    current_pos += 1
+                    pattern, current_pos, linepos = parse_match_pattern(all_lines[current_line], current_pos, all_lines, linepos)
+                    patterns.append(pattern)
+                else:
+                    break
+
+            # case body
+            body, current_pos, current_line = parse_block(all_lines[current_line], current_pos, all_lines, current_line, {'type': 'symbol', 'value': '{'})
+            arms.append({'patterns': patterns, 'body': body})
+
+        elif all_lines[current_line][current_pos]['type'] == 'symbol' and all_lines[current_line][current_pos]['value'] == '}':
+            current_pos += 1
+            break
+
+        else:
+            raise KeiError("SyntaxError", "match 块内只能有 case 语句")
+
+    node = {
+        'type': 'match',
+        'value': value_expr,
+        'arms': arms,
+        'source': source_line,
+        'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
+    }
+    return node, current_pos, current_line
+
+
+def parse_return_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
+    """解析 return 语句"""
+    pos += 1
+    if pos >= len(tokens) or (tokens[pos]['type'] == 'op' and tokens[pos]['value'] == ';'):
+        node = {'type': 'return', 'value': None}
+        return node, pos, linepos
+
+    first, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
+    values = [first]
+    while pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
+        pos += 1
+        next_val, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
+        values.append(next_val)
+
+    if len(values) == 1:
+        node = {'type': 'return', 'value': values[0]}
+    else:
+        node = {'type': 'return', 'value': {'type': 'list', 'elements': values}}
+
+    node['source'] = source_line
+    node['linenum'] = tokens[pos]['linenum'] if pos < len(tokens) else linepos
+    return node, pos, linepos
+
+
+def parse_with_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
+    """解析 with 语句"""
+    pos += 1
+    expr, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
+
+    as_var = None
+    if pos < len(tokens) and tokens[pos]['type'] == 'name' and tokens[pos]['value'] == 'as':
+        pos += 1
+        if pos >= len(tokens) or tokens[pos]['type'] != 'name':
+            raise KeiError("SyntaxError", "as 后面需要变量名")
+        as_var = tokens[pos]['value']
+        pos += 1
+
+    body, pos, linepos = parse_block(tokens, pos, all_lines, linepos, {'type': 'symbol', 'value': '{'})
+
+    node = {
+        'type': 'with',
+        'expr': expr,
+        'as_var': as_var,
+        'body': body,
+        'source': source_line,
+        'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
+    }
+    return node, pos, linepos
+
+
+def parse_namespace_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
+    """解析 namespace 语句"""
+    pos += 1
+
+    if pos >= len(tokens) or tokens[pos]['type'] != 'name':
+        raise KeiError("SyntaxError", "命名空间需要名字")
+    ns_name = tokens[pos]['value']
+    if ns_name in keywords:
+        raise KeiError("SyntaxError", f"无法使用关键字 '{ns_name}' 作为命名空间名")
+    pos += 1
+
+    body, pos, linepos = parse_block(tokens, pos, all_lines, linepos, {'type': 'symbol', 'value': '{'})
+
+    node = {
+        'type': 'namespace',
+        'name': ns_name,
+        'body': body,
+        'source': source_line,
+        'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
+    }
+    return node, pos, linepos
+
+
+def parse_global_del_raise_use(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
+    """解析 global/del/raise/use 语句"""
+    stmt_type = tokens[pos]['value']
+    pos += 1
+    targets = []
+
+    while pos < len(tokens):
+        target, new_pos, linepos = parse_expr(tokens, pos, allow_assign=True, all_lines=all_lines, linepos=linepos)
+        if target:
+            targets.append(target)
+            pos = new_pos
+
+        if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
+            pos += 1
+            continue
+        else:
+            break
+
+    if not targets and stmt_type != "raise":
+        raise KeiError("SyntaxError", f"{stmt_type} 需要至少一个参数")
+
+    if len(targets) > 2 and stmt_type == "raise":
+        raise KeiError("SyntaxError", "raise 只能抛出一个错误字符串和可选类型")
+
+    node = {
+        'type': stmt_type,
+        'names': targets,
+        'source': source_line,
+        'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
+    }
+    return node, pos, linepos
+
+
+def parse_import_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
+    """解析 import 语句"""
+    pos += 1
+    modules = []
+
+    while pos < len(tokens):
+        if tokens[pos]['type'] == 'name':
+            module_parts = [tokens[pos]['value']]
+            pos += 1
+
+            while (pos < len(tokens) and
+                   tokens[pos].get('type') == 'symbol' and
+                   tokens[pos].get('value') == '.' and
+                   pos + 1 < len(tokens) and
+                   tokens[pos + 1].get('type') == 'name'):
+                pos += 1
+                module_parts.append(tokens[pos]['value'])
+                pos += 1
+
+            module_name = '.'.join(module_parts)
+
+            alias = None
+            if pos < len(tokens) and tokens[pos].get('type') == 'name' and tokens[pos].get('value') == 'as':
+                pos += 1
+                if pos < len(tokens) and tokens[pos]['type'] == 'name':
+                    alias = tokens[pos]['value']
+                    pos += 1
+
+            if (pos < len(tokens) and
+                tokens[pos].get('type') == 'symbol' and tokens[pos].get('value') == '.' and
+                pos + 1 < len(tokens) and
+                tokens[pos + 1].get('type') == 'op' and tokens[pos + 1].get('value') == '*'):
+                modules.append({'type': 'wildcard', 'module': module_name, 'alias': alias})
+                pos += 2
+            else:
+                modules.append({'type': 'normal', 'module': module_name, 'alias': alias})
+
+        if pos < len(tokens) and tokens[pos].get('type') == 'symbol' and tokens[pos].get('value') == ',':
+            pos += 1
+        else:
+            break
+
+    node = {
+        'type': 'import',
+        'modules': modules,
+        'source': source_line,
+        'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
+    }
+    return node, pos, linepos
+
+
+def parse_from_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
+    """解析 from ... import 语句"""
+    pos += 1
+
+    if pos >= len(tokens) or tokens[pos]['type'] != 'name':
+        raise KeiError("SyntaxError", "from 后面需要模块名")
+
+    module_parts = [tokens[pos]['value']]
+    pos += 1
+
+    while (pos < len(tokens) and
+           tokens[pos].get('type') == 'symbol' and
+           tokens[pos].get('value') == '.' and
+           pos + 1 < len(tokens) and
+           tokens[pos + 1].get('type') == 'name'):
+        pos += 1
+        module_parts.append(tokens[pos]['value'])
+        pos += 1
+
+    module_name = '.'.join(module_parts)
+
+    if pos >= len(tokens) or tokens[pos].get('type') != 'name' or tokens[pos].get('value') != 'import':
+        raise KeiError("SyntaxError", "from ... 后面需要 import")
+    pos += 1
+
+    imports = []
+
+    if pos < len(tokens) and tokens[pos].get('type') == 'op' and tokens[pos].get('value') == '*':
+        imports.append({'type': 'wildcard', 'name': None, 'alias': None})
+        pos += 1
+    else:
+        while pos < len(tokens):
+            if tokens[pos]['type'] == 'name':
+                name = tokens[pos]['value']
+                pos += 1
+
+                alias = None
+                if pos < len(tokens) and tokens[pos].get('type') == 'name' and tokens[pos].get('value') == 'as':
+                    pos += 1
+                    if pos < len(tokens) and tokens[pos]['type'] == 'name':
+                        alias = tokens[pos]['value']
+                        pos += 1
+
+                imports.append({'type': 'normal', 'name': name, 'alias': alias})
+
+                if pos < len(tokens) and tokens[pos].get('type') == 'symbol' and tokens[pos].get('value') == ',':
+                    pos += 1
+                    continue
+                else:
+                    break
+            else:
+                break
+
+    node = {
+        'type': 'fromimport',
+        'module': module_name,
+        'imports': imports,
+        'source': source_line,
+        'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
+    }
+    return node, pos, linepos
+
+
+# ========== 辅助查找函数 ==========
+
+def find_compound_op(tokens: list, pos: int) -> Optional[str]:
+    """查找复合赋值运算符"""
+    compound_ops = {"+=", "-=", "*=", "/="}
+    paren_count = bracket_count = brace_count = 0
+
+    for i in range(pos, len(tokens)):
+        toke = tokens[i]
+        if toke['type'] == 'symbol':
+            if toke['value'] == '(':
+                paren_count += 1
+            elif toke['value'] == ')':
+                paren_count -= 1
+            elif toke['value'] == '[':
+                bracket_count += 1
+            elif toke['value'] == ']':
+                bracket_count -= 1
+            elif toke['value'] == '{':
+                brace_count += 1
+            elif toke['value'] == '}':
+                brace_count -= 1
+
+        if (toke.get('type') == 'op' and toke.get('value') in compound_ops
+            and paren_count == 0 and bracket_count == 0 and brace_count == 0):
+            return toke.get('value')
+
+    return None
+
+
+def find_assign_pos(tokens: list, pos: int) -> int:
+    """查找赋值运算符 = 的位置"""
+    paren_count = bracket_count = brace_count = 0
+
+    for i in range(pos, len(tokens)):
+        toke = tokens[i]
+        if toke['type'] == 'symbol':
+            if toke['value'] == '(':
+                paren_count += 1
+            elif toke['value'] == ')':
+                paren_count -= 1
+            elif toke['value'] == '[':
+                bracket_count += 1
+            elif toke['value'] == ']':
+                bracket_count -= 1
+            elif toke['value'] == '{':
+                brace_count += 1
+            elif toke['value'] == '}':
+                brace_count -= 1
+
+        if (toke.get('type') == 'op' and toke.get('value') == "="
+            and paren_count == 0 and bracket_count == 0 and brace_count == 0):
+            return i
+
+    return -1
+
+
+def parse_compound_assign(tokens: list, pos: int, all_lines: list, linepos: int,
+                          compound_op: str, source_line: str) -> tuple:
+    """解析复合赋值语句"""
+    # 找到运算符位置
+    op_pos = -1
+    paren_count = bracket_count = brace_count = 0
+    for i in range(pos, len(tokens)):
+        toke = tokens[i]
+        if toke['type'] == 'symbol':
+            if toke['value'] == '(':
+                paren_count += 1
+            elif toke['value'] == ')':
+                paren_count -= 1
+            elif toke['value'] == '[':
+                bracket_count += 1
+            elif toke['value'] == ']':
+                bracket_count -= 1
+            elif toke['value'] == '{':
+                brace_count += 1
+            elif toke['value'] == '}':
+                brace_count -= 1
+
+        if (toke.get('type') == 'op' and toke.get('value') == compound_op
+            and paren_count == 0 and bracket_count == 0 and brace_count == 0):
+            op_pos = i
+            break
+
+    if op_pos == -1:
+        raise KeiError("SyntaxError", "找不到复合赋值运算符")
+
+    # 解析左边
+    left_tokens = tokens[pos:op_pos]
+    left_node, left_new_pos, _ = parse_expr(left_tokens, 0, allow_assign=True, all_lines=all_lines, linepos=linepos)
+    if not left_node or left_new_pos != len(left_tokens):
+        raise KeiError("SyntaxError", f"无效的赋值左边: {left_tokens}")
+
+    # 解析右边
+    right_tokens = tokens[op_pos + 1:]
+    right_node, right_new_pos, _ = parse_expr(right_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
+    if not right_node:
+        raise KeiError("SyntaxError", "无效的赋值右边")
+
+    final_pos = op_pos + 1 + right_new_pos
+
+    node = {
+        'type': 'compound_assign',
+        'left': left_node,
+        'right': right_node,
+        'op': compound_op,
+        'source': source_line,
+        'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
+    }
+    return node, final_pos, linepos
+
+
+def parse_assign(tokens: list, pos: int, assign_pos: int, all_lines: list,
+                 linepos: int, source_line: str) -> tuple:
+    """解析普通赋值语句"""
+    # 解析左边
+    left_tokens = tokens[pos:assign_pos]
+    left_node, left_new_pos, _ = parse_expr(left_tokens, 0, allow_assign=True, all_lines=all_lines, linepos=linepos)
+    if not left_node or left_new_pos != len(left_tokens):
+        raise KeiError("SyntaxError", f"无效的赋值左边: {left_tokens}")
+
+    # 解析右边
+    right_tokens = tokens[assign_pos + 1:]
+    right_node, right_new_pos, _ = parse_expr(right_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
+    if not right_node:
+        raise KeiError("SyntaxError", "无效的赋值右边")
+
+    final_pos = assign_pos + 1 + right_new_pos
+
+    node = {
+        'type': 'assign',
+        'left': left_node,
+        'right': right_node,
+        'source': source_line,
+        'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
+    }
+    return node, final_pos, linepos
 
 def parse_call(name, tokens, pos, is_attr=False, all_lines=None, linepos=0):
-    """解析函数调用，返回 (node, new_pos, new_linepos)"""
-    pos += 1  # 跳过 '('
+    pos += 1
     arguments = []
 
     if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ')':
@@ -2467,21 +1799,18 @@ def parse_call(name, tokens, pos, is_attr=False, all_lines=None, linepos=0):
         return node, pos, linepos
 
     while True:
-        # 处理 **kwargs
         if (pos < len(tokens) and tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '**' and
               pos + 1 < len(tokens)):
             pos += 1
             val, pos, linepos = parse_expr(tokens, pos, in_call=True, all_lines=all_lines, linepos=linepos)
             arguments.append({'type': 'starkwargs', 'value': val})
 
-        # 处理 *args
         elif (pos < len(tokens) and tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '*' and
               pos + 1 < len(tokens)):
             pos += 1
             val, pos, linepos = parse_expr(tokens, pos, in_call=True, all_lines=all_lines, linepos=linepos)
             arguments.append({'type': 'starargs', 'value': val})
 
-        # 关键字参数 name=value
         elif (pos < len(tokens) and tokens[pos]['type'] == 'name' and
               pos + 1 < len(tokens) and tokens[pos+1]['type'] == 'op' and
               tokens[pos+1]['value'] == "="):
@@ -2494,7 +1823,6 @@ def parse_call(name, tokens, pos, is_attr=False, all_lines=None, linepos=0):
             arg, pos, linepos = parse_expr(tokens, pos, in_call=True, all_lines=all_lines, linepos=linepos)
             arguments.append({'type': 'positional', 'value': arg})
 
-        # 检查逗号或结束
         if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
             pos += 1
             continue
@@ -2516,7 +1844,6 @@ def parse_call(name, tokens, pos, is_attr=False, all_lines=None, linepos=0):
     return node, pos, linepos
 
 def parse_call_attr(obj_node, tokens, pos, in_call=False, all_lines=None, linepos=0):
-    """解析方法调用，直接调用 parse_call"""
     return parse_call(obj_node, tokens, pos, is_attr=True, all_lines=all_lines, linepos=linepos)
 
 def parse_atom(tokens: list, pos: int, in_call=False, all_lines=None, linepos=0) -> tuple:
@@ -2528,7 +1855,6 @@ def parse_atom(tokens: list, pos: int, in_call=False, all_lines=None, linepos=0)
     if t["type"] == "symbol" and t["value"] == "}":
         return None, pos, linepos
 
-    # lambda 函数
     if t['type'] == 'name' and t['value'] == 'fn':
         pos += 1
         params = []
@@ -2547,15 +1873,12 @@ def parse_atom(tokens: list, pos: int, in_call=False, all_lines=None, linepos=0)
         node = {'type': 'lambda', 'params': params, 'body': expr}
         return node, pos, linepos
 
-    # 关键字直接返回 None，让上层 parse_stmt 处理
     if t["type"] == "name" and t["value"] in keywords:
         return None, pos, linepos
 
-    # 字面量
     if t["type"] in {"int", "float", "str", "bool", "null", "list", "dict"}:
         node = t
         pos += 1
-        # 处理后缀操作
         while pos < len(tokens):
             current = tokens[pos]
             if current['type'] == 'symbol' and current['value'] == '.':
@@ -2574,18 +1897,15 @@ def parse_atom(tokens: list, pos: int, in_call=False, all_lines=None, linepos=0)
                 break
         return node, pos, linepos
 
-    # 名字（标识符）
     if t["type"] == "name":
         name = t["value"]
         pos += 1
-        # 检查是否是 key=value 形式（在字典或参数列表中）
         if pos < len(tokens) and tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '=':
             if {'type': 'name', 'value': 'type'} not in tokens:
                 pos -= 1
                 return None, pos, linepos
 
         node = {'type': 'name', 'value': name}
-        # 处理属性链和方法调用
         while pos < len(tokens):
             if tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '.':
                 if pos + 1 < len(tokens) and tokens[pos+1]['type'] == 'symbol' and tokens[pos+1]['value'] == '.':
@@ -2606,7 +1926,6 @@ def parse_atom(tokens: list, pos: int, in_call=False, all_lines=None, linepos=0)
                 break
         return node, pos, linepos
 
-    # 括号表达式
     if t["type"] == "symbol" and t["value"] == "(":
         pos += 1
         expr, pos, linepos = parse_expr(tokens, pos, in_call, all_lines=all_lines, linepos=linepos)
@@ -2634,10 +1953,8 @@ def parse_atom(tokens: list, pos: int, in_call=False, all_lines=None, linepos=0)
                 break
         return node, pos, linepos
 
-    # 列表
     if t["type"] == "symbol" and t["value"] == "[":
         node, pos, linepos = parse_list(tokens, pos, all_lines, linepos)
-        # 处理后缀属性/调用
         while pos < len(tokens):
             if tokens[pos]["type"] == "symbol" and tokens[pos]["value"] == ".":
                 pos += 1
@@ -2652,7 +1969,6 @@ def parse_atom(tokens: list, pos: int, in_call=False, all_lines=None, linepos=0)
                 break
         return node, pos, linepos
 
-    # 字典
     if t["type"] == "symbol" and t["value"] == "{":
         if pos + 1 < len(tokens) and tokens[pos+1]["type"] == "name" and tokens[pos+1]["value"] in keywords:
             return None, pos, linepos
@@ -2662,8 +1978,7 @@ def parse_atom(tokens: list, pos: int, in_call=False, all_lines=None, linepos=0)
     return None, pos, linepos
 
 def parse_index_with_obj(obj_node, tokens, pos, all_lines=None, linepos=0):
-    """解析索引访问，返回 (node, new_pos, new_linepos)"""
-    pos += 1  # 跳过 '['
+    pos += 1
     bracket_count = 1
     end_pos = pos
     while end_pos < len(tokens):
@@ -2679,7 +1994,6 @@ def parse_index_with_obj(obj_node, tokens, pos, all_lines=None, linepos=0):
         raise KeiError("SyntaxError", "缺少 ]")
     inner_tokens = tokens[pos:end_pos]
 
-    # 按顶层 ':' 分割（忽略嵌套括号内的冒号）
     parts = []
     current = []
     colon_count = 0
@@ -2688,14 +2002,12 @@ def parse_index_with_obj(obj_node, tokens, pos, all_lines=None, linepos=0):
     brace_count = 0
 
     for toke in inner_tokens:
-        # 检查是否是顶层的冒号
-        is_colon = (token == ':' or (isinstance(token, dict) and token.get('value') == ':'))
+        is_colon = (toke == ':' or (isinstance(toke, dict) and toke.get('value') == ':'))
         if is_colon and paren_count == 0 and bracket_count == 0 and brace_count == 0:
             parts.append(current)
             current = []
             colon_count += 1
         else:
-            # 更新括号计数
             if isinstance(toke, dict) and toke['type'] == 'symbol':
                 if toke['value'] == '(':
                     paren_count += 1
@@ -2731,7 +2043,6 @@ def parse_index_with_obj(obj_node, tokens, pos, all_lines=None, linepos=0):
     return node, new_pos, linepos
 
 def parse_assign(tokens: list, pos: int, all_lines=None, linepos=0) -> tuple:
-    # 检查 ** 赋值
     if (pos + 1 < len(tokens) and
         tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '*' and
         tokens[pos + 1]['type'] == 'op' and tokens[pos + 1]['value'] == '*'):
@@ -2795,7 +2106,6 @@ def parse_pow(tokens, pos, in_call=False, all_lines=None, linepos=0):
 def parse_expr(tokens: list, pos: int, in_call=False, allow_assign=False, in_comp=False, all_lines=None, linepos=0) -> tuple:
     left, pos, linepos = parse_logic(tokens, pos, in_call, allow_assign, in_comp, all_lines, linepos)
 
-    # 三目 if/unless
     while pos < len(tokens):
         t = tokens[pos]
         if t['value'] == 'if' and not in_comp:
@@ -2820,7 +2130,6 @@ def parse_expr(tokens: list, pos: int, in_call=False, allow_assign=False, in_com
             return node, pos, linepos
         break
 
-    # ? 和 ! 后缀
     if pos < len(tokens) and tokens[pos].get('type') == 'op' and tokens[pos].get('value') == '?':
         pos += 1
         node = {'type': 'trysingle', 'expr': left}
@@ -2902,7 +2211,6 @@ def parse_match_pattern(tokens: list, pos: int, all_lines=None, linepos=0) -> tu
     if t['type'] == 'name' and t['value'] == '_':
         return {'type': 'wildcard'}, pos + 1, linepos
 
-    # 按 | 分割 pattern 块
     pattern_blocks = []
     current_block = []
     i = pos
@@ -2959,8 +2267,9 @@ def parse_index(tokens: list, pos: int, all_lines=None, linepos=0) -> tuple:
 
 def parse_dictcomp(tokens, pos, all_lines=None, linepos=0):
     ifunless = None
-    pos += 1  # 跳过 '{'
-    # 找到 'for' 的位置
+    start_pos = pos
+    pos += 1
+
     for_pos = -1
     paren_count = 0
     bracket_count = 0
@@ -2990,7 +2299,6 @@ def parse_dictcomp(tokens, pos, all_lines=None, linepos=0):
     if not pairs_tokens:
         raise KeiError("SyntaxError", "字典生成式需要键值对")
 
-    # 分割键值对
     pairs = []
     current_pair = []
     paren_count = bracket_count = brace_count = 0
@@ -3091,14 +2399,12 @@ def parse_dictcomp(tokens, pos, all_lines=None, linepos=0):
 
 def parse_dict(tokens: list, pos: int, all_lines=None, linepos=0) -> tuple:
     start_pos = pos
-    pos += 1  # 跳过 '{'
+    pos += 1
 
-    # 如果是空字典
     if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '}':
         pos += 1
         return {'type': 'dict', 'pairs': []}, pos, linepos
 
-    # 向前查看，判断是否是字典生成式
     temp_pos = pos
     bracket_count = 1
     paren_count = 0
@@ -3122,7 +2428,6 @@ def parse_dict(tokens: list, pos: int, all_lines=None, linepos=0) -> tuple:
             elif tok['value'] == ']':
                 square_count -= 1
 
-        # 如果在顶层遇到 for，且不在其他括号内，就是字典生成式
         if (tok.get('value') == 'for' and
             bracket_count == 1 and
             paren_count == 0 and
@@ -3131,7 +2436,6 @@ def parse_dict(tokens: list, pos: int, all_lines=None, linepos=0) -> tuple:
 
         temp_pos += 1
 
-    # 不是生成式，正常解析字典
     pairs = []
 
     while pos < len(tokens):
@@ -3139,7 +2443,6 @@ def parse_dict(tokens: list, pos: int, all_lines=None, linepos=0) -> tuple:
             pos += 1
             break
 
-        # 解析键
         if tokens[pos]['type'] == 'str':
             key = tokens[pos]['value']
         elif tokens[pos]['type'] == 'int':
@@ -3207,7 +2510,6 @@ def parse_unary_prefix(tokens, pos, in_call=False, all_lines=None, linepos=0):
         return expr, pos, linepos
 
     expr, pos, linepos = parse_atom(tokens, pos, in_call, all_lines, linepos)
-    # 处理后缀运算符
     while pos < len(tokens):
         t = tokens[pos]
         if t.get('type') == 'op' and t.get('value') in {"++", "--"}:
@@ -3258,12 +2560,10 @@ def parse_methodcall(parts: list, tokens: list, pos: int, all_lines=None, linepo
     return node, pos, linepos
 
 def parse_listcomp(tokens, pos, all_lines=None, linepos=0):
-    """解析列表生成式 [expr for var in iterable if cond]"""
     ifunless = None
     start_pos = pos
-    pos += 1  # 跳过 '['
+    pos += 1
 
-    # 收集表达式部分（直到遇到 'for'）
     expr_tokens = []
     paren_count = 0
     bracket_count = 0
@@ -3273,7 +2573,6 @@ def parse_listcomp(tokens, pos, all_lines=None, linepos=0):
     while temp_pos < len(tokens):
         toke = tokens[temp_pos]
 
-        # 更新括号计数
         if toke['type'] == 'symbol':
             if toke['value'] == '(':
                 paren_count += 1
@@ -3288,7 +2587,6 @@ def parse_listcomp(tokens, pos, all_lines=None, linepos=0):
             elif toke['value'] == '}':
                 brace_count -= 1
 
-        # 找到顶层的 'for' 时停止
         if (toke.get('value') == 'for' and
             paren_count == 0 and
             bracket_count == 0 and
@@ -3301,7 +2599,6 @@ def parse_listcomp(tokens, pos, all_lines=None, linepos=0):
     if not expr_tokens:
         raise KeiError("SyntaxError", "列表生成式需要表达式")
 
-    # 解析表达式（可能包含多个用逗号分隔的表达式）
     has_comma = False
     comma_positions = []
     paren_count = bracket_count = brace_count = 0
@@ -3345,7 +2642,6 @@ def parse_listcomp(tokens, pos, all_lines=None, linepos=0):
         raise KeiError("SyntaxError", "列表生成式需要 'for'")
     pos += 1
 
-    # 解析变量名（支持解包）
     vars = []
     if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '(':
         pos += 1
@@ -3383,17 +2679,14 @@ def parse_listcomp(tokens, pos, all_lines=None, linepos=0):
         raise KeiError("SyntaxError", "列表生成式需要 'in'")
     pos += 1
 
-    # 解析可迭代对象
     iterable, pos, linepos = parse_expr(tokens, pos, in_comp=True, all_lines=all_lines, linepos=linepos)
 
-    # 解析可选的条件
     cond = None
     if pos < len(tokens) and tokens[pos].get('value') == 'if':
         ifunless = tokens[pos]['value']
         pos += 1
         cond, pos, linepos = parse_expr(tokens, pos, in_comp=True, all_lines=all_lines, linepos=linepos)
 
-    # 跳过可能的空格或分号直到 ']'
     while pos < len(tokens):
         if tokens[pos].get('value') == ']':
             pos += 1
@@ -3408,14 +2701,12 @@ def parse_listcomp(tokens, pos, all_lines=None, linepos=0):
 
 def parse_list(tokens: list, pos: int, all_lines=None, linepos=0) -> tuple:
     start_pos = pos
-    pos += 1  # 跳过 '['
+    pos += 1
 
-    # 如果是空列表
     if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ']':
         pos += 1
         return {'type': 'list', 'elements': []}, pos, linepos
 
-    # 向前查看，判断是否是列表生成式
     temp_pos = pos
     bracket_count = 1
     paren_count = 0
@@ -3439,7 +2730,6 @@ def parse_list(tokens: list, pos: int, all_lines=None, linepos=0) -> tuple:
             elif tok['value'] == '}':
                 brace_count -= 1
 
-        # 如果在顶层遇到 for，且不在其他括号内，就是列表生成式
         if (tok.get('value') == 'for' and
             bracket_count == 1 and
             paren_count == 0 and
@@ -3448,7 +2738,6 @@ def parse_list(tokens: list, pos: int, all_lines=None, linepos=0) -> tuple:
 
         temp_pos += 1
 
-    # 不是生成式，正常解析列表
     elements = []
 
     while True:
@@ -3457,7 +2746,6 @@ def parse_list(tokens: list, pos: int, all_lines=None, linepos=0) -> tuple:
             elements.append(elem)
             pos = new_pos
         else:
-            # 如果解析失败，可能是遇到 ] 或 , 等
             if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ']':
                 pos += 1
                 break
@@ -3477,7 +2765,6 @@ def parse_list(tokens: list, pos: int, all_lines=None, linepos=0) -> tuple:
     return {'type': 'list', 'elements': elements}, pos, linepos
 
 def escape(s):
-    """手动处理常见的转义序列, 其他原样保留"""
     result = []
     i = 0
     length = len(s)
@@ -3502,7 +2789,6 @@ def escape(s):
                 result.append("'")
                 i += 2
             elif s[i+1] == '0' and i + 3 < length and s[i+2].isdigit() and s[i+3].isdigit():
-                # 八进制 \xxx
                 try:
                     result.append(chr(int(s[i+1:i+4], 8)))
                     i += 4
@@ -3510,7 +2796,6 @@ def escape(s):
                     result.append(s[i])
                     i += 1
             elif s[i+1] == 'x' and i + 3 < length:
-                # 十六进制 \xhh
                 try:
                     result.append(chr(int(s[i+2:i+4], 16)))
                     i += 4
@@ -3518,7 +2803,6 @@ def escape(s):
                     result.append(s[i])
                     i += 1
             elif s[i+1] == 'u' and i + 5 < length:
-                # Unicode \uhhhh
                 try:
                     result.append(chr(int(s[i+2:i+6], 16)))
                     i += 6
@@ -3526,7 +2810,6 @@ def escape(s):
                     result.append(s[i])
                     i += 1
             elif s[i+1] == 'U' and i + 9 < length:
-                # Unicode \Uhhhhhhhh
                 try:
                     result.append(chr(int(s[i+2:i+10], 16)))
                     i += 10
@@ -3542,7 +2825,6 @@ def escape(s):
     return ''.join(result)
 
 def find_method(class_obj, method_name, env):
-    """在类的继承链中查找方法"""
     while class_obj:
         if method_name in class_obj.get('methods_map', {}):
             return class_obj['methods_map'][method_name]
@@ -3594,7 +2876,6 @@ def runtoken(node, env) -> tuple:
         if node is None:
             raise KeiError("RuntimeError", "出现了未意料的None节点")
 
-        # ========== 字面量 - 返回 Kei 对象 ==========
         if node['type'] in {'null', 'int', 'float', 'str', 'bool', 'list', 'dict'}:
             def temp() -> tuple:
                 if node['type'] == 'null':
@@ -3634,7 +2915,6 @@ def runtoken(node, env) -> tuple:
 
             return temp()
 
-        # ========== match/case 语句 ==========
         if node['type'] == 'match':
             value, _ = runtoken(node['value'], env)
 
@@ -3647,16 +2927,13 @@ def runtoken(node, env) -> tuple:
                         break
 
                     elif pattern_node['type'] == 'expr':
-                        # 单个表达式
                         pattern_val, _ = runtoken(pattern_node['value'], env)
                         if value.__eq__(pattern_val):
                             matched = True
                             break
 
                     elif pattern_node['type'] == 'or_pattern':
-                        # 多个模式：每个 pattern 都是 AST 节点
                         for sub_pattern in pattern_node['patterns']:
-                            # 统一用 runtoken 计算！
                             pattern_val, _ = runtoken(sub_pattern, env)
                             if value.__eq__(pattern_val):
                                 matched = True
@@ -3673,23 +2950,18 @@ def runtoken(node, env) -> tuple:
 
             return None, False
 
-        # ========== 变量访问 ==========
         if node['type'] == 'name':
-            # 直接取 node['value']，但确保它是字符串
             name_value = node['value']
 
-            # 如果 name_value 是字典（比如 {'type': 'name', 'value': 'arr'}），递归取值
             while isinstance(name_value, dict) and 'value' in name_value:
                 name_value = name_value['value']
 
             if name_value == "..." and "..." in env:
                 return env["..."], False
 
-            # 统一处理：按 '.' 分割
             assert type(name_value) is str, "变量名称不是字符串"
             parts = name_value.split('.') if '.' in name_value else [name_value]
 
-            # 查找第一个部分（变量名）
             obj = None
             current = env
             while current is not None:
@@ -3701,7 +2973,6 @@ def runtoken(node, env) -> tuple:
             if obj is None:
                 return undefined, False
 
-            # 如果有更多部分，继续查找属性
             for part in parts[1:]:
                 if isinstance(obj, KeiBase):
                     obj = obj[part]
@@ -3744,7 +3015,6 @@ def runtoken(node, env) -> tuple:
 
             return val, flag
 
-        # ========== 索引访问 ==========
         if node['type'] == 'index':
             obj, _ = runtoken(node['obj'], env)
             index, _ = runtoken(node['index'], env)
@@ -3782,15 +3052,12 @@ def runtoken(node, env) -> tuple:
             finally:
                 __kei__.catch.pop()
 
-        # ========== 切片访问 ==========
         if node['type'] == 'slice':
-            # 获取对象
             obj, _ = runtoken(node['obj'], env)
 
-            # 解析 start, end, step
             start = None
             end = None
-            step = 1  # 默认步长1
+            step = 1
 
             if node['start'] is not None:
                 start_val, _ = runtoken(node['start'], env)
@@ -3807,13 +3074,10 @@ def runtoken(node, env) -> tuple:
                 if isinstance(step_val, KeiInt):
                     step = step_val.value
 
-            # 调用对象的 __getitem__ 并传入切片
             if hasattr(obj, '__getitem__'):
-                # 创建 Python 切片对象
                 py_slice = slice(start, end, step)
                 return obj[py_slice], False
 
-        # ========== 属性访问 ==========
         if node['type'] == 'attr':
             obj, _ = runtoken(node['obj'], env)
             attr = node['attr']
@@ -3828,7 +3092,6 @@ def runtoken(node, env) -> tuple:
                 except AttributeError:
                     return undefined, False
 
-        # ========== 后缀运算 ++/-- ==========
         if node['type'] == 'postfix':
             val, flag = runtoken(node['expr'], env)
             if flag:
@@ -3852,7 +3115,6 @@ def runtoken(node, env) -> tuple:
                             else:
                                 obj[attr] = KeiFloat(new_val)
 
-                    # 返回新值！
                     if isinstance(val, KeiInt):
                         return KeiInt(new_val), flag
                     else:
@@ -3878,7 +3140,6 @@ def runtoken(node, env) -> tuple:
                             else:
                                 obj[attr] = KeiFloat(new_val)
 
-                    # 返回新值！
                     if isinstance(val, KeiInt):
                         return KeiInt(new_val), flag
                     else:
@@ -3886,24 +3147,17 @@ def runtoken(node, env) -> tuple:
                 else:
                     raise KeiError("TypeError", f"无法对 {type(val)} 进行 -- 运算")
 
-        # ========== 复合赋值处理 ==========
         if node['type'] == 'compound_assign':
             def compound_assign():
-                # 傻逼Pylance偷懒给我搞个
-                # "代码太复杂，无法分析；通过重构为子例程或减少条件代码路径来降低复杂性"
-                # 还好我聪明
-
                 right_val, flag = runtoken(node['right'], env)
                 left = node['left']
                 op = node['op']
 
-                # ===== 多变量复合赋值 (a, b += 1, 2) =====
                 if left['type'] == 'multiassign':
                     vars_list = left['vars']
                     rest_var = left.get('rest')
                     kwargs_var = left.get('kwargs')
 
-                    # 处理右边的值
                     if isinstance(right_val, KeiList):
                         right_items = right_val.items
                     elif isinstance(right_val, (list, tuple)):
@@ -3911,7 +3165,6 @@ def runtoken(node, env) -> tuple:
                     else:
                         right_items = [right_val]
 
-                    # 处理普通变量
                     new_values = []
                     for i, var in enumerate(vars_list):
                         if var == '_':
@@ -3935,7 +3188,6 @@ def runtoken(node, env) -> tuple:
                         env[var] = new_val
                         new_values.append(new_val)
 
-                    # 处理 *rest 变量
                     if rest_var:
                         rest_items = right_items[len(vars_list):]
                         current = env.get(rest_var, KeiList([]))
@@ -3946,14 +3198,12 @@ def runtoken(node, env) -> tuple:
                             else:
                                 new_val = KeiList([current] + rest_items)
                         elif op == '-=':
-                            # 列表减法：移除出现在 rest_items 中的元素
                             if isinstance(current, KeiList):
                                 new_items = [x for x in current.items if x not in rest_items]
                             else:
                                 new_items = [current] if current not in rest_items else []
                             new_val = KeiList(new_items)
                         elif op == '*=':
-                            # 列表乘法
                             if rest_items and isinstance(rest_items[0], (int, KeiInt)):
                                 times = rest_items[0].value if isinstance(rest_items[0], KeiInt) else rest_items[0]
                                 if isinstance(current, KeiList):
@@ -3968,11 +3218,9 @@ def runtoken(node, env) -> tuple:
                             raise KeiError("TypeError", f"*rest 变量不支持 {op} 操作")
                         env[rest_var] = new_val
 
-                    # 处理 **kwargs 变量
                     if kwargs_var:
                         current = env.get(kwargs_var, KeiDict({}))
 
-                        # 把右边转成字典
                         if isinstance(right_val, KeiDict):
                             right_dict = right_val.items
                         elif isinstance(right_val, dict):
@@ -3981,7 +3229,6 @@ def runtoken(node, env) -> tuple:
                             raise KeiError("TypeError", f"**kwargs 赋值右边必须是字典，得到 {type(right_val)}")
 
                         if op == '+=':
-                            # 合并字典
                             if isinstance(current, KeiDict):
                                 new_dict = current.items.copy()
                             elif isinstance(current, dict):
@@ -3992,7 +3239,6 @@ def runtoken(node, env) -> tuple:
                             new_val = KeiDict(new_dict)
 
                         elif op == '-=':
-                            # 删除键
                             if isinstance(current, KeiDict):
                                 new_dict = current.items.copy()
                             elif isinstance(current, dict):
@@ -4005,7 +3251,6 @@ def runtoken(node, env) -> tuple:
                             new_val = KeiDict(new_dict)
 
                         elif op == '*=':
-                            # 字典乘法？保留键值对重复 times 次？这啥语义？
                             raise KeiError("TypeError", f"字典不支持 *= 操作")
 
                         elif op == '/=':
@@ -4018,7 +3263,6 @@ def runtoken(node, env) -> tuple:
 
                     return KeiList(new_values), flag
 
-                # ===== 单变量赋值 =====
                 elif left['type'] == 'name':
                     name = left['value']
                     current = env.get(name, undefined)
@@ -4039,12 +3283,10 @@ def runtoken(node, env) -> tuple:
                     env[name] = new_val
                     return new_val, flag
 
-                # ===== 属性赋值 obj.attr += val =====
                 elif left['type'] == 'attr':
                     obj, _ = runtoken(left['obj'], env)
                     attr = left['attr']
 
-                    # 获取当前值
                     if isinstance(obj, KeiBase):
                         current = obj[attr]
                     elif isinstance(obj, dict):
@@ -4052,7 +3294,6 @@ def runtoken(node, env) -> tuple:
                     else:
                         current = getattr(obj, attr, undefined)
 
-                    # 计算新值
                     if op == '+=':
                         new_val = current + right_val
                     elif op == '-=':
@@ -4066,7 +3307,6 @@ def runtoken(node, env) -> tuple:
                     else:
                         raise KeiError("SyntaxError", f"不支持的操作符: {op}")
 
-                    # 赋值回去
                     if isinstance(obj, KeiBase):
                         obj[attr] = new_val
                     elif isinstance(obj, dict):
@@ -4076,15 +3316,12 @@ def runtoken(node, env) -> tuple:
 
                     return new_val, flag
 
-                # ===== 索引赋值 arr[0] += val =====
                 elif left['type'] == 'index':
                     obj, _ = runtoken(left['obj'], env)
                     index, _ = runtoken(left['index'], env)
 
-                    # 获取当前值
                     current = obj[index]
 
-                    # 计算新值
                     if op == '+=':
                         new_val = current + right_val
                     elif op == '-=':
@@ -4098,16 +3335,13 @@ def runtoken(node, env) -> tuple:
                     else:
                         raise KeiError("SyntaxError", f"不支持的操作符: {op}")
 
-                    # 赋值回去
                     obj[index] = new_val
                     return new_val, flag
 
-                # ===== * 赋值 =====
                 elif left['type'] in ('star_target', 'starassign'):
                     name = left['name']
                     current = env.get(name, undefined)
 
-                    # 把右边变成列表
                     if isinstance(right_val, KeiList):
                         right_list = right_val
                     elif isinstance(right_val, (list, tuple)):
@@ -4143,7 +3377,6 @@ def runtoken(node, env) -> tuple:
                     env[name] = new_val
                     return new_val, flag
 
-                # ===== ** 赋值 =====
                 elif left['type'] in ('starstar_target', 'starstarassign'):
                     name = left['name']
                     current = env.get(name, undefined)
@@ -4152,7 +3385,6 @@ def runtoken(node, env) -> tuple:
                         raise KeiError("TypeError", f"** 赋值右边必须是字典，得到 {type(right_val)}")
 
                     if op == '+=':
-                        # 合并字典
                         if isinstance(current, KeiDict):
                             new_dict = current.items.copy()
                         elif isinstance(current, dict):
@@ -4168,7 +3400,6 @@ def runtoken(node, env) -> tuple:
                         new_val = KeiDict(new_dict)
 
                     elif op == '-=':
-                        # 删除键
                         if isinstance(current, KeiDict):
                             new_dict = current.items.copy()
                         elif isinstance(current, dict):
@@ -4213,12 +3444,11 @@ def runtoken(node, env) -> tuple:
             if cond_flag:
                 return cond_val, True
 
-            if not cond_val:  # unless 的条件为 false 时执行 true_val
+            if not cond_val:
                 return runtoken(node['true_val'], env)
             else:
                 return runtoken(node['false_val'], env)
 
-        # ========== 列表生成式 ==========
         if node['type'] in {'listcomp', 'unlistcomp'}:
             un = True if node['type'] == "unlistcomp" else False
             result = []
@@ -4227,7 +3457,6 @@ def runtoken(node, env) -> tuple:
             expr_node = node['expr']
             cond = node.get('cond')
 
-            # 获取可迭代对象
             if isinstance(iterable_val, KeiList):
                 items = iterable_val.items
             elif isinstance(iterable_val, KeiString):
@@ -4240,13 +3469,10 @@ def runtoken(node, env) -> tuple:
                 except:
                     items = [iterable_val]
 
-            # 遍历
             for item in items:
-                # 设置变量
                 if len(vars_list) == 1:
                     env[vars_list[0]] = item
                 else:
-                    # 多变量解包
                     if isinstance(item, (list, tuple, KeiList)):
                         item_list = item.items if isinstance(item, KeiList) else list(item)
                         for i, var in enumerate(vars_list):
@@ -4259,7 +3485,6 @@ def runtoken(node, env) -> tuple:
                         for var in vars_list[1:]:
                             env[var] = undefined
 
-                # 如果有条件，先判断
                 if cond:
                     cond_val, _ = runtoken(cond, env)
                     if un:
@@ -4269,20 +3494,16 @@ def runtoken(node, env) -> tuple:
                         if not cond_val:
                             continue
 
-                # 计算表达式
                 if isinstance(expr_node, list):
-                    # 多个表达式
                     for sub_expr in expr_node:
                         val, _ = runtoken(sub_expr, env)
                         result.append(val)
                 else:
-                    # 单个表达式
                     val, _ = runtoken(expr_node, env)
                     result.append(val)
 
             return KeiList(result), False
 
-        # ========== 字典生成式 ==========
         if node['type'] in {'dictcomp', 'undictcomp'}:
             un = True if node['type'] == "undictcomp" else False
             result = {}
@@ -4291,7 +3512,6 @@ def runtoken(node, env) -> tuple:
             pairs = node['pairs']
             cond = node.get('cond')
 
-            # 获取可迭代对象
             if isinstance(iterable_val, KeiList):
                 items = iterable_val.items
             elif isinstance(iterable_val, KeiString):
@@ -4304,9 +3524,7 @@ def runtoken(node, env) -> tuple:
                 except:
                     items = [iterable_val]
 
-            # 遍历
             for item in items:
-                # 设置变量
                 if len(vars_list) == 1:
                     env[vars_list[0]] = item
                 else:
@@ -4322,7 +3540,6 @@ def runtoken(node, env) -> tuple:
                         for var in vars_list[1:]:
                             env[var] = undefined
 
-                # 如果有条件，先判断
                 if cond:
                     cond_val, _ = runtoken(cond, env)
                     if un:
@@ -4332,12 +3549,10 @@ def runtoken(node, env) -> tuple:
                         if not cond_val:
                             continue
 
-                # 计算所有键值对
                 for pair in pairs:
                     key, _ = runtoken(pair['key'], env)
                     val, _ = runtoken(pair['value'], env)
 
-                    # key 转成可哈希类型
                     if isinstance(key, KeiInt):
                         py_key = key.value
                     elif isinstance(key, KeiString):
@@ -4351,7 +3566,6 @@ def runtoken(node, env) -> tuple:
 
             return KeiDict(result), False
 
-        # ========== 二元运算 ==========
         if node['type'] == 'binop':
             def binop() -> tuple:
                 op = node['op']
@@ -4420,49 +3634,35 @@ def runtoken(node, env) -> tuple:
                     elif op == '>=':
                         result = left.__ge__(right)
                     elif op == 'is':
-                        # 处理 is 运算符
                         left, l_flag = runtoken(node['left'], env)
                         right, r_flag = runtoken(node['right'], env)
 
-                        # 情况1：右边是 KeiClass（类型检查）
                         if isinstance(right, KeiClass):
-                            # 左边是实例，检查类型
                             if isinstance(left, KeiInstance):
                                 result = true if left._class == right else false
-                            # 左边是类对象
                             elif isinstance(left, KeiClass):
                                 result = true if left == right else false
-                            # 其他情况
                             else:
                                 result = false
 
-                        # 情况2：右边是 Python 类型（如 KeiInt, KeiFloat）
                         elif isinstance(right, type) and issubclass(right, KeiBase):
-                            # 左边也是类型
                             if isinstance(left, type) and issubclass(left, KeiBase):
                                 result = true if left == right else false
-                            # 左边是实例
                             elif isinstance(left, KeiBase):
                                 result = true if isinstance(left, right) else false
                             else:
                                 result = false
 
-                        # 情况3：特殊处理：float 包含 int
                         elif right == KeiFloat and isinstance(left, KeiInt):
                             result = true
 
-                        # 情况4：普通对象身份比较
                         else:
                             result = true if left is right else false
 
                         return result, (l_flag or r_flag)
 
                     elif op == 'in':
-                        # 处理 in 运算符
-
-                        # 1. KeiList 特殊处理
                         if isinstance(right, KeiList):
-                            # 直接遍历 items
                             found = false
                             for item in right.items:
                                 if left == item:
@@ -4470,22 +3670,17 @@ def runtoken(node, env) -> tuple:
                                     break
                             result = found
 
-                        # 2. KeiDict 特殊处理
                         elif isinstance(right, KeiDict):
-                            # 检查键是否存在
                             key = left.value if hasattr(left, 'value') else left
                             result = true if key in right.items else false
 
-                        # 3. KeiString 特殊处理
                         elif isinstance(right, KeiString):
                             val = left.value if hasattr(left, 'value') else str(left)
                             result = true if val in right.value else false
 
-                        # 4. 有 __contains__ 的 Kei 对象
                         elif hasattr(right, '__contains__'):
                             result = right.__contains__(left)
 
-                        # 5. Python 原生类型
                         elif isinstance(right, (list, tuple, str)):
                             val = left.value if hasattr(left, 'value') else left
                             result = true if val in right else false
@@ -4515,7 +3710,6 @@ def runtoken(node, env) -> tuple:
 
             return binop()
 
-        # ========== 一元运算 ==========
         if node['type'] == 'unary':
             if node['op'] == 'not':
                 val, flag = runtoken(node['expr'], env)
@@ -4529,7 +3723,6 @@ def runtoken(node, env) -> tuple:
                 else:
                     raise KeiError("TypeError", f"无法对 {content(val)} 进行取负运算")
 
-        # ========== 范围操作符 .. ==========
         if node['type'] == 'listscope':
             start_val, _ = runtoken(node['start'], env)
             end_val, _ = runtoken(node['end'], env)
@@ -4539,13 +3732,11 @@ def runtoken(node, env) -> tuple:
 
             result = []
             if start <= end:
-                # 递增
                 current = start
                 while current <= end:
                     result.append(KeiInt(current))
                     current += 1
             else:
-                # 递减
                 current = start
                 while current >= end:
                     result.append(KeiInt(current))
@@ -4553,18 +3744,14 @@ def runtoken(node, env) -> tuple:
 
             return KeiList(result), False
 
-        # ========== 函数调用 ==========
         if node['type'] in {'call', 'methodcall'}:
-            # ----- 1. 统一解析参数（使用新结构）-----
             args = []
             kwargs = {}
 
-            # 获取当前行的源代码
             call_source = node.get('source')
             if call_source is None:
                 call_source = globals().get('source', '')
 
-            # 按顺序处理 arguments
             for arg_node in node.get('arguments', []):
                 if arg_node['type'] == 'positional':
                     val, _ = runtoken(arg_node['value'], env)
@@ -4592,12 +3779,10 @@ def runtoken(node, env) -> tuple:
                     elif isinstance(star_val, dict):
                         kwargs.update(star_val)
 
-            # ----- 2. 处理 call -----
             if node['type'] == 'call':
                 name = node['name']
                 stdlib.kei.setenv(env)
 
-                # super 特殊处理
                 if name == 'super':
                     if 'self' not in env:
                         raise KeiError("NameError", "super 只能在类方法中使用")
@@ -4630,7 +3815,6 @@ def runtoken(node, env) -> tuple:
                                 break
                     return null, False
 
-                # 带点的方法调用 (obj.method)
                 if '.' in name:
                     parts = name.split('.')
                     current = env.get(parts[0])
@@ -4654,7 +3838,6 @@ def runtoken(node, env) -> tuple:
                         if isinstance(method, KeiFunction):
                             result = method(linecode=call_source, *args, **kwargs)
                         else:
-                            # Python 原生方法调用 - 参数检查
                             try:
                                 sig = inspect.signature(method)
                                 required = [p for p in sig.parameters.values() if p.default == inspect.Parameter.empty and p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)]
@@ -4671,7 +3854,6 @@ def runtoken(node, env) -> tuple:
                         return result, False
                     raise KeiError("NameError", f"对象没有方法 {method_name}")
 
-                # 普通函数/类调用
                 if name in env:
                     func_obj = env[name]
 
@@ -4699,7 +3881,6 @@ def runtoken(node, env) -> tuple:
                     if isinstance(func_obj, KeiFunction):
                         return func_obj(linecode=call_source, *args, **kwargs), False
 
-                    # Python 原生函数调用 - 参数检查
                     if callable(func_obj):
                         try:
                             sig = inspect.signature(func_obj)
@@ -4722,12 +3903,10 @@ def runtoken(node, env) -> tuple:
 
                 raise KeiError("NameError", f"未知函数: {name}")
 
-            # ----- 3. 处理 methodcall -----
-            else:  # node['type'] == 'methodcall'
+            else:
                 obj = None
                 method_name = None
 
-                # 从新结构中获取 obj
                 if 'obj' in node:
                     obj, _ = runtoken(node['obj'], env)
                     method_name = node.get('method')
@@ -4822,7 +4001,6 @@ def runtoken(node, env) -> tuple:
 
                     return result, False
 
-                # Python 原生方法调用 - 参数检查
                 if callable(method):
                     try:
                         sig = inspect.signature(method)
@@ -4843,7 +4021,6 @@ def runtoken(node, env) -> tuple:
 
                 return method(*args, **kwargs), False
 
-        # ========== 赋值 ==========
         if node['type'] == 'assign':
             val, flag = runtoken(node['right'], env)
             left = node['left']
@@ -4877,10 +4054,8 @@ def runtoken(node, env) -> tuple:
                             env[var] = undefined
                     return val, flag
 
-            # 处理 * 赋值
             elif left['type'] == 'star_target' or left['type'] == 'starassign':
                 name = left['name']
-                # 把右边变成列表
                 if isinstance(val, KeiList):
                     env[name] = val
                 elif isinstance(val, (list, tuple)):
@@ -4889,7 +4064,6 @@ def runtoken(node, env) -> tuple:
                     env[name] = KeiList([val])
                 return val, flag
 
-            # 处理 ** 赋值
             elif left['type'] == 'starstar_target' or left['type'] == 'starstarassign':
                 name = left['name']
                 if isinstance(val, KeiDict):
@@ -4968,7 +4142,6 @@ def runtoken(node, env) -> tuple:
                 end, _ = runtoken(left['end'], env) if left['end'] else (None, False)
                 step, _ = runtoken(left['step'], env) if left['step'] else (None, False)
 
-                # 转换索引为 Python 值
                 if isinstance(start, KeiInt):
                     start = start.value
                 if isinstance(end, KeiInt):
@@ -4976,7 +4149,6 @@ def runtoken(node, env) -> tuple:
                 if isinstance(step, KeiInt):
                     step = step.value
 
-                # 支持负数索引
                 if isinstance(obj, KeiString):
                     length = len(obj.value)
                     if start is not None and start < 0:
@@ -4984,13 +4156,11 @@ def runtoken(node, env) -> tuple:
                     if end is not None and end < 0:
                         end = length + end
 
-                    # 把右边转成字符串
                     if isinstance(val, KeiString):
                         new_str = val.value
                     else:
                         new_str = str(val)
 
-                    # 执行切片替换
                     if start is None:
                         start = 0
                     if end is None:
@@ -4999,13 +4169,11 @@ def runtoken(node, env) -> tuple:
                     obj.value = obj.value[:start] + new_str + obj.value[end:]
 
                 elif isinstance(obj, KeiList):
-                    # 列表切片赋值
                     if start is None:
                         start = 0
                     if end is None:
                         end = len(obj.items)
 
-                    # 把右边转成列表
                     if isinstance(val, KeiList):
                         new_items = val.items
                     else:
@@ -5023,14 +4191,12 @@ def runtoken(node, env) -> tuple:
 
             return val, flag
 
-        # ========== return 语句 ==========
         if node['type'] == 'return':
             if node['value'] is None:
                 return None, True
             val, flag = runtoken(node['value'], env)
             return val, True
 
-        # ========== if/unless 语句 ==========
         if node['type'] in {'if', 'unless'}:
             cond_val, cond_flag = runtoken(node['cond'], env)
             if cond_flag:
@@ -5070,7 +4236,6 @@ def runtoken(node, env) -> tuple:
 
             return None, False
 
-        # ========== while/until 循环 ==========
         if node['type'] in {'while', 'until'}:
             while True:
                 cond_val, cond_flag = runtoken(node['cond'], env)
@@ -5094,7 +4259,6 @@ def runtoken(node, env) -> tuple:
 
             return None, False
 
-        # ========== for 循环 ==========
         if node['type'] == 'for':
             vars_list = node['vars']
             iterable_val, _ = runtoken(node['iterable'], env)
@@ -5164,11 +4328,9 @@ def runtoken(node, env) -> tuple:
 
             return None, False
 
-        # ========== break/continue ==========
         if node['type'] in {'break', 'continue'}:
             return (node['type'], None), True
 
-        # ========== 函数定义 ==========
         if node['type'] == 'function':
             global_names = []
             for stmt in node['body']:
@@ -5203,15 +4365,14 @@ def runtoken(node, env) -> tuple:
 
             return None, False
 
-        # ========== 类定义 ==========
         if node['type'] == 'class':
             class_obj = {
                 'type': 'class',
                 'name': node['name'],
                 'parent': node.get('parent'),
-                'body': node['body'],  # 存储原始语句列表
+                'body': node['body'],
                 'methods': [],
-                'attrs': {},  # 类属性
+                'attrs': {},
                 'methods_map': {}
             }
 
@@ -5221,14 +4382,11 @@ def runtoken(node, env) -> tuple:
                     raise KeiError("NameError", f"父类 '{class_obj['parent']}' 未定义")
                 if not isinstance(parent, KeiClass):
                     raise KeiError("TypeError", f"'{class_obj['parent']}' 不是类")
-                # 继承父类的属性和方法
                 class_obj['attrs'] = parent._class_attrs.copy()
                 class_obj['methods_map'] = parent.class_obj['methods_map'].copy()
 
-            # 遍历 body，根据语句类型分类
             for stmt in node['body']:
                 if stmt['type'] == 'function':
-                    # 是方法
                     method_obj = {
                         'type': 'user_function',
                         'name': stmt['name'],
@@ -5240,7 +4398,6 @@ def runtoken(node, env) -> tuple:
                         'is_method': True,
                         'closure': env
                     }
-                    # 检查装饰器
                     if 'decorators' in stmt:
                         for dec in stmt['decorators']:
                             if dec['value'] == 'prop':
@@ -5250,10 +4407,8 @@ def runtoken(node, env) -> tuple:
                     class_obj['methods_map'][stmt['name']] = method_obj
 
                 elif stmt['type'] == 'assign':
-                    # 是类属性赋值
                     if stmt['left']['type'] == 'name':
                         attr_name = stmt['left']['value']
-                        # 计算属性值
                         attr_val, _ = runtoken(stmt['right'], env)
                         class_obj['attrs'][attr_name] = attr_val
 
@@ -5261,7 +4416,6 @@ def runtoken(node, env) -> tuple:
             env[node['name']] = kei_class
             return None, False
 
-        # ========== import 语句 ==========
         if node['type'] == 'import':
             try:
                 for module_info in node['modules']:
@@ -5277,7 +4431,6 @@ def runtoken(node, env) -> tuple:
 
                     module_name = full_module_name.split("/")[-1]
 
-                    # ==== 1. 先找 .kei 文件（KeiLang 模块）====
                     kei_files = [os.path.join(path, f"{full_module_name}.kei") for path in __path__]
 
                     for keifile in kei_files:
@@ -5299,9 +4452,8 @@ def runtoken(node, env) -> tuple:
                                 "__env__": module_env,
                             })
 
-                            exec(code, module_env)  # KeiLang 的 exec
+                            exec(code, module_env)
 
-                            # 过滤掉 __ 开头的属性
                             module_dict = {}
                             for k, v in module_env.items():
                                 if not k.startswith('__'):
@@ -5316,7 +4468,6 @@ def runtoken(node, env) -> tuple:
 
                             return None, False
 
-                    # ==== 2. 再找 .py 文件（Python 模块）====
                     py_files = [os.path.join(path, f"{full_module_name}.py") for path in __path__]
 
                     for pyfile in py_files:
@@ -5325,9 +4476,8 @@ def runtoken(node, env) -> tuple:
                                 code = f.read()
 
                             module_env = {}
-                            __py_exec__(code, module_env)  # Python 的 exec
+                            __py_exec__(code, module_env)
 
-                            # 过滤掉 __ 开头的属性
                             module_dict = {}
                             for k, v in module_env.items():
                                 if not k.startswith('__'):
@@ -5342,7 +4492,6 @@ def runtoken(node, env) -> tuple:
 
                             return None, False
 
-                    # ==== 3. 都找不到就报错 ====
                     raise KeiError("ImportError", f"找不到模块: {full_module_name}")
 
                 return None, False
@@ -5350,7 +4499,6 @@ def runtoken(node, env) -> tuple:
             except Exception as e:
                 raise KeiError("ImportError", f"导入模块失败: {e}")
 
-        # ========== from ... import ... 语句 ==========
         if node['type'] == 'fromimport':
             module_name = node['module']
             imports = node['imports']
@@ -5365,7 +4513,6 @@ def runtoken(node, env) -> tuple:
             module_env = None
             module_dict = None
 
-            # ==== 1. 先找 .kei 文件（KeiLang 模块）====
             kei_files = [os.path.join(path, f"{module_path}.kei") for path in __path__]
 
             for keifile in kei_files:
@@ -5387,10 +4534,9 @@ def runtoken(node, env) -> tuple:
                         "__env__": module_env,
                     })
 
-                    exec(code, module_env)  # KeiLang 的 exec
+                    exec(code, module_env)
                     break
 
-            # ==== 2. 再找 .py 文件（Python 模块）====
             if module_env is None:
                 py_files = [os.path.join(path, f"{module_path}.py") for path in __path__]
 
@@ -5400,22 +4546,19 @@ def runtoken(node, env) -> tuple:
                             code = f.read()
 
                         module_env = {}
-                        __py_exec__(code, module_env)  # Python 的 exec
+                        __py_exec__(code, module_env)
                         break
 
             if module_env is None:
                 raise KeiError("ImportError", f"找不到模块: {module_name}")
 
-            # 过滤掉 __ 开头的属性，得到模块字典
             module_dict = {}
             for k, v in module_env.items():
                 if not k.startswith('__'):
                     module_dict[k] = v
                 elif k == '__all__':
-                    # 保存 __all__ 供后面使用
                     module_dict['__all__'] = v
 
-            # 获取 __all__（如果有）
             all_names = None
             if '__all__' in module_dict:
                 all_val = module_dict['__all__']
@@ -5428,25 +4571,19 @@ def runtoken(node, env) -> tuple:
                 elif isinstance(all_val, str):
                     all_names = [all_val]
 
-            # 执行导入
             for imp in imports:
                 if imp['type'] == 'wildcard':
-                    # from module import *
                     if all_names is not None:
-                        # 有 __all__，只导入 __all__ 中的
                         names_to_import = all_names
                     else:
-                        # 没有 __all__，导入所有非私有
                         names_to_import = [k for k in module_dict.keys() if not k.startswith('__')]
 
                     for name in names_to_import:
                         if name in module_dict:
                             env[name] = module_dict[name]
                         elif name in module_env:
-                            # 可能是在 __all__ 中但被过滤了（比如私有属性？）
                             env[name] = module_env[name]
                 else:
-                    # from module import name [as alias]
                     name = imp['name']
                     alias = imp['alias'] or name
 
@@ -5460,14 +4597,12 @@ def runtoken(node, env) -> tuple:
             return None, False
 
         if node['type'] == 'del':
-            for target in node['names']:  # 遍历 targets
+            for target in node['names']:
                 if target['type'] == 'name':
-                    # 删除变量
                     name = target['value']
                     if name in env:
                         del env[name]
                 elif target['type'] == 'index':
-                    # 删除列表元素：del list[index]
                     obj, _ = runtoken(target['obj'], env)
                     index, _ = runtoken(target['index'], env)
                     if isinstance(obj, KeiList):
@@ -5475,7 +4610,6 @@ def runtoken(node, env) -> tuple:
                         if 0 <= idx < len(obj.items):
                             del obj.items[idx]
                 elif target['type'] == 'attr':
-                    # 删除属性：del obj.attr
                     obj, _ = runtoken(target['obj'], env)
                     attr = target['attr']
                     if isinstance(obj, KeiBase):
@@ -5533,7 +4667,6 @@ def runtoken(node, env) -> tuple:
 
             return None, False
 
-        # ========== namespace 语句 ==========
         if node['type'] == 'namespace':
             ns_env = {}
             for stmt in node['body']:
@@ -5542,7 +4675,6 @@ def runtoken(node, env) -> tuple:
             env[node['name']] = KeiNamespace(node['name'], ns_env)
             return None, False
 
-        # ========== with 语句 ==========
         if node['type'] == 'with':
             cm, _ = runtoken(node['expr'], env)
 
@@ -5579,19 +4711,17 @@ def runtoken(node, env) -> tuple:
             return None, False
 
         if node['type'] == 'lambda':
-            # 创建匿名函数对象
             func_obj = {
                 'type': 'user_function',
-                'name': None,  # 匿名函数没名字
+                'name': None,
                 'params': node['params'],
                 'defaults': {},
-                'body': [{'type': 'return', 'value': node['body']}],  # 包装成 return
+                'body': [{'type': 'return', 'value': node['body']}],
                 'globals': [],
                 'closure': env,
             }
             return KeiFunction(func_obj, env), False
 
-        # ========== try/catch/finally 语句 ==========
         if node['type'] == 'try':
             try:
                 __kei__.catch.append(True)
@@ -5668,17 +4798,14 @@ def runtoken(node, env) -> tuple:
 
             return None, False
 
-        # ========== global 语句 ==========
         if node['type'] == 'global':
             return None, False
 
-        # ========== 类型断气 ==========
         if node['type'] == 'typeassert':
             val, flag = runtoken(node['expr'], env)
             hint = runtoken(node['hint'], env)[0]
 
             if bool(env.get("__typeassert__")):
-                # 类型检查
                 if isinstance(hint, KeiList):
                     for h in hint.items:
                         if type(val) is KeiInt and h is KeiFloat:
@@ -5716,8 +4843,6 @@ def runtoken(node, env) -> tuple:
 
         if __kei__.step and type(__kei__.step) not in [int, str] and node.get('source', None) is not None:
             while True:
-                import copy
-
                 try:
                     save_env = copy.deepcopy(env)
                 except:
@@ -5726,7 +4851,6 @@ def runtoken(node, env) -> tuple:
                     except:
                         save_env = env.copy()
 
-                # 使用复制的env最大防止污染环境
                 names = getname(node, save_env)
 
                 maxline = int(str(stdlib.kei.cnlen(max([i.strip() for i in __kei__.code], key=stdlib.kei.cnlen) if __kei__.code is not None else None).value))
@@ -5775,19 +4899,15 @@ def runtoken(node, env) -> tuple:
                     sys.exit(0)
 
                 elif cmd.startswith("v"):
-                    # 获取所有用户变量
                     vars_to_show = {k: v for k, v in env.items()
                                    if not str(k).startswith('__')}
 
                     if vars_to_show:
-                        # 找出最长的变量名
                         max_name_len = max(len(str(k)) for k in vars_to_show.keys())
 
-                        # 对齐打印
                         for k, v in vars_to_show.items():
                             name = str(k)
                             value = content(v, _in_container=True)
-                            # 格式化：变量名左对齐，值用颜色
                             print(f"  \033[36m{name:<{max_name_len}}\033[0m = \033[33m{value}\033[0m")
                     else:
                         print("  (无变量)")
@@ -5817,11 +4937,11 @@ def runtoken(node, env) -> tuple:
 
                                 end = min(len(__kei__.code), line_num + int(cmd[1:]))
                         else:
-                            start = max(0, line_num - 6)  # 显示前后5行
+                            start = max(0, line_num - 6)
                             end = min(len(__kei__.code), line_num + 5)
 
                         for i in range(start, end):
-                            marker = " \033[33m>\033[0m" if i == line_num - 1 else "  "  # line_num 是 1-based
+                            marker = " \033[33m>\033[0m" if i == line_num - 1 else "  "
                             print(f"{marker} {i+1}: {__kei__.code[i]}")
 
                 elif cmd.startswith("k"):
@@ -5877,8 +4997,6 @@ def runtoken(node, env) -> tuple:
                 else:
                     print(f"  % \033[31m未知的指令: {cmd}, 尝试使用\"h\"获取帮助\033[0m")
 
-            import copy
-
             try:
                 oldenv = copy.deepcopy(env)
             except:
@@ -5922,7 +5040,6 @@ def runtoken(node, env) -> tuple:
         if __kei__.catch or not __kei__.error:
             raise
 
-        # 错误类型映射
         error_config = {
             ZeroDivisionError: ("ZeroDivisionError", "无法对 0 进行除法"),
             OverflowError: ("OverflowError", f"数值过大, 无法处理: {e}"),
@@ -5947,13 +5064,12 @@ def runtoken(node, env) -> tuple:
             KeiError: (e.types, e.value) if isinstance(e, KeiError) else ()
         }
 
-        # 获取错误类型
         for exc_type, (err_name, err_msg) in error_config.items():
             if isinstance(e, exc_type):
                 error(
-                    err_name if err_name is not err_msg else None,  # info
+                    err_name if err_name is not err_msg else None,
                     err_msg,
-                    __kei__.stack.copy(),  # stack - 直接用 __kei__.stack
+                    __kei__.stack.copy(),
                     globals()['source'] if globals()['source'] is not None else node.get('source', None),
                     globals()['linenum']+1 if globals()['linenum'] is not None else node.get('linenum', -1)+1,
                     __kei__.get('file', '未知文件')
@@ -5966,7 +5082,7 @@ def runtoken(node, env) -> tuple:
             error(
                 type(e).__name__,
                 str(e),
-                __kei__.stack.copy(),  # stack
+                __kei__.stack.copy(),
                 globals()['source'] if globals()['source'] is not None else node.get('source', None),
                 globals()['linenum']+1 if globals()['linenum'] is not None else node.get('linenum', -1)+1,
                 __kei__.get('file', '未知文件')
