@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.7-6"
+__version__ = "1.7-7"
 
 class KeiState:
     stack: List[Any]
@@ -776,12 +776,14 @@ def ast(tokenlines: list) -> list:
                             import json
                             mapping.update(json.load(f))
                     else:
-                        print(f"mapping加载时未找到文件: {filename}")
+                        print(f"[ERROR] 映射文件 \033[33;1m{filename}\033[0m 不存在")
+                        sys.exit(1)
 
                     pos += newpos
 
-            except:
-                raise KeiError("SyntaxError", "缺少分号")
+            except Exception as e:
+                print(f"\033[31m[ERROR]\033[0m 无法加载映射 \033[33;1m{filename}\033[0m: {e}")
+                sys.exit(1)
 
             continue
 
@@ -813,7 +815,15 @@ def ast(tokenlines: list) -> list:
             if new_token['type'] in {'name', 'op', 'symbol'}:
                 if new_token['value'] in mapping:
                     map_val = mapping[new_token['value']]
-                    new_token['value'] = map_val
+                    if type(map_val) is list:
+                        if len(map_val) == 2:
+                            new_token['type'] = map_val[0]
+                            new_token['value'] = map_val[1]
+                        else:
+                            print(f"\033[31m[ERROR]\033[0m 无法加载映射: 格式错误")
+                            sys.exit(1)
+                    else:
+                        new_token['value'] = map_val
 
             new.append(new_token)
 
@@ -4696,13 +4706,13 @@ def runtoken(node, env) -> tuple:
                     raise KeiError("Runtime", "没有异常可抛出")
 
         if node['type'] == 'use':
-            if len(node['names']) >= 1:
-                for name in node['names']:
-                    if isinstance(env[name['value']], KeiNamespace):
-                        env.update(env[name['value']].env)
-                    else:
-                        raise KeiError("TypeError", "use 需要 namespace")
-
+            for target in node['names']:
+                # 计算表达式（不再是简单的名字）
+                ns, _ = runtoken(target, env)
+                if isinstance(ns, KeiNamespace):
+                    env.update(ns.env)  # 导入成员
+                else:
+                    raise KeiError("TypeError", f"use 需要 namespace，得到 {type(ns)}")
             return None, False
 
         if node['type'] == 'namespace':
