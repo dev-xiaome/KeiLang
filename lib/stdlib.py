@@ -393,19 +393,17 @@ class kei:
 
     @s
     def range(*args):
-        # 转换参数
         py_args = []
         for a in args:
             kei.check(a, KeiFloat, name='range')
             py_args.append(a.value)
 
-        # 调用 Python 内置 range
         if len(py_args) == 1:
-            return KeiList(range(py_args[0]))
+            return KeiList([KeiInt(i) for i in range(py_args[0])])
         elif len(py_args) == 2:
-            return KeiList(range(py_args[0], py_args[1]))
+            return KeiList([KeiInt(i) for i in range(py_args[0], py_args[1])])
         elif len(py_args) == 3:
-            return KeiList(range(py_args[0], py_args[1], py_args[2]))
+            return KeiList([KeiInt(i) for i in range(py_args[0], py_args[1], py_args[2])])
         else:
             raise Exception("range 需要 1~3 个参数")
 

@@ -126,13 +126,17 @@ class module(KeiBase):
 
     def __call__(self, *args, **kwargs):
         """如果 module 实例被调用，尝试调用它包装的 Python 对象"""
+        # 转换 Kei 参数为 Python 原生类型
+        py_args = [topy(arg) for arg in args]
+        py_kwargs = {k: topy(v) for k, v in kwargs.items()}
+
         # 如果 self._py_module 是类，就实例化
         if isinstance(self._py_module, type):
-            instance = self._py_module(*args, **kwargs)
+            instance = self._py_module(*py_args, **py_kwargs)
             return tokei(instance)
         # 如果是函数，就调用
         if callable(self._py_module):
-            result = self._py_module(*args, **kwargs)
+            result = self._py_module(*py_args, **py_kwargs)
             return tokei(result)
         raise KeiError("TypeError", f"{self._py_module} 不可调用")
 
