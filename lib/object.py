@@ -2361,12 +2361,14 @@ class KeiFunction(KeiBase):
         self.__name__ = func_obj['name'] if func_obj['name'] else "lambda"
         self.__env__ = func_obj.get('closure', env)
 
-    def __call__(self, *args, linecode=None, **kwargs):
-        from kei import runtoken, __kei__
+    def __call__(self, *args, linecode=None, name=None, **kwargs):
+        from kei import runtoken, get_from_env, __kei__
 
         pushed = False
         if linecode is not None:
-            __kei__.stack.append((self.__name__, linecode))
+            if name is None:
+                name = self.__name__
+            __kei__.stack.append((name, linecode))
             pushed = True
 
         params = self.func_obj['params']
@@ -2395,13 +2397,7 @@ class KeiFunction(KeiBase):
         all_args = list(args)
         remaining_kwargs = kwargs.copy()
 
-        try:
-            new_env = copy.deepcopy(self.__env__)
-        except:
-            try:
-                new_env = copy.copy(self.__env__)
-            except:
-                new_env = self.__env__.copy()
+        new_env = {'__parent__': self.__env__, '__caller__': self.__name__}
 
         for i, param_name in enumerate(before_star):
             if i < len(all_args):
@@ -2444,7 +2440,7 @@ class KeiFunction(KeiBase):
                     result = val
                     break
 
-            if bool(new_env.get('__typeassert__', False)) and typeassert is not None:
+            if bool(get_from_env('__typeassert__', new_env)) and typeassert is not None:
                 from kei import runtoken
                 hint = runtoken(typeassert, new_env)[0]
 
@@ -2751,6 +2747,17 @@ class KeiNamespace(KeiBase):
 
     def __dir__(self):
         return list(self.env.keys()) + ['__name__']
+
+    def __add__(self, other):
+        """namespace + namespace = 合并，后者覆盖前者"""
+        if isinstance(other, KeiNamespace):
+            # 合并两个命名空间的环境
+            new_env = self.env.copy()
+            new_env.update(other.env)
+            # 生成新名字
+            new_name = f"{self.name}+{other.name}"
+            return KeiNamespace(new_name, new_env)
+        return undefined
 
 # ========== 工厂函数 ==========
 

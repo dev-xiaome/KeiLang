@@ -847,6 +847,44 @@ class kei:
     def hasattr(obj, value):
         return hasattr(obj, to_str(value))
 
+    @s
+    def recursion(c=None):
+        import sys
+
+        if c is None:
+            return KeiInt(sys.getrecursionlimit())
+
+        if type(c) is KeiInt:
+            c = c.value
+
+            if c > 0:
+                sys.setrecursionlimit(c)
+            elif c == 0:
+                sys.setrecursionlimit(1024)
+            else:
+                raise KeiError("ValueError", "最大递归次数不能是负数")
+        else:
+            raise KeiError("ValueError", "最大递归次数必须是整数")
+
+    @s
+    def precision(c=None):
+        from decimal import getcontext
+
+        if c is None:
+            return KeiInt(getcontext().prec)
+
+        if type(c) is KeiInt:
+            c = c.value
+
+            if c > 0:
+                getcontext().prec = c
+            elif c == 0:
+                getcontext().prec = 28
+            else:
+                raise KeiError("ValueError", "精度不能是负数")
+        else:
+            raise KeiError("TypeError", "精度必须是整数")
+
 func = {
     "type": type,
     "isinstance": isinstance,
@@ -883,6 +921,8 @@ func = {
     "breakpoint": kei.breakpoint,
     "repr": kei.repr,
     "step": kei.step,
+    "precision": kei.precision,
+    "recursion": kei.recursion,
     "open": kei.open,
     "any": KeiBase,
     "int": KeiInt,

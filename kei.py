@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.7-2"
+__version__ = "1.7-3"
 
 class KeiState:
     stack: List[Any]
@@ -94,6 +94,7 @@ keywords = [
 ]
 
 sys.setrecursionlimit(1024)
+getcontext().prec = 28
 
 def check_python_call(func, args, kwargs, func_name):
     try:
@@ -184,7 +185,10 @@ def error(errtype: str | None, info: str, stack: list=[], code:str|None=None, li
     linenum = linenum if linenum is not None else "??"
     space   = ' ' * len(str(linenum) if linenum is not None else "")
 
-    print(f"File \033[33;1m{os.path.abspath(filename)}\033[0m")
+    if os.path.isfile(filename):
+        print(f"File \033[33;1m{os.path.abspath(filename)}\033[0m")
+    else:
+        print(f"File \033[33;1m{filename}\033[0m")
 
     print(f"{space} ·")
 
@@ -958,71 +962,129 @@ def parse_block(tokens: list, pos: int, all_lines: list, linepos: int,
 
 def parse_stmt(tokens: list, pos: int, all_lines: list | None = None, linepos: int = -1) -> tuple:
     """解析语句"""
-    if all_lines is None:
-        all_lines = [tokens]
-        linepos = 0
+    try:
+        if all_lines is None:
+            all_lines = [tokens]
+            linepos = 0
 
-    if pos >= len(tokens):
-        return None, pos, linepos
-
-    t = tokens[pos]
-    source_line = __kei__.get('code', [''])[t['linenum']] if __kei__.get('code') else ''
-
-    # 结束符
-    if t['type'] == 'symbol' and t['value'] == '}':
-        return None, pos, linepos
-
-    # 装饰器
-    if t['type'] == 'op' and t['value'] == '@':
-        return parse_decorator(tokens, pos, all_lines, linepos, source_line)
-
-    # 语句分发
-    stmt_handlers = {
-        'try': parse_try_stmt,
-        'class': parse_class_stmt,
-        'for': parse_for_stmt,
-        'fn': parse_fn_stmt,
-        'import': parse_import_stmt,
-        'from': parse_from_stmt,
-        'break': lambda t,p,al,ln,sl: ({'type': 'break'}, p+1, ln),
-        'continue': lambda t,p,al,ln,sl: ({'type': 'continue'}, p+1, ln),
-        'return': parse_return_stmt,
-        'with': parse_with_stmt,
-        'namespace': parse_namespace_stmt,
-        'global': parse_global_del_raise_use,
-        'del': parse_global_del_raise_use,
-        'raise': parse_global_del_raise_use,
-        'use': parse_global_del_raise_use,
-        'if': parse_if_while_stmt,
-        'while': parse_if_while_stmt,
-        'unless': parse_if_while_stmt,
-        'until': parse_if_while_stmt,
-        'match': parse_match_stmt,
-    }
-
-    if t['type'] == 'name' and t['value'] in stmt_handlers:
-        return stmt_handlers[t['value']](tokens, pos, all_lines, linepos, source_line)
-
-    # 复合赋值
-    compound_op = find_compound_op(tokens, pos)
-    if compound_op:
-        return parse_compound_assign(tokens, pos, all_lines, linepos, compound_op, source_line)
-
-    # 普通赋值
-    assign_pos = find_assign_pos(tokens, pos)
-    if assign_pos != -1:
-        return parse_assign(tokens, pos, assign_pos, all_lines, linepos, source_line)
-
-    # 表达式
-    node, new_pos, linepos = parse_expr(tokens, pos, allow_assign=False, all_lines=all_lines, linepos=linepos)
-    if node is None:
-        if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '}':
+        if pos >= len(tokens):
             return None, pos, linepos
-        raise KeiError("SyntaxError", f"无效的语法: {tokens[pos]['value'] if pos < len(tokens) else 'EOF'}")
 
-    node['source'] = source_line
-    node['linenum'] = tokens[pos]['linenum']
-    return node, new_pos, linepos
+        t = tokens[pos]
+        source_line = __kei__.get('code', [''])[t['linenum']] if __kei__.get('code') else ''
+
+        globals()['source'] = source_line
+        globals()['linenum'] = t['linenum']
+
+        # 结束符
+        if t['type'] == 'symbol' and t['value'] == '}':
+            return None, pos, linepos
+
+        # 装饰器
+        if t['type'] == 'op' and t['value'] == '@':
+            return parse_decorator(tokens, pos, all_lines, linepos, source_line)
+
+        # 语句分发
+        stmt_handlers = {
+            'try': parse_try_stmt,
+            'class': parse_class_stmt,
+            'for': parse_for_stmt,
+            'fn': parse_fn_stmt,
+            'import': parse_import_stmt,
+            'from': parse_from_stmt,
+            'break': lambda t,p,al,ln,sl: ({'type': 'break'}, p+1, ln),
+            'continue': lambda t,p,al,ln,sl: ({'type': 'continue'}, p+1, ln),
+            'return': parse_return_stmt,
+            'with': parse_with_stmt,
+            'namespace': parse_namespace_stmt,
+            'global': parse_global_del_raise_use,
+            'del': parse_global_del_raise_use,
+            'raise': parse_global_del_raise_use,
+            'use': parse_global_del_raise_use,
+            'if': parse_if_while_stmt,
+            'while': parse_if_while_stmt,
+            'unless': parse_if_while_stmt,
+            'until': parse_if_while_stmt,
+            'match': parse_match_stmt,
+        }
+
+        if t['type'] == 'name' and t['value'] in stmt_handlers:
+            return stmt_handlers[t['value']](tokens, pos, all_lines, linepos, source_line)
+
+        # 复合赋值
+        compound_op = find_compound_op(tokens, pos)
+        if compound_op:
+            return parse_compound_assign(tokens, pos, all_lines, linepos, compound_op, source_line)
+
+        # 普通赋值
+        assign_pos = find_assign_pos(tokens, pos)
+        if assign_pos != -1:
+            return parse_assign(tokens, pos, assign_pos, all_lines, linepos, source_line)
+
+        # 表达式
+        node, new_pos, linepos = parse_expr(tokens, pos, allow_assign=False, all_lines=all_lines, linepos=linepos)
+        if node is None:
+            if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '}':
+                return None, pos, linepos
+            raise KeiError("SyntaxError", f"无效的语法: {tokens[pos]['value'] if pos < len(tokens) else 'EOF'}")
+
+        node['source'] = source_line
+        node['linenum'] = tokens[pos]['linenum']
+        return node, new_pos, linepos
+
+    except Exception as e:
+        # 错误处理保持不变
+        error_config = {
+            ZeroDivisionError: ("ZeroDivisionError", "无法对 0 进行除法"),
+            OverflowError: ("OverflowError", f"数值过大, 无法处理: {e}"),
+            FloatingPointError: ("FloatingPointError", f"浮点运算错误: {e}"),
+            ArithmeticError: ("ArithmeticError", f"运算错误: {e}"),
+            IndexError: ("IndexError", f"索引超出范围: {e}"),
+            KeyError: ("KeyError", f"键不存在: {e}"),
+            LookupError: ("LookupError", f"查找错误: {e}"),
+            TypeError: ("TypeError", f"类型错误: {e}"),
+            ValueError: ("ValueError", f"值错误: {e}"),
+            AttributeError: ("AttributeError", f"属性不存在: {e}"),
+            UnboundLocalError: ("UnboundLocalError", f"局部变量未绑定: {e}"),
+            NameError: ("NameError", f"名称未定义: {e}"),
+            FileNotFoundError: ("NotFoundError", f"文件未找到: {e}"),
+            PermissionError: ("PermissionError", f"权限不足无法访问文件: {e}"),
+            IsADirectoryError: ("IsDirError", f"预期文件但得到目录: {e}"),
+            NotADirectoryError: ("NotDirError", f"预期目录但得到文件: {e}"),
+            FileExistsError: ("FileExistsError", f"文件已存在: {e}"),
+            TimeoutError: ("TimeoutError", f"操作超时: {e}"),
+            OSError: ("OSError", f"操作系统错误: {e}"),
+            RecursionError: ("RecursionError", f"递归深度超过限制"),
+            KeiError: (e.types, e.value) if isinstance(e, KeiError) else ()
+        }
+
+        for exc_type, (err_name, err_msg) in error_config.items():
+            if isinstance(e, exc_type):
+                error(
+                    err_name if err_name is not err_msg else None,
+                    err_msg,
+                    __kei__.stack.copy(),
+                    globals()['source'],
+                    globals()['linenum']+1,
+                    __kei__.get('file', '未知文件')
+                )
+                if not __kei__.repl:
+                    sys.exit(1)
+                else:
+                    raise
+        else:
+            error(
+                type(e).__name__,
+                str(e),
+                __kei__.stack.copy(),
+                globals()['source'],
+                globals()['linenum']+1,
+                __kei__.get('file', '未知文件')
+            )
+            if not __kei__.repl:
+                sys.exit(1)
+            else:
+                raise
 
 def parse_decorator(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
     """解析装饰器"""
@@ -1205,7 +1267,6 @@ def parse_for_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source
     return node, pos, linepos
 
 def parse_fn_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
-    """解析 fn 函数定义"""
     pos += 1
 
     if pos >= len(tokens) or tokens[pos]['type'] != 'name':
@@ -1229,12 +1290,10 @@ def parse_fn_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_
             if tokens[pos]['type'] == 'name':
                 param_name = tokens[pos]['value']
                 pos += 1
-
                 if pos < len(tokens) and tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '=':
                     pos += 1
                     default_val, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
                     defaults[param_name] = default_val
-
                 params.append(param_name)
             elif tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '*':
                 pos += 1
@@ -1253,47 +1312,34 @@ def parse_fn_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_
             elif tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
                 pos += 1
             else:
-                raise KeiError("SyntaxError", f"未知的符号: \"{tokens[pos]['value']}\"")
+                raise KeiError("SyntaxError", f"未知符号: {tokens[pos]['value']}")
 
-        pos += 1  # 跳过 ')'
+        pos += 1
 
         hint = None
         if pos < len(tokens) and tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '->':
             pos += 1
             hint, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
 
-        # 箭头函数
         if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '=>':
             pos += 1
             expr, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
             body = [{'type': 'return', 'value': expr}]
             __kei__.stack.pop()
-            node = {
-                'type': 'function',
-                'name': func_name,
-                'params': params,
-                'defaults': defaults,
-                'body': body,
-                'hint': hint,
-                'source': source_line,
-                'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
-            }
-            return node, pos, linepos
+            return {
+                'type': 'function', 'name': func_name, 'params': params,
+                'defaults': defaults, 'body': body, 'hint': hint,
+                'source': source_line, 'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
+            }, pos, linepos
 
         body, pos, linepos = parse_block(tokens, pos, all_lines, linepos, {'type': 'symbol', 'value': '{'})
 
         __kei__.stack.pop()
-        node = {
-            'type': 'function',
-            'name': func_name,
-            'params': params,
-            'defaults': defaults,
-            'body': body,
-            'hint': hint,
-            'source': source_line,
-            'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
-        }
-        return node, pos, linepos
+        return {
+            'type': 'function', 'name': func_name, 'params': params,
+            'defaults': defaults, 'body': body, 'hint': hint,
+            'source': source_line, 'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
+        }, pos, linepos
     except:
         __kei__.stack.pop()
         raise
@@ -2087,25 +2133,51 @@ def parse_expr(tokens: list, pos: int, in_call=False, allow_assign=False, in_com
     while pos < len(tokens):
         t = tokens[pos]
         if t['value'] == 'if' and not in_comp:
+            if left is None:
+                raise KeiError("SyntaxError", "三目运算符缺少真值")
+
             true_val = left
             pos += 1
             cond, pos, linepos = parse_expr(tokens, pos, in_call, allow_assign, in_comp, all_lines, linepos)
+
+            if cond is None:
+                raise KeiError("SyntaxError", "三目运算符缺少条件表达式")
+
             if pos >= len(tokens) or tokens[pos].get('value') != 'else':
-                raise KeiError("SyntaxError", "三目运算符需要 else 分支")
+                raise KeiError("SyntaxError", "三目运算符需要 else")
             pos += 1
+
             false_val, pos, linepos = parse_expr(tokens, pos, in_call, allow_assign, in_comp, all_lines, linepos)
+
+            if false_val is None:
+                raise KeiError("SyntaxError", "三目运算符缺少假值")
+
             node = {'type': 'ternary', 'cond': cond, 'true_val': true_val, 'false_val': false_val}
             return node, pos, linepos
+
         if t['value'] == 'unless' and not in_comp:
+            if left is None:
+                raise KeiError("SyntaxError", "三目运算符缺少真值")
+
             true_val = left
             pos += 1
             cond, pos, linepos = parse_expr(tokens, pos, in_call, allow_assign, in_comp, all_lines, linepos)
+
+            if cond is None:
+                raise KeiError("SyntaxError", "三目运算符缺少条件表达式")
+
             if pos >= len(tokens) or tokens[pos].get('value') != 'else':
-                raise KeiError("SyntaxError", "三目运算符需要 else 分支")
+                raise KeiError("SyntaxError", "三目运算符需要 else")
             pos += 1
+
             false_val, pos, linepos = parse_expr(tokens, pos, in_call, allow_assign, in_comp, all_lines, linepos)
+
+            if false_val is None:
+                raise KeiError("SyntaxError", "三目运算符缺少假值")
+
             node = {'type': 'unternary', 'cond': cond, 'true_val': true_val, 'false_val': false_val}
             return node, pos, linepos
+
         break
 
     if pos < len(tokens) and tokens[pos].get('type') == 'op' and tokens[pos].get('value') == '?':
@@ -2803,6 +2875,15 @@ def find_method(class_obj, method_name, env):
         class_obj = env.get(class_obj.get('parent')) if class_obj.get('parent') else None
     return None
 
+def get_from_env(name, env, default=undefined):
+    """从当前环境向上查找任意变量 / 配置 / 函数"""
+    current = env
+    while current is not None:
+        if name in current:
+            return current[name]
+        current = current.get('__parent__')
+    return default
+
 def runtoken(node, env) -> tuple:
     env["__env__"] = KeiDict(env)
 
@@ -2820,31 +2901,6 @@ def runtoken(node, env) -> tuple:
         globals()['linenum'] = node.get('linenum')
 
     def runtokentemp() -> tuple:
-        if env.get("__maxrecursion__"):
-            if type(env["__maxrecursion__"]) is KeiInt:
-                __maxrecursion__ = env["__maxrecursion__"].value
-                if __maxrecursion__ > 0:
-                    sys.setrecursionlimit(__maxrecursion__)
-                elif __maxrecursion__ == 0:
-                    sys.setrecursionlimit(1024)
-                else:
-                    raise KeiError("ValueError", "__maxrecursion__ 不能是负数")
-            else:
-                raise KeiError("ValueError", "__maxrecursion__ 必须是整数")
-
-        if env.get("__precision__"):
-            if type(env["__precision__"]) is KeiInt:
-                __precision__ = env["__precision__"].value
-
-                if __precision__ > 0:
-                    getcontext().prec = __precision__
-                elif __precision__ == 0:
-                    getcontext().prec = 28
-                else:
-                    raise KeiError("ValueError", "__precision__ 不能是负数")
-            else:
-                raise KeiError("ValueError", "__precision__ 必须是整数")
-
         if node is None:
             raise KeiError("RuntimeError", "出现了未意料的None节点")
 
@@ -2931,41 +2987,30 @@ def runtoken(node, env) -> tuple:
 
         if node['type'] == 'name':
             name_value = node['value']
-
             while isinstance(name_value, dict) and 'value' in name_value:
                 name_value = name_value['value']
 
             if name_value == "..." and "..." in env:
                 return env["..."], False
 
-            assert type(name_value) is str, "变量名称不是字符串"
             parts = name_value.split('.') if '.' in name_value else [name_value]
 
-            obj = None
-            current = env
-            while current is not None:
-                if parts[0] in current:
-                    obj = current[parts[0]]
-                    break
-                current = current.get('__parent__')
+            # 关键：统一向上查找
+            obj = get_from_env(parts[0], env)
 
-            if obj is None:
+            if obj is undefined:
                 return undefined, False
 
             for part in parts[1:]:
                 if isinstance(obj, KeiBase):
                     obj = obj[part]
                 elif isinstance(obj, dict):
-                    if part in obj:
-                        obj = obj[part]
-                    else:
-                        return undefined, False
+                    obj = obj.get(part, undefined)
                 else:
                     try:
                         obj = getattr(obj, part)
                     except AttributeError:
                         return undefined, False
-
                 if obj is undefined:
                     return undefined, False
 
@@ -3004,7 +3049,7 @@ def runtoken(node, env) -> tuple:
                 else:
                     result = obj[index]
             elif isinstance(obj, (list, dict, str)):
-                if env.get("__compat_mode__"):
+                if get_from_env("__compat_mode__", env):
                     try:
                         if isinstance(index, KeiInt):
                             result = obj[index.value]
@@ -3833,9 +3878,9 @@ def runtoken(node, env) -> tuple:
                         return result, False
                     raise KeiError("NameError", f"对象没有方法 {method_name}")
 
-                if name in env:
-                    func_obj = env[name]
+                func_obj = get_from_env(name, env)
 
+                if func_obj is not undefined:
                     if isinstance(func_obj, KeiInstance) and hasattr(func_obj, '__call__'):
                         result = func_obj.__call__(*args, **kwargs)
                         return result, False
@@ -3858,7 +3903,7 @@ def runtoken(node, env) -> tuple:
                         return instance, False
 
                     if isinstance(func_obj, KeiFunction):
-                        return func_obj(linecode=call_source, *args, **kwargs), False
+                        return func_obj(linecode=call_source, name=get_from_env('__caller__', env, '<global>'), *args, **kwargs), False
 
                     if callable(func_obj):
                         try:
@@ -4014,8 +4059,6 @@ def runtoken(node, env) -> tuple:
                         if i < len(val):
                             env[var] = val[i]
                         else:
-                            if not env.get("__undefined__"):
-                                raise KeiError("SyntaxError", f"多变量赋值缺少值: 变量 {var} 没有对应的值")
                             env[var] = undefined
 
                     return KeiList([v for v in val]), flag
@@ -4028,8 +4071,6 @@ def runtoken(node, env) -> tuple:
                         if i < len(items):
                             env[var] = items[i]
                         else:
-                            if not env.get("__undefined__"):
-                                raise KeiError("SyntaxError", f"多变量赋值缺少值: 变量 {var} 没有对应的值")
                             env[var] = undefined
                     return val, flag
 
@@ -4081,7 +4122,7 @@ def runtoken(node, env) -> tuple:
 
                 else:
                     name = parts[0]
-                    if name in env.get('__globals__', []):
+                    if name in get_from_env('__globals__', env, []):
                         target = env
                         while target.get('__parent__') is not None:
                             target = target['__parent__']
@@ -4402,9 +4443,9 @@ def runtoken(node, env) -> tuple:
                     alias = module_info.get('alias')
                     is_wildcard = module_info.get('type') == 'wildcard'
 
-                    assert isinstance(env.get("__path__", KeiList([])), KeiList), "__path__需要是一个列表"
+                    assert isinstance(get_from_env("__path__", env, KeiList([])), KeiList), "__path__需要是一个列表"
 
-                    __path__ = env.get("__path__", KeiList([])).items
+                    __path__ = get_from_env("__path__", env, KeiList([])).items
 
                     full_module_name = full_module_name.replace('.', '/')
 
@@ -4420,10 +4461,8 @@ def runtoken(node, env) -> tuple:
                             module_env = {
                                 "__path__": KeiList(["."] + paths),
                                 "__name__": KeiString(f"__{module_name}__"),
-                                "__maxrecursion__": KeiInt(1024),
                                 "__env__": KeiDict(env),
                                 "__osname__": KeiString(platform.system().lower()),
-                                "__precision__": KeiInt(28),
                                 "__typeassert__": KeiBool(True),
                             }
 
@@ -4482,9 +4521,9 @@ def runtoken(node, env) -> tuple:
             module_name = node['module']
             imports = node['imports']
 
-            assert isinstance(env.get("__path__", KeiList([])), KeiList), "__path__需要是一个列表"
+            assert isinstance(get_from_env("__path__", env, KeiList([])), KeiList), "__path__需要是一个列表"
 
-            __path__ = env.get("__path__", KeiList([])).items
+            __path__ = get_from_env("__path__", env, KeiList([])).items
 
             module_path = module_name.replace('.', '/')
             module_short_name = module_path.split("/")[-1]
@@ -4502,10 +4541,8 @@ def runtoken(node, env) -> tuple:
                     module_env = {
                         "__path__": KeiList(["."] + paths),
                         "__name__": KeiString(f"__{module_short_name}__"),
-                        "__maxrecursion__": KeiInt(1024),
                         "__env__": KeiDict(env),
                         "__osname__": KeiString(platform.system().lower()),
-                        "__precision__": KeiInt(28),
                         "__typeassert__": KeiBool(True),
                     }
 
@@ -4620,7 +4657,7 @@ def runtoken(node, env) -> tuple:
                 raise KeiError(types, name)
 
             else:
-                if env.get("__error__", None) is not None:
+                if get_from_env("__error__", env, None) is not None:
                     if isinstance(env['__error__'], (KeiList, list)):
                         err = env['__error__'][0]
                         if not isinstance(err, KeiError):
@@ -4784,7 +4821,8 @@ def runtoken(node, env) -> tuple:
             val, flag = runtoken(node['expr'], env)
             hint = runtoken(node['hint'], env)[0]
 
-            if bool(env.get("__typeassert__")):
+            typeassert = get_from_env("__typeassert__", env)
+            if typeassert is not undefined and typeassert.value:
                 if isinstance(hint, KeiList):
                     for h in hint.items:
                         if type(val) is KeiInt and h is KeiFloat:
@@ -5081,10 +5119,8 @@ def exec(code, env=None):
     env.update({
         "__path__": KeiList(["."] + paths),
         "__name__": KeiString("__main__"),
-        "__maxrecursion__": KeiInt(1024),
         "__env__": KeiDict(env),
         "__osname__": KeiString(platform.system().lower()),
-        "__precision__": KeiInt(28),
         "__typeassert__": KeiBool(True),
     })
 

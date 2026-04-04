@@ -147,7 +147,7 @@ class KeiREPL:
                 self.env = kei.exec(line, __kei__.env)[0] | __kei__.env
             except:
                 kei.__kei__.code = line
-                raise
+                pass
 
         except KeyboardInterrupt:
             pass
