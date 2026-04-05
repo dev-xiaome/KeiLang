@@ -77,11 +77,8 @@ def tokei(value):
     if hasattr(value, '__name__') and hasattr(value, '__dict__'):
         return module(value)
 
-    # 其他类型，尝试转字符串
-    try:
-        return KeiString(str(value))
-    except:
-        return value
+    # 其他类型
+    return value
 
 def pyimport(module_name):
     """导入 Python 模块"""

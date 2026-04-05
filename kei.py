@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.7-9"
+__version__ = "1.7-10"
 
 class KeiState:
     stack: List[Any]
@@ -4518,17 +4518,39 @@ def runtoken(node, env) -> tuple:
 
                             exec(code, module_env)
 
+                            # 构建模块字典
                             module_dict = {}
                             for k, v in module_env.items():
                                 if not k.startswith('__'):
                                     module_dict[k] = v
+                                elif k == '__all__':
+                                    module_dict['__all__'] = v
+
+                            # 获取导出的名称
+                            all_names = None
+                            if '__all__' in module_dict:
+                                all_val = module_dict['__all__']
+                                if isinstance(all_val, KeiList):
+                                    all_names = [item.value if isinstance(item, KeiString) else str(item) for item in all_val.items]
+                                elif isinstance(all_val, list):
+                                    all_names = [str(item) for item in all_val]
+                                elif isinstance(all_val, KeiString):
+                                    all_names = [all_val.value]
+                                elif isinstance(all_val, str):
+                                    all_names = [all_val]
+
+                            # 构建导出字典（统一规则）
+                            if all_names is not None:
+                                exported_dict = {name: module_dict[name] for name in all_names if name in module_dict}
+                            else:
+                                exported_dict = {k: v for k, v in module_dict.items() if not k.startswith('_')}
 
                             if is_wildcard:
-                                for name, value in module_dict.items():
+                                for name, value in exported_dict.items():
                                     env[name] = value
                             else:
                                 name = alias or module_name
-                                env[name] = KeiNamespace(name, module_dict)
+                                env[name] = KeiNamespace(name, exported_dict)
 
                             return None, False
 
@@ -4542,17 +4564,39 @@ def runtoken(node, env) -> tuple:
                             module_env = {}
                             __py_exec__(code, module_env)
 
+                            # 构建模块字典
                             module_dict = {}
                             for k, v in module_env.items():
                                 if not k.startswith('__'):
                                     module_dict[k] = v
+                                elif k == '__all__':
+                                    module_dict['__all__'] = v
+
+                            # 获取导出的名称
+                            all_names = None
+                            if '__all__' in module_dict:
+                                all_val = module_dict['__all__']
+                                if isinstance(all_val, KeiList):
+                                    all_names = [item.value if isinstance(item, KeiString) else str(item) for item in all_val.items]
+                                elif isinstance(all_val, list):
+                                    all_names = [str(item) for item in all_val]
+                                elif isinstance(all_val, KeiString):
+                                    all_names = [all_val.value]
+                                elif isinstance(all_val, str):
+                                    all_names = [all_val]
+
+                            # 构建导出字典（统一规则）
+                            if all_names is not None:
+                                exported_dict = {name: module_dict[name] for name in all_names if name in module_dict}
+                            else:
+                                exported_dict = {k: v for k, v in module_dict.items() if not k.startswith('_')}
 
                             if is_wildcard:
-                                for name, value in module_dict.items():
+                                for name, value in exported_dict.items():
                                     env[name] = value
                             else:
                                 name = alias or full_module_name
-                                env[name] = KeiNamespace(name, module_dict)
+                                env[name] = KeiNamespace(name, exported_dict)
 
                             return None, False
 
@@ -4613,6 +4657,7 @@ def runtoken(node, env) -> tuple:
             if module_env is None:
                 raise KeiError("ImportError", f"找不到模块: {module_name}")
 
+            # 构建模块字典
             module_dict = {}
             for k, v in module_env.items():
                 if not k.startswith('__'):
@@ -4620,6 +4665,7 @@ def runtoken(node, env) -> tuple:
                 elif k == '__all__':
                     module_dict['__all__'] = v
 
+            # 获取导出的名称（统一规则）
             all_names = None
             if '__all__' in module_dict:
                 all_val = module_dict['__all__']
@@ -4632,22 +4678,22 @@ def runtoken(node, env) -> tuple:
                 elif isinstance(all_val, str):
                     all_names = [all_val]
 
+            # 构建导出字典
+            if all_names is not None:
+                exported_dict = {name: module_dict[name] for name in all_names if name in module_dict}
+            else:
+                exported_dict = {k: v for k, v in module_dict.items() if not k.startswith('_')}
+
             for imp in imports:
                 if imp['type'] == 'wildcard':
-                    if all_names is not None:
-                        names_to_import = all_names
-                    else:
-                        names_to_import = [k for k in module_dict.keys() if not k.startswith('__')]
-
-                    for name in names_to_import:
-                        if name in module_dict:
-                            env[name] = module_dict[name]
-                        elif name in module_env:
-                            env[name] = module_env[name]
+                    # * 导入：只导入 exported_dict 中的内容
+                    for name, value in exported_dict.items():
+                        env[name] = value
                 else:
                     name = imp['name']
                     alias = imp['alias'] or name
 
+                    # 显式导入：可以导入任何存在的（包括私有，如果用户坚持）
                     if name in module_dict:
                         env[alias] = module_dict[name]
                     elif name in module_env:
@@ -4836,8 +4882,6 @@ def runtoken(node, env) -> tuple:
 
                                 return val, True
 
-                        env['__error__'].pop()
-
                         if node['var']:
                             if old_e is not None:
                                 env[node['var']] = old_e
@@ -4850,6 +4894,18 @@ def runtoken(node, env) -> tuple:
                             if f_is_return:
                                 return f_val, True
                 except:
+                    linenum = globals()['linenum']
+                    source  = globals()['source']
+
+                    if node['finallybody']:
+                        for f_stmt in node['finallybody']:
+                            f_val, f_is_return = runtoken(f_stmt, env)
+                            if f_is_return:
+                                return f_val, True
+
+                    globals()['linenum'] = linenum
+                    globals()['source']  = source
+
                     raise
 
             else:
@@ -4865,6 +4921,11 @@ def runtoken(node, env) -> tuple:
             return None, False
 
         if node['type'] == 'global':
+            for name_node in node['names']:
+                var_name = name_node['value']
+                if '__globals__' not in env:
+                    env['__globals__'] = set()
+                env['__globals__'].add(var_name)
             return None, False
 
         if node['type'] == 'typeassert':
