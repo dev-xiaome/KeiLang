@@ -2788,10 +2788,20 @@ class KeiNamespace(KeiBase):
         if isinstance(other, KeiNamespace):
             # 合并两个命名空间的环境
             new_env = self.env[self.__name__].copy()
-            new_env.update(other.env)
+            new_env.update(other.env[other.__name__] if hasattr(other, 'env') and other.__name__ in other.env else other.env)
             # 生成新名字
-            new_name = f"{self.name}+{other.name}"
-            return KeiNamespace(new_name, new_env)
+            new_name = f"{self.__name__}+{other.__name__}"
+            return KeiNamespace(new_name, new_env, isns=False)
+        return undefined
+
+    def __or__(self, other):
+        """namespace | namespace = 合并，后者覆盖前者（同 __add__）"""
+        return self.__add__(other)
+
+    def __ror__(self, other):
+        """other | namespace（支持左操作数不是 namespace）"""
+        if isinstance(other, KeiNamespace):
+            return other.__add__(self)
         return undefined
 
 class NamespaceEnv:
