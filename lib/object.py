@@ -2437,17 +2437,30 @@ class KeiFunction(KeiBase):
         for param_name, type_node in type_hints.items():
             if param_name in new_env:
                 val = new_env[param_name]
-                # 计算期望的类型
-                expected_type, _ = runtoken(type_node, self.__env__)
+                expected, _ = runtoken(type_node, self.__env__)
 
-                # 检查类型
-                if not isinstance(expected_type, type):
-                    expected_type = type(expected_type)
-
-                if not isinstance(val, expected_type):
-                    # 抛出错误，指向调用点
-                    raise KeiError("TypeError",
-                        f"参数 '{param_name}' 期望 {content(expected_type)}, 得到 {content(type(val))}")
+                # 检查是否是联合类型（KeiList）
+                if isinstance(expected, KeiList):
+                    # 期望类型列表
+                    expected_types = expected.items
+                    matched = False
+                    for et in expected_types:
+                        # 获取实际的类型类
+                        if not isinstance(et, type):
+                            et = type(et)
+                        if isinstance(val, et):
+                            matched = True
+                            break
+                    if not matched:
+                        raise KeiError("TypeError",
+                            f"参数 '{param_name}' 期望 {content(expected)}, 得到 {content(type(val))}")
+                else:
+                    # 单一类型
+                    if not isinstance(expected, type):
+                        expected = type(expected)
+                    if not isinstance(val, expected):
+                        raise KeiError("TypeError",
+                            f"参数 '{param_name}' 期望 {content(expected)}, 得到 {content(type(val))}")
 
         try:
             result = null
@@ -2743,14 +2756,18 @@ class KeiBoundMethod(KeiBase):
 # ========== 命名空间类型 ==========
 
 class KeiNamespace(KeiBase):
-    def __init__(self, name: str, env: dict):
+    def __init__(self, name: str, env: dict, isns=False):
         super().__init__("namespace")
         self.__name__ = name
-        self.env = env
+        if isns:
+            self.env = env
+        else:
+            self.env = {}
+            self.env[self.__name__] = env
 
     def __getattr__(self, key):
-        if key in self.env:
-            return self.env[key]
+        if key in self.env[self.__name__]:
+            return self.env[self.__name__][key]
         return undefined
 
     def __getitem__(self, key):
@@ -2758,19 +2775,19 @@ class KeiNamespace(KeiBase):
         return result
 
     def __setitem__(self, key, value):
-        self.env[key] = value
+        self.env[self.__name__][key] = value
 
     def __repr__(self):
         return f"<namespace {self.__name__}>"
 
     def __dir__(self):
-        return list(self.env.keys()) + ['__name__']
+        return list(self.env[self.__name__].keys()) + ['__name__']
 
     def __add__(self, other):
         """namespace + namespace = 合并，后者覆盖前者"""
         if isinstance(other, KeiNamespace):
             # 合并两个命名空间的环境
-            new_env = self.env.copy()
+            new_env = self.env[self.__name__].copy()
             new_env.update(other.env)
             # 生成新名字
             new_name = f"{self.name}+{other.name}"

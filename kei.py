@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.7-7"
+__version__ = "1.7-8"
 
 class KeiState:
     stack: List[Any]
@@ -219,8 +219,8 @@ def error(errtype: str | None, info: str, stack: list=[], code:str|None=None, li
 
     print(f"{space} ·")
 
-    #import traceback
-    #traceback.print_exc()
+    import traceback
+    traceback.print_exc()
 
     if not __kei__.repl:
         sys.exit(1)
@@ -300,6 +300,11 @@ def token(original: str) -> list:
                     break
 
                 c = codes[pos]
+
+                if c == '|' and pos + 1 < length and codes[pos+1] == '>':
+                    tokens.append("|>")
+                    pos += 2
+                    continue
 
                 if c == '.' and pos + 2 < length and codes[pos+1] == '.' and codes[pos+2] == '.':
                     tokens.append("...")
@@ -649,6 +654,11 @@ def ast(tokenlines: list) -> list:
 
         if thetoken == "=":
             result.append({"type":"op", "value":"=", 'linenum':linetokens[pos][1]})
+            pos += 1
+            continue
+
+        if thetoken == "|>":
+            result.append({"type":"op", "value":"|>", 'linenum':linetokens[pos][1]})
             pos += 1
             continue
 
@@ -1299,27 +1309,26 @@ def parse_fn_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_
 
         params = []
         defaults = {}
-        type_hints = {}  # 新增：存储类型注解
+        type_hints = {}
 
         while pos < len(tokens) and not (tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ')'):
             if tokens[pos]['type'] == 'name':
                 param_name = tokens[pos]['value']
                 pos += 1
 
-                # 检查类型注解 : type
                 if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ':':
                     pos += 1
-                    # 解析类型表达式
+                    #print(tokens[pos])
                     type_node, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
                     type_hints[param_name] = type_node
 
                 # 检查默认值
                 if pos < len(tokens) and tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '=':
                     pos += 1
-                    default_val, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
-                    defaults[param_name] = default_val
+                    default_val, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)  # 解析 "Hello"
+                    defaults[param_name] = default_val  # 存到 "x" 的默认值
 
-                params.append(param_name)
+                params.append(param_name)  # 只添加一次 "x"
 
             elif tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '*':
                 pos += 1
@@ -1354,7 +1363,7 @@ def parse_fn_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_
             __kei__.stack.pop()
             return {
                 'type': 'function', 'name': func_name, 'params': params,
-                'defaults': defaults, 'type_hints': type_hints, 'hint': hint,
+                'defaults': defaults, 'typehints': type_hints, 'hint': hint,
                 'body': body,
                 'source': source_line, 'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
             }, pos, linepos
@@ -1952,11 +1961,6 @@ def parse_atom(tokens: list, pos: int, in_call=False, all_lines=None, linepos=0)
     if t["type"] == "name":
         name = t["value"]
         pos += 1
-        if pos < len(tokens) and tokens[pos]['type'] == 'op' and tokens[pos]['value'] == '=':
-            if {'type': 'name', 'value': 'type'} not in tokens:
-                pos -= 1
-                return None, pos, linepos
-
         node = {'type': 'name', 'value': name}
         while pos < len(tokens):
             if tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '.':
@@ -1976,6 +1980,7 @@ def parse_atom(tokens: list, pos: int, in_call=False, all_lines=None, linepos=0)
                 node, pos, linepos = parse_index_with_obj(node, tokens, pos, all_lines, linepos)
             else:
                 break
+
         return node, pos, linepos
 
     if t["type"] == "symbol" and t["value"] == "(":
@@ -2121,6 +2126,7 @@ def parse_assign(tokens: list, pos: int, assign_pos: int, all_lines: list, linep
 
 def parse_term(tokens, pos, in_call=False, all_lines=None, linepos=0):
     left, pos, linepos = parse_pow(tokens, pos, in_call, all_lines, linepos)
+
     while pos < len(tokens):
         t = tokens[pos]
         if t["type"] != "op":
@@ -2139,6 +2145,7 @@ def parse_term(tokens, pos, in_call=False, all_lines=None, linepos=0):
 
 def parse_pow(tokens, pos, in_call=False, all_lines=None, linepos=0):
     left, pos, linepos = parse_unary(tokens, pos, in_call, all_lines, linepos)
+
     while pos < len(tokens):
         t = tokens[pos]
         if t["type"] != "op":
@@ -2212,6 +2219,7 @@ def parse_expr(tokens: list, pos: int, in_call=False, allow_assign=False, in_com
         pos += 1
         node = {'type': 'trysingle', 'expr': left}
         return node, pos, linepos
+
     if pos < len(tokens) and tokens[pos].get('type') == 'op' and tokens[pos].get('value') == '!':
         pos += 1
         node = {'type': 'notnullassert', 'expr': left}
@@ -2221,6 +2229,7 @@ def parse_expr(tokens: list, pos: int, in_call=False, allow_assign=False, in_com
 
 def parse_logic(tokens, pos, in_call=False, allow_assign=False, in_comp=False, all_lines=None, linepos=0):
     left, pos, linepos = parse_compare(tokens, pos, in_call, allow_assign, in_comp, all_lines, linepos)
+
     while pos < len(tokens):
         t = tokens[pos]
         if t["type"] != "op":
@@ -2239,6 +2248,7 @@ def parse_logic(tokens, pos, in_call=False, allow_assign=False, in_comp=False, a
 
 def parse_compare(tokens, pos, in_call=False, allow_assign=False, in_comp=False, all_lines=None, linepos=0):
     left, pos, linepos = parse_addsub(tokens, pos, in_call, allow_assign, in_comp, all_lines, linepos)
+
     while pos < len(tokens):
         t = tokens[pos]
         if t["type"] != "op":
@@ -2257,6 +2267,7 @@ def parse_compare(tokens, pos, in_call=False, allow_assign=False, in_comp=False,
 
 def parse_addsub(tokens, pos, in_call=False, allow_assign=False, in_comp=False, all_lines=None, linepos=0):
     left, pos, linepos = parse_term(tokens, pos, in_call, all_lines, linepos)
+
     while pos < len(tokens):
         t = tokens[pos]
         if t["type"] != "op":
@@ -2542,6 +2553,7 @@ def parse_dict(tokens: list, pos: int, all_lines=None, linepos=0) -> tuple:
 
 def parse_unary(tokens: list, pos: int, in_call=False, all_lines=None, linepos=0) -> tuple:
     left, pos, linepos = parse_unary_prefix(tokens, pos, in_call, all_lines, linepos)
+
     while pos < len(tokens):
         t = tokens[pos]
         if t.get('type') == 'symbol' and t.get('value') == '(':
@@ -2582,6 +2594,7 @@ def parse_unary_prefix(tokens, pos, in_call=False, all_lines=None, linepos=0):
         return expr, pos, linepos
 
     expr, pos, linepos = parse_atom(tokens, pos, in_call, all_lines, linepos)
+
     while pos < len(tokens):
         t = tokens[pos]
         if t.get('type') == 'op' and t.get('value') in {"++", "--"}:
@@ -2913,6 +2926,9 @@ def get_from_env(name, env, default=undefined):
     return default
 
 def runtoken(node, env) -> tuple:
+    if node is None:
+        raise KeiError("RuntimeError", "出现了未意料的None节点")
+
     env["__env__"] = KeiDict(env)
 
     __kei__.env = env
@@ -2929,9 +2945,6 @@ def runtoken(node, env) -> tuple:
         globals()['linenum'] = node.get('linenum')
 
     def runtokentemp() -> tuple:
-        if node is None:
-            raise KeiError("RuntimeError", "出现了未意料的None节点")
-
         if node['type'] in {'null', 'int', 'float', 'str', 'bool', 'list', 'dict'}:
             def temp() -> tuple:
                 if node['type'] == 'null':
@@ -4725,7 +4738,7 @@ def runtoken(node, env) -> tuple:
             ns = env.copy()
             ns[node['name']] = ns_data
 
-            env[node['name']] = KeiNamespace(node['name'], ns)
+            env[node['name']] = KeiNamespace(node['name'], ns, True)
             return None, False
 
         if node['type'] == 'with':
