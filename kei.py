@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.7-14"
+__version__ = "1.7-15"
 
 class KeiState:
     stack: List[Any]
@@ -2881,13 +2881,39 @@ def escape(s):
             elif s[i+1] == "'":
                 result.append("'")
                 i += 2
-            elif s[i+1] == '0' and i + 3 < length and s[i+2].isdigit() and s[i+3].isdigit():
-                try:
-                    result.append(chr(int(s[i+1:i+4], 8)))
-                    i += 4
-                except:
-                    result.append(s[i])
-                    i += 1
+            # 新增：常用转义
+            elif s[i+1] == 'a':
+                result.append('\a')
+                i += 2
+            elif s[i+1] == 'b':
+                result.append('\b')
+                i += 2
+            elif s[i+1] == 'f':
+                result.append('\f')
+                i += 2
+            elif s[i+1] == 'v':
+                result.append('\v')
+                i += 2
+            elif s[i+1] == 'e':
+                result.append('\x1b')  # ESC 字符
+                i += 2
+            # 八进制 \0xx 或 \0
+            elif s[i+1] == '0':
+                if i + 2 < length and s[i+2].isdigit():
+                    # 至少有一位数字
+                    j = i + 2
+                    while j < length and j < i + 4 and s[j].isdigit():
+                        j += 1
+                    try:
+                        result.append(chr(int(s[i+2:j], 8)))
+                        i = j
+                    except:
+                        result.append(s[i])
+                        i += 1
+                else:
+                    result.append('\x00')  # 空字符
+                    i += 2
+            # 十六进制 \xHH
             elif s[i+1] == 'x' and i + 3 < length:
                 try:
                     result.append(chr(int(s[i+2:i+4], 16)))
@@ -2895,6 +2921,7 @@ def escape(s):
                 except:
                     result.append(s[i])
                     i += 1
+            # Unicode 16位 \uHHHH
             elif s[i+1] == 'u' and i + 5 < length:
                 try:
                     result.append(chr(int(s[i+2:i+6], 16)))
@@ -2902,6 +2929,7 @@ def escape(s):
                 except:
                     result.append(s[i])
                     i += 1
+            # Unicode 32位 \UHHHHHHHH
             elif s[i+1] == 'U' and i + 9 < length:
                 try:
                     result.append(chr(int(s[i+2:i+10], 16)))
