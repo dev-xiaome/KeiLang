@@ -87,7 +87,7 @@ class KeiREPL:
                 return None
 
         import kei
-        import lib.stdlib as stdlib
+        import stdlib
         user_vars = []
         if self.env and isinstance(self.env, dict):
             user_vars = [k for k in self.env.keys() if not k.startswith('__') and k != 'env']
