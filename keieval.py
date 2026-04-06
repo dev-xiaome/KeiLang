@@ -1553,7 +1553,47 @@ def node_class(node, env) -> tuple: # if node['type'] == 'class':
     env[node['name']] = kei_class
     return None, False
 
-def node_import(node, env) -> tuple: # if node['type'] == 'import':
+def _get_exported_dict(module_env, module_dict):
+    """从模块环境中构建导出字典（统一规则）"""
+    # 获取 __all__
+    all_names = None
+    if '__all__' in module_env:
+        all_val = module_env['__all__']
+        if isinstance(all_val, KeiList):
+            all_names = [item.value if isinstance(item, KeiString) else str(item) for item in all_val.items]
+        elif isinstance(all_val, list):
+            all_names = [str(item) for item in all_val]
+        elif isinstance(all_val, KeiString):
+            all_names = [all_val.value]
+        elif isinstance(all_val, str):
+            all_names = [all_val]
+
+    # 构建模块字典（包含所有非私有和 __all__ 指定的）
+    for k, v in module_env.items():
+        if not k.startswith('__'):
+            module_dict[k] = v
+        elif k == '__all__':
+            module_dict['__all__'] = v
+        elif all_names is not None and k in all_names:
+            # 即使以 __ 开头，只要在 __all__ 里就加入
+            module_dict[k] = v
+
+    # 构建导出字典
+    if all_names is not None:
+        # __all__ 最高优先级：只导出 __all__ 中存在的
+        exported_dict = {}
+        for name in all_names:
+            if name in module_dict:
+                exported_dict[name] = module_dict[name]
+            elif name in module_env:
+                exported_dict[name] = module_env[name]
+    else:
+        # 没有 __all__：导出所有非 _ 开头的
+        exported_dict = {k: v for k, v in module_dict.items() if not k.startswith('_')}
+
+    return exported_dict
+
+def node_import(node, env) -> tuple:
     try:
         for module_info in node['modules']:
             full_module_name = module_info['module']
@@ -1588,32 +1628,8 @@ def node_import(node, env) -> tuple: # if node['type'] == 'import':
 
                     exec(code, module_env)
 
-                    # 构建模块字典
                     module_dict = {}
-                    for k, v in module_env.items():
-                        if not k.startswith('__'):
-                            module_dict[k] = v
-                        elif k == '__all__':
-                            module_dict['__all__'] = v
-
-                    # 获取导出的名称
-                    all_names = None
-                    if '__all__' in module_dict:
-                        all_val = module_dict['__all__']
-                        if isinstance(all_val, KeiList):
-                            all_names = [item.value if isinstance(item, KeiString) else str(item) for item in all_val.items]
-                        elif isinstance(all_val, list):
-                            all_names = [str(item) for item in all_val]
-                        elif isinstance(all_val, KeiString):
-                            all_names = [all_val.value]
-                        elif isinstance(all_val, str):
-                            all_names = [all_val]
-
-                    # 构建导出字典（统一规则）
-                    if all_names is not None:
-                        exported_dict = {name: module_dict[name] for name in all_names if name in module_dict}
-                    else:
-                        exported_dict = {k: v for k, v in module_dict.items() if not k.startswith('_')}
+                    exported_dict = _get_exported_dict(module_env, module_dict)
 
                     if is_wildcard:
                         for name, value in exported_dict.items():
@@ -1634,32 +1650,8 @@ def node_import(node, env) -> tuple: # if node['type'] == 'import':
                     module_env = {}
                     __py_exec__(code, module_env)
 
-                    # 构建模块字典
                     module_dict = {}
-                    for k, v in module_env.items():
-                        if not k.startswith('__'):
-                            module_dict[k] = v
-                        elif k == '__all__':
-                            module_dict['__all__'] = v
-
-                    # 获取导出的名称
-                    all_names = None
-                    if '__all__' in module_dict:
-                        all_val = module_dict['__all__']
-                        if isinstance(all_val, KeiList):
-                            all_names = [item.value if isinstance(item, KeiString) else str(item) for item in all_val.items]
-                        elif isinstance(all_val, list):
-                            all_names = [str(item) for item in all_val]
-                        elif isinstance(all_val, KeiString):
-                            all_names = [all_val.value]
-                        elif isinstance(all_val, str):
-                            all_names = [all_val]
-
-                    # 构建导出字典（统一规则）
-                    if all_names is not None:
-                        exported_dict = {name: module_dict[name] for name in all_names if name in module_dict}
-                    else:
-                        exported_dict = {k: v for k, v in module_dict.items() if not k.startswith('_')}
+                    exported_dict = _get_exported_dict(module_env, module_dict)
 
                     if is_wildcard:
                         for name, value in exported_dict.items():
@@ -1677,7 +1669,7 @@ def node_import(node, env) -> tuple: # if node['type'] == 'import':
     except Exception as e:
         raise KeiError("ImportError", f"导入模块失败: {e}")
 
-def node_fromimport(node, env) -> tuple: # if node['type'] == 'fromimport':
+def node_fromimport(node, env) -> tuple:
     module_name = node['module']
     imports = node['imports']
 
@@ -1689,7 +1681,6 @@ def node_fromimport(node, env) -> tuple: # if node['type'] == 'fromimport':
     module_short_name = module_path.split("/")[-1]
 
     module_env = None
-    module_dict = None
 
     kei_files = [os.path.join(path, f"{module_path}.kei") for path in __path__]
 
@@ -1727,43 +1718,18 @@ def node_fromimport(node, env) -> tuple: # if node['type'] == 'fromimport':
     if module_env is None:
         raise KeiError("ImportError", f"找不到模块: {module_name}")
 
-    # 构建模块字典
     module_dict = {}
-    for k, v in module_env.items():
-        if not k.startswith('__'):
-            module_dict[k] = v
-        elif k == '__all__':
-            module_dict['__all__'] = v
-
-    # 获取导出的名称（统一规则）
-    all_names = None
-    if '__all__' in module_dict:
-        all_val = module_dict['__all__']
-        if isinstance(all_val, KeiList):
-            all_names = [item.value if isinstance(item, KeiString) else str(item) for item in all_val.items]
-        elif isinstance(all_val, list):
-            all_names = [str(item) for item in all_val]
-        elif isinstance(all_val, KeiString):
-            all_names = [all_val.value]
-        elif isinstance(all_val, str):
-            all_names = [all_val]
-
-    # 构建导出字典
-    if all_names is not None:
-        exported_dict = {name: module_dict[name] for name in all_names if name in module_dict}
-    else:
-        exported_dict = {k: v for k, v in module_dict.items() if not k.startswith('_')}
+    exported_dict = _get_exported_dict(module_env, module_dict)
 
     for imp in imports:
         if imp['type'] == 'wildcard':
-            # * 导入：只导入 exported_dict 中的内容
             for name, value in exported_dict.items():
                 env[name] = value
         else:
             name = imp['name']
             alias = imp['alias'] or name
 
-            # 显式导入：可以导入任何存在的（包括私有，如果用户坚持）
+            # 显式导入：优先从 module_dict，再从 module_env
             if name in module_dict:
                 env[alias] = module_dict[name]
             elif name in module_env:

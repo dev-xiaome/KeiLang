@@ -444,9 +444,7 @@ class kei:
 
     @s
     def input(ps=KeiString('')):
-        kei.check(ps, KeiString, KeiFloat, name='input')
-        kei.print(ps, end=KeiString(''))
-        return KeiString(input())
+        return KeiString(input(content(ps)))
 
     @s
     def abs(x):

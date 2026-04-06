@@ -2627,9 +2627,12 @@ class KeiInstance(KeiBase):
         return None
 
     def __getitem__(self, key):
-        method = self._get_method('__getitem__')
+        method = self._get_method(key)
         if method:
-            return method(key)
+            # 如果是方法且需要绑定 self
+            if isinstance(method, KeiMethod):
+                return method.bind(self)  # ← 关键：绑定 self
+            return method
         if key in self._attrs:
             return self._attrs[key]
         if self._class is not None:
