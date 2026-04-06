@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.7-13"
+__version__ = "1.7-14"
 
 class KeiState:
     stack: List[Any]
@@ -504,10 +504,14 @@ def token(original: str) -> list:
                     has_dot = False
                     while pos < length:
                         if "0" <= codes[pos] <= "9" or codes[pos] == "_" or codes[pos].lower() == "e":
-                            if pos + 1 < length and codes[pos+1] in {"+", "-"}:
-                                pos += 2
+                            if codes[pos].lower() == "e":
+                                if pos + 1 < length and codes[pos+1] in {"+", "-"}:
+                                    pos += 2
+                                else:
+                                    pos += 1
                             else:
                                 pos += 1
+
                         elif codes[pos] == "." and not has_dot:
                             if pos + 1 < length and codes[pos+1] == '.':
                                 break
@@ -517,6 +521,7 @@ def token(original: str) -> list:
                             break
                     number = codes[start:pos]
                     tokens.append(number)
+
                     continue
 
                 if c in "<>!" and pos + 1 < length and codes[pos+1] == "=":
