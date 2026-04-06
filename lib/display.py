@@ -1,4 +1,4 @@
-from lib.stdlib import kei as stdlib
+from stdlib import kei as stdlib
 from lib.object import *
 
 def render_tree(obj, prefix=KeiString(""), style=KeiString("╰")):

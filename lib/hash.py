@@ -4,7 +4,7 @@
 import hashlib
 from lib.object import *
 from lib.kei2py import *
-from lib.stdlib import kei
+from stdlib import kei
 
 def md5(data: KeiString) -> KeiString:
     """MD5 哈希"""

@@ -2,7 +2,7 @@
 
 import time as _time  # 避免命名冲突
 
-from lib.stdlib import kei as stdlib
+from stdlib import kei as stdlib
 from lib.object import *
 
 def sleep(seconds):
