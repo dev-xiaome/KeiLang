@@ -147,6 +147,16 @@ def node_index(node, env) -> tuple: # if node['type'] == 'index':
     obj, _ = runtoken(node['obj'], env)
     index, _ = runtoken(node['index'], env)
 
+    # 检查是否是 KeiInstance 且有 __getitem__ 方法
+    if isinstance(obj, KeiInstance):
+        # 直接从类的方法表拿，不触发 __getitem__
+        method_info = obj._class._methods_map.get('__getitem__')
+        if method_info:
+            # 绑定实例并调用
+            method = KeiMethod(method_info, obj._class)
+            bound = method.bind(obj)
+            return bound(index), False
+
     if isinstance(obj, KeiBase):
         if isinstance(index, KeiInt):
             result = obj[index.value]

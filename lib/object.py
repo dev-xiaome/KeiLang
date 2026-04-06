@@ -2628,11 +2628,14 @@ class KeiInstance(KeiBase):
 
     def __getitem__(self, key):
         method = self._get_method(key)
+
         if method:
             # 如果是方法且需要绑定 self
             if isinstance(method, KeiMethod):
                 return method.bind(self)  # ← 关键：绑定 self
+
             return method
+
         if key in self._attrs:
             return self._attrs[key]
         if self._class is not None:
@@ -2857,12 +2860,14 @@ def content(obj, _seen=None, _depth=0, _in_container=False):
     _seen.add(obj_id)
 
     try:
+        # KeiLang 特殊值
         if obj is undefined: return "undefined"
         if obj is null: return "null"
         if obj is true: return "true"
         if obj is false: return "false"
         if obj is omit: return "..."
 
+        # KeiLang 基础类型
         if isinstance(obj, KeiInt): return f"{obj.value}"
         if isinstance(obj, KeiFloat): return f"{obj.value}"
         if isinstance(obj, KeiString):
@@ -2873,6 +2878,7 @@ def content(obj, _seen=None, _depth=0, _in_container=False):
 
         if isinstance(obj, KeiBool): return "true" if obj.value else "false"
 
+        # KeiLang 容器类型
         if isinstance(obj, KeiList):
             items = [content(item, _seen, _depth + 1, _in_container=True) for item in obj.items]
             return "[" + ", ".join(items) + "]"
@@ -2885,6 +2891,7 @@ def content(obj, _seen=None, _depth=0, _in_container=False):
                 items.append(f"{k_str}: {v_str}")
             return "{" + ", ".join(items) + "}"
 
+        # KeiLang 对象类型
         if isinstance(obj, KeiFunction): return f"<function {obj.__name__}>"
         if isinstance(obj, KeiClass): return f"<class {obj.__name__}>"
         if isinstance(obj, KeiInstance): return f"<instance {obj._class.__name__}>"
@@ -2892,6 +2899,7 @@ def content(obj, _seen=None, _depth=0, _in_container=False):
         if isinstance(obj, (KeiMethod, KeiBoundMethod)): return f"<method {obj.__name__}>"
         if isinstance(obj, KeiError): return f"{obj.value}"
 
+        # KeiLang 类型对象
         if isinstance(obj, type):
             if obj == KeiBase: return "<class any>"
             elif obj == KeiInt: return "<class int>"
@@ -2908,13 +2916,16 @@ def content(obj, _seen=None, _depth=0, _in_container=False):
             elif obj == _null: return "<class null>"
             else: return f"<class {obj.__name__}>" if hasattr(obj, '__name__') else "<class>"
 
+        # Python 模块
         if isinstance(obj, type(__import__('sys'))):
             name = getattr(obj, '__name__', 'unknown')
             return f"<module {name}>"
 
+        # Python 类型
         if isinstance(obj, type):
             return f"<type {obj.__name__}>"
 
+        # Python 原生容器
         if isinstance(obj, list):
             items = [content(item, _seen, _depth + 1, True) for item in obj]
             return "[" + ", ".join(items) + "]"
@@ -2937,12 +2948,14 @@ def content(obj, _seen=None, _depth=0, _in_container=False):
             items = [content(item, _seen, _depth + 1, True) for item in obj]
             return "{" + ", ".join(items) + "}"
 
+        # Python 字符串
         if isinstance(obj, str):
             if _in_container:
                 value = repr(obj)
                 return f"{value}".replace('\\\\', '\\')
             return obj
 
+        # Python 基础类型
         if obj is None:
             return "null"
         if isinstance(obj, bool):
@@ -2950,15 +2963,37 @@ def content(obj, _seen=None, _depth=0, _in_container=False):
         if isinstance(obj, (int, float)):
             return str(obj)
 
+        # Python 可调用对象
         if callable(obj):
             if hasattr(obj, '__name__'):
                 return f"<function {obj.__name__}>"
             return "<function>"
 
+        # ========== 新增：Python 自定义对象 ==========
+        # 有 __repr__ 方法的 Python 对象
+        if hasattr(obj, '__repr__'):
+            try:
+                repr_str = obj.__repr__()
+                # 防止递归
+                if repr_str.startswith('<') and repr_str.endswith('>'):
+                    return repr_str
+                return f"<object {repr_str}>"
+            except:
+                pass
+
+        # 有 __str__ 方法的 Python 对象
+        if hasattr(obj, '__str__'):
+            try:
+                return obj.__str__()
+            except:
+                pass
+
+        # 有 __name__ 属性的对象
         if hasattr(obj, '__name__'):
             return f"<object {obj.__name__}>"
-        else:
-            return "<object>"
+
+        # 默认
+        return "<object>"
 
     finally:
         _seen.remove(obj_id)

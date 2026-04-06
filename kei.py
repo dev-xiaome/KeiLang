@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.7-12"
+__version__ = "1.7-13"
 
 class KeiState:
     stack: List[Any]
@@ -219,8 +219,8 @@ def error(errtype: str | None, info: str, stack: list=[], code:str|None=None, li
 
     print(f"{space} ·")
 
-    # import traceback
-    # traceback.print_exc()
+    import traceback
+    traceback.print_exc()
 
     if not __kei__.repl:
         sys.exit(1)
@@ -3292,7 +3292,7 @@ def exec(code, env=None):
 def execmain(code, env=None, step=False):
     if len(sys.argv) >= 3:
         cmd_args = []
-        for arg in sys.argv[2:]:
+        for arg in sys.argv[1:]:
             cmd_args.append(f"{arg}")
 
         code += f"\nmain({content(cmd_args)});"
