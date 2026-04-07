@@ -1,4 +1,4 @@
-from lib.object import *
+from object import *
 
 def topy(value):
     """KeiLang → Python 递归转换"""

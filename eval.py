@@ -5,7 +5,7 @@ import sys
 import os
 
 import stdlib
-from lib.object import *
+from object import *
 from kei import __kei__, runtoken, get_from_env, process_fstring, find_method, paths, __py_exec__, exec
 
 def node_literal(node, env) -> tuple: # if node['type'] in {'null', 'int', 'float', 'str', 'bool', 'list', 'dict'}:
@@ -286,286 +286,241 @@ def node_postfix(node, env) -> tuple: # if node['type'] == 'postfix':
             raise KeiError("TypeError", f"无法对 {type(val)} 进行 -- 运算")
 
 def node_compoundassign(node, env) -> tuple: # if node['type'] == 'compoundassign':
-    def compoundassign():
-        try:
-            right_val, flag = runtoken(node['right'], env)
-            left = node['left']
-            op = node['op']
+    """复合赋值：先获取当前值，运算后再赋值"""
+    op = node['op']
+    right_val, right_flag = runtoken(node['right'], env)
+    left = node['left']
 
-            if left['type'] == 'multiassign':
-                vars_list = left['vars']
-                rest_var = left.get('rest')
-                kwargs_var = left.get('kwargs')
+    if right_flag:
+        return right_val, True
 
-                if isinstance(right_val, KeiList):
-                    right_items = right_val.items
-                elif isinstance(right_val, (list, tuple)):
-                    right_items = list(right_val)
+    # 获取左边的当前值
+    def get_left_value(left_node):
+        if left_node['type'] == 'multiassign':
+            # 对于多变量，返回列表
+            values = []
+            vars_list = left_node['vars']
+            for var in vars_list:
+                if var == '_':
+                    values.append(undefined)
                 else:
-                    right_items = [right_val]
+                    values.append(env.get(var, undefined))
+            if left_node.get('rest'):
+                values.append(env.get(left_node['rest'], KeiList([])))
+            if left_node.get('kwargs'):
+                values.append(env.get(left_node['kwargs'], KeiDict({})))
+            return KeiList(values), False
 
-                new_values = []
-                for i, var in enumerate(vars_list):
-                    if var == '_':
-                        continue
-                    current = env.get(var, undefined)
-
-                    if op == '+=':
-                        new_val = current.__add__(right_items[i] if i < len(right_items) else undefined)
-                    elif op == '-=':
-                        new_val = current.__sub__(right_items[i] if i < len(right_items) else undefined)
-                    elif op == '*=':
-                        new_val = current.__mul__(right_items[i] if i < len(right_items) else undefined)
-                    elif op == '/=':
-                        r = right_items[i] if i < len(right_items) else undefined
-                        if r == 0:
-                            raise KeiError("ZeroDivisionError", "除数不能为零")
-                        new_val = current.__truediv__(r)
+        elif left_node['type'] == 'name':
+            name = left_node['value']
+            if '.' in name:
+                parts = name.split('.')
+                obj = env
+                for part in parts[:-1]:
+                    if isinstance(obj, KeiBase):
+                        obj = obj[part]
+                    elif isinstance(obj, dict):
+                        obj = obj.get(part, undefined)
                     else:
-                        raise KeiError("SyntaxError", f"不支持的操作符: {op}")
+                        obj = getattr(obj, part, undefined)
+                    if obj is undefined:
+                        break
+                if obj is not undefined:
+                    val = obj[parts[-1]] if isinstance(obj, KeiBase) else getattr(obj, parts[-1], undefined)
+                    return val, False
+            return env.get(name, undefined), False
 
-                    env[var] = new_val
-                    new_values.append(new_val)
+        elif left_node['type'] == 'attr':
+            obj, _ = runtoken(left_node['obj'], env)
+            attr = left_node['attr']
+            if isinstance(obj, KeiBase):
+                return obj[attr], False
+            elif isinstance(obj, dict):
+                return obj.get(attr, undefined), False
+            else:
+                return getattr(obj, attr, undefined), False
 
-                if rest_var:
-                    rest_items = right_items[len(vars_list):]
-                    current = env.get(rest_var, KeiList([]))
-
-                    if op == '+=':
-                        if isinstance(current, KeiList):
-                            new_val = KeiList(current.items + rest_items)
-                        else:
-                            new_val = KeiList([current] + rest_items)
-                    elif op == '-=':
-                        if isinstance(current, KeiList):
-                            new_items = [x for x in current.items if x not in rest_items]
-                        else:
-                            new_items = [current] if current not in rest_items else []
-                        new_val = KeiList(new_items)
-                    elif op == '*=':
-                        if rest_items and isinstance(rest_items[0], (int, KeiInt)):
-                            times = rest_items[0].value if isinstance(rest_items[0], KeiInt) else rest_items[0]
-                            if isinstance(current, KeiList):
-                                new_val = KeiList(current.items * times)
-                            else:
-                                new_val = KeiList([current] * times)
-                        else:
-                            raise KeiError("ValueError", f"*= 需要整数乘数")
-                    elif op == '/=':
-                        raise KeiError("TypeError", f"列表不支持 /= 操作")
-                    else:
-                        raise KeiError("TypeError", f"*rest 变量不支持 {op} 操作")
-                    env[rest_var] = new_val
-
-                if kwargs_var:
-                    current = env.get(kwargs_var, KeiDict({}))
-
-                    if isinstance(right_val, KeiDict):
-                        right_dict = right_val.items
-                    elif isinstance(right_val, dict):
-                        right_dict = right_val
-                    else:
-                        raise KeiError("TypeError", f"**kwargs 赋值右边必须是字典，得到 {type(right_val)}")
-
-                    if op == '+=':
-                        if isinstance(current, KeiDict):
-                            new_dict = current.items.copy()
-                        elif isinstance(current, dict):
-                            new_dict = current.copy()
-                        else:
-                            new_dict = {}
-                        new_dict.update(right_dict)
-                        new_val = KeiDict(new_dict)
-                    elif op == '-=':
-                        if isinstance(current, KeiDict):
-                            new_dict = current.items.copy()
-                        elif isinstance(current, dict):
-                            new_dict = current.copy()
-                        else:
-                            new_dict = {}
-                        for key in right_dict.keys():
-                            if key in new_dict:
-                                del new_dict[key]
-                        new_val = KeiDict(new_dict)
-                    elif op == '*=':
-                        raise KeiError("TypeError", f"字典不支持 *= 操作")
-                    elif op == '/=':
-                        raise KeiError("TypeError", f"字典不支持 /= 操作")
-                    else:
-                        raise KeiError("TypeError", f"**kwargs 变量不支持 {op} 操作")
-
-                    env[kwargs_var] = new_val
-
-                return KeiList(new_values), flag
-
-            elif left['type'] == 'name':
-                name = left['value']
-                current = env.get(name, undefined)
-
-                if op == '+=':
-                    new_val = current.__add__(right_val)
-                elif op == '-=':
-                    new_val = current.__sub__(right_val)
-                elif op == '*=':
-                    new_val = current.__mul__(right_val)
-                elif op == '/=':
-                    if right_val == 0:
-                        raise KeiError("ZeroDivisionError", "除数不能为零")
-                    new_val = current.__truediv__(right_val)
+        elif left_node['type'] == 'index':
+            obj, _ = runtoken(left_node['obj'], env)
+            index, _ = runtoken(left_node['index'], env)
+            if isinstance(obj, KeiBase):
+                if isinstance(index, KeiInt):
+                    return obj[index.value], False
                 else:
-                    raise KeiError("SyntaxError", f"不支持的操作符: {op}")
+                    return obj[index], False
+            elif isinstance(obj, (list, dict)):
+                idx = index.value if isinstance(index, KeiInt) else index
+                return obj[idx] if idx < len(obj) else undefined, False
+            else:
+                return undefined, False
 
-                env[name] = new_val
-                return new_val, flag
+        elif left_node['type'] == 'slice':
+            obj, _ = runtoken(left_node['obj'], env)
+            # 切片不支持直接获取值用于复合赋值
+            raise KeiError("TypeError", "切片不能用于复合赋值")
 
-            elif left['type'] == 'attr':
-                obj, _ = runtoken(left['obj'], env)
-                attr = left['attr']
+        else:
+            raise KeiError("TypeError", f"不支持的复合赋值目标: {left_node.get('type')}")
 
+    left_val, left_flag = get_left_value(left)
+
+    if left_flag:
+        return left_val, True
+
+    # 执行运算
+    try:
+        if op == '+=':
+            result = left_val.__add__(right_val)
+        elif op == '-=':
+            result = left_val.__sub__(right_val)
+        elif op == '*=':
+            result = left_val.__mul__(right_val)
+        elif op == '/=':
+            if right_val == 0:
+                raise KeiError("ZeroDivisionError", "除数不能为零")
+            result = left_val.__truediv__(right_val)
+        else:
+            raise KeiError("SyntaxError", f"不支持的复合赋值操作符: {op}")
+    except AttributeError:
+        raise KeiError("TypeError", f"{left_val} 和 {right_val} 无法 {op} 运算")
+    except TypeError:
+        raise KeiError("TypeError", f"{left_val} 和 {right_val} 无法 {op} 运算")
+
+    # 将结果赋值回去
+    def set_left_value(left_node, value):
+        if left_node['type'] == 'multiassign':
+            # 多变量复合赋值
+            vars_list = left_node['vars']
+            rest_var = left_node.get('rest')
+            kwargs_var = left_node.get('kwargs')
+
+            if isinstance(value, KeiList):
+                right_items = value.items
+            elif isinstance(value, (list, tuple)):
+                right_items = list(value)
+            else:
+                right_items = [value]
+
+            # 赋值给 vars
+            for i, var in enumerate(vars_list):
+                if var == '_':
+                    continue
+                if i < len(right_items):
+                    env[var] = right_items[i]
+                else:
+                    env[var] = undefined
+
+            # 处理 *rest
+            if rest_var:
+                rest_items = right_items[len(vars_list):]
+                env[rest_var] = KeiList(rest_items)
+
+            # 处理 **kwargs
+            if kwargs_var:
+                # 多变量复合赋值时，**kwargs 接收剩余的关键字参数
+                if len(right_items) > len(vars_list):
+                    rest_dict = {}
+                    for item in right_items[len(vars_list):]:
+                        if isinstance(item, KeiDict):
+                            rest_dict.update(item.items)
+                        elif isinstance(item, dict):
+                            rest_dict.update(item)
+                    env[kwargs_var] = KeiDict(rest_dict)
+
+        elif left_node['type'] == 'name':
+            name = left_node['value']
+            if '.' in name:
+                parts = name.split('.')
+                obj = env
+                for part in parts[:-1]:
+                    if isinstance(obj, KeiBase):
+                        obj = obj[part]
+                    elif isinstance(obj, dict):
+                        obj = obj.get(part)
+                    else:
+                        obj = getattr(obj, part)
+                last_part = parts[-1]
                 if isinstance(obj, KeiBase):
-                    current = obj[attr]
+                    obj[last_part] = value
                 elif isinstance(obj, dict):
-                    current = obj.get(attr, undefined)
+                    obj[last_part] = value
                 else:
-                    current = getattr(obj, attr, undefined)
+                    setattr(obj, last_part, value)
+            else:
+                env[name] = value
 
-                if op == '+=':
-                    new_val = current.__add__(right_val)
-                elif op == '-=':
-                    new_val = current.__sub__(right_val)
-                elif op == '*=':
-                    new_val = current.__mul__(right_val)
-                elif op == '/=':
-                    if right_val == 0:
-                        raise KeiError("ZeroDivisionError", "除数不能为零")
-                    new_val = current.__truediv__(right_val)
+        elif left_node['type'] == 'attr':
+            obj, _ = runtoken(left_node['obj'], env)
+            attr = left_node['attr']
+            if isinstance(obj, KeiBase):
+                obj[attr] = value
+            elif isinstance(obj, dict):
+                obj[attr] = value
+            else:
+                setattr(obj, attr, value)
+
+        elif left_node['type'] == 'index':
+            obj, _ = runtoken(left_node['obj'], env)
+            index, _ = runtoken(left_node['index'], env)
+            if isinstance(obj, KeiBase):
+                if isinstance(index, KeiInt):
+                    obj[index.value] = value
                 else:
-                    raise KeiError("SyntaxError", f"不支持的操作符: {op}")
+                    obj[index] = value
+            elif isinstance(obj, (list, dict)):
+                idx = index.value if isinstance(index, KeiInt) else index
+                obj[idx] = value
 
-                if isinstance(obj, KeiBase):
-                    obj[attr] = new_val
-                elif isinstance(obj, dict):
-                    obj[attr] = new_val
+        elif left_node['type'] == 'slice':
+            obj, _ = runtoken(left_node['obj'], env)
+            start, _ = runtoken(left_node['start'], env) if left_node.get('start') else (None, False)
+            end, _ = runtoken(left_node['end'], env) if left_node.get('end') else (None, False)
+            step, _ = runtoken(left_node['step'], env) if left_node.get('step') else (None, False)
+
+            if isinstance(start, KeiInt):
+                start = start.value
+            if isinstance(end, KeiInt):
+                end = end.value
+            if isinstance(step, KeiInt):
+                step = step.value
+
+            if isinstance(obj, KeiString):
+                length = len(obj.value)
+                if start is not None and start < 0:
+                    start = length + start
+                if end is not None and end < 0:
+                    end = length + end
+
+                if isinstance(value, KeiString):
+                    new_str = value.value
                 else:
-                    setattr(obj, attr, new_val)
+                    new_str = str(value)
 
-                return new_val, flag
+                if start is None:
+                    start = 0
+                if end is None:
+                    end = length
 
-            elif left['type'] == 'index':
-                obj, _ = runtoken(left['obj'], env)
-                index, _ = runtoken(left['index'], env)
+                obj.value = obj.value[:start] + new_str + obj.value[end:]
 
-                current = obj[index]
+            elif isinstance(obj, KeiList):
+                if start is None:
+                    start = 0
+                if end is None:
+                    end = len(obj.items)
 
-                if op == '+=':
-                    new_val = current.__add__(right_val)
-                elif op == '-=':
-                    new_val = current.__sub__(right_val)
-                elif op == '*=':
-                    new_val = current.__mul__(right_val)
-                elif op == '/=':
-                    if right_val == 0:
-                        raise KeiError("ZeroDivisionError", "除数不能为零")
-                    new_val = current.__truediv__(right_val)
+                if isinstance(value, KeiList):
+                    new_items = value.items
                 else:
-                    raise KeiError("SyntaxError", f"不支持的操作符: {op}")
+                    new_items = [value]
 
-                obj[index] = new_val
-                return new_val, flag
-
-            elif left['type'] in ('star_target', 'starassign'):
-                name = left['name']
-                current = env.get(name, undefined)
-
-                if isinstance(right_val, KeiList):
-                    right_list = right_val
-                elif isinstance(right_val, (list, tuple)):
-                    right_list = KeiList(list(right_val))
-                else:
-                    right_list = KeiList([right_val])
-
-                if op == '+=':
-                    if isinstance(current, KeiList):
-                        new_val = KeiList(current.items + right_list.items)
-                    else:
-                        new_val = KeiList([current] + right_list.items)
-                elif op == '-=':
-                    if isinstance(current, KeiList):
-                        new_items = [x for x in current.items if x not in right_list.items]
-                    else:
-                        new_items = [current] if current not in right_list.items else []
-                    new_val = KeiList(new_items)
-                elif op == '*=':
-                    if len(right_list.items) == 1 and isinstance(right_list.items[0], (int, KeiInt)):
-                        times = right_list.items[0].value if isinstance(right_list.items[0], KeiInt) else right_list.items[0]
-                        if isinstance(current, KeiList):
-                            new_val = KeiList(current.items * times)
-                        else:
-                            new_val = KeiList([current] * times)
-                    else:
-                        raise KeiError("TypeError", f"*= 需要整数乘数")
-                elif op == '/=':
-                    raise KeiError("TypeError", f"* 变量不支持 /= 操作")
-                else:
-                    raise KeiError("TypeError", f"* 变量不支持 {op} 操作")
-
-                env[name] = new_val
-                return new_val, flag
-
-            elif left['type'] in ('starstar_target', 'starstarassign'):
-                name = left['name']
-                current = env.get(name, undefined)
-
-                if not isinstance(right_val, (KeiDict, dict)):
-                    raise KeiError("TypeError", f"** 赋值右边必须是字典，得到 {type(right_val)}")
-
-                if op == '+=':
-                    if isinstance(current, KeiDict):
-                        new_dict = current.items.copy()
-                    elif isinstance(current, dict):
-                        new_dict = current.copy()
-                    else:
-                        new_dict = {}
-
-                    if isinstance(right_val, KeiDict):
-                        new_dict.update(right_val.items)
-                    else:
-                        new_dict.update(right_val)
-
-                    new_val = KeiDict(new_dict)
-                elif op == '-=':
-                    if isinstance(current, KeiDict):
-                        new_dict = current.items.copy()
-                    elif isinstance(current, dict):
-                        new_dict = current.copy()
-                    else:
-                        new_dict = {}
-
-                    right_dict = right_val.items if isinstance(right_val, KeiDict) else right_val
-                    for key in right_dict.keys():
-                        if key in new_dict:
-                            del new_dict[key]
-
-                    new_val = KeiDict(new_dict)
-                elif op == '*=':
-                    raise KeiError("TypeError", f"** 变量不支持 *= 操作")
-                elif op == '/=':
-                    raise KeiError("TypeError", f"** 变量不支持 /= 操作")
-                else:
-                    raise KeiError("TypeError", f"** 变量不支持 {op} 操作")
-
-                env[name] = new_val
-                return new_val, flag
+                obj.items = obj.items[:start] + new_items + obj.items[end:]
 
             else:
-                raise KeiError("TypeError", f"不支持的复合赋值目标: {left}")
+                raise KeiError("TypeError", f"不支持对 {type(obj)} 进行切片赋值")
 
-        except AttributeError:
-            raise KeiError("TypeError", f"{runtoken(left, env)[0]} 和 {right_val} 无法 {op} 运算")
-        except TypeError:
-            raise KeiError("TypeError", f"{runtoken(left, env)[0]} 和 {right_val} 无法 {op} 运算")
-
-    return compoundassign()
+    set_left_value(left, result)
+    return result, (left_flag or right_flag)
 
 def node_ternary(node, env) -> tuple: # if node['type'] == 'ternary':
     cond_val, cond_flag = runtoken(node['cond'], env)
@@ -1177,28 +1132,30 @@ def node_assign(node, env) -> tuple: # if node['type'] == 'assign':
 
     if left['type'] == 'multiassign':
         vars_list = left['vars']
+        rest_var = left.get('rest')
+        kwargs_var = left.get('kwargs')
 
-        if isinstance(val, tuple):
-            for i, var in enumerate(vars_list):
-                if var == '_':
-                    continue
-                if i < len(val):
-                    env[var] = val[i]
-                else:
-                    env[var] = undefined
+        # 获取右边的值
+        if isinstance(val, KeiList):
+            right_items = val.items
+        elif isinstance(val, (list, tuple)):
+            right_items = list(val)
+        else:
+            right_items = [val]
 
-            return KeiList([v for v in val]), flag
+        # 赋值给 vars
+        for i, var in enumerate(vars_list):
+            if var == '_':
+                continue
+            if i < len(right_items):
+                env[var] = right_items[i]
+            else:
+                env[var] = undefined
 
-        elif isinstance(val, KeiList):
-            items = val.items
-            for i, var in enumerate(vars_list):
-                if var == '_':
-                    continue
-                if i < len(items):
-                    env[var] = items[i]
-                else:
-                    env[var] = undefined
-            return val, flag
+        # 处理 *rest
+        if rest_var:
+            rest_items = right_items[len(vars_list):]
+            env[rest_var] = KeiList(rest_items)
 
     elif left['type'] == 'star_target' or left['type'] == 'starassign':
         name = left['name']
@@ -1333,7 +1290,15 @@ def node_assign(node, env) -> tuple: # if node['type'] == 'assign':
         return val, flag
 
     else:
-        raise KeiError("TypeError", f"无效的赋值目标: {left['obj']['value']}")
+        # 根据 left 的类型生成友好的错误信息
+        if left['type'] == 'star_target':
+            msg = f"*{left['name']} 不能单独使用，只能在多变量赋值中使用"
+        elif left['type'] == 'starstar_target':
+            msg = f"**{left['name']} 不能单独使用，只能在多变量赋值中使用"
+        else:
+            msg = f"无效的赋值目标: {left.get('value', left.get('name', '?'))}"
+
+        raise KeiError("TypeError", msg)
 
     return val, flag
 
@@ -1541,14 +1506,8 @@ def node_class(node, env) -> tuple: # if node['type'] == 'class':
                 'body': stmt['body'],
                 'defaults': stmt.get('defaults', {}),
                 'decorators': stmt.get('decorators', []),
-                'is_property': False,
-                'is_method': True,
                 'closure': env
             }
-            if 'decorators' in stmt:
-                for dec in stmt['decorators']:
-                    if dec['value'] == 'prop':
-                        method_obj['is_property'] = True
 
             class_obj['methods'].append(method_obj)
             class_obj['methods_map'][stmt['name']] = method_obj

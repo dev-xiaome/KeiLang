@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-from lib.object import *
+from object import *
 from lib.kei2py import *
 import lib.python as python
 
@@ -47,90 +47,6 @@ class kei:
         if n <= 1:
             return 1
         return n * kei.factorial(n - 1)
-
-    class open(KeiBase):
-        """KeiLang open 函数类"""
-        def __init__(self, file, mode='r', encoding='utf-8'):
-            super().__init__("file")
-
-            # 转换参数
-            if isinstance(file, KeiString):
-                file = file.value
-            if isinstance(mode, KeiString):
-                mode = mode.value
-            if isinstance(encoding, KeiString):
-                encoding = encoding.value
-
-            self._file = open(file, mode, encoding=encoding)
-
-            self._methods = {
-                "read": self.read,
-                "readline": self.readline,
-                "readlines": self.readlines,
-                "write": self.write,
-                "writelines": self.writelines,
-                "close": self.close,
-                "flush": self.flush,
-                "seek": self.seek,
-                "tell": self.tell,
-                "remove": self.remove,
-            }
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc_val, exc_tb):
-            self.close()
-            return False
-
-        def remove(self):
-            import os
-            os.remove(self._file.name)
-
-        def read(self, size=-1):
-            if isinstance(size, KeiInt):
-                size = size.value
-            return KeiString(self._file.read(size))
-
-        def readline(self, size=-1):
-            if isinstance(size, KeiInt):
-                size = size.value
-            return KeiString(self._file.readline(size))
-
-        def readlines(self, hint=-1):
-            if isinstance(hint, KeiInt):
-                hint = hint.value
-            lines = self._file.readlines(hint)
-            return KeiList([KeiString(line) for line in lines])
-
-        def write(self, text):
-            if isinstance(text, KeiString):
-                text = text.value
-            return KeiInt(self._file.write(text))
-
-        def writelines(self, lines):
-            if isinstance(lines, KeiList):
-                lines = [line.value if isinstance(line, KeiString) else str(line) for line in lines.items]
-            self._file.writelines(lines)
-            return null
-
-        def close(self):
-            self._file.close()
-            return null
-
-        def flush(self):
-            self._file.flush()
-            return null
-
-        def seek(self, offset, whence=0):
-            if isinstance(offset, KeiInt):
-                offset = offset.value
-            if isinstance(whence, KeiInt):
-                whence = whence.value
-            return KeiInt(self._file.seek(offset, whence))
-
-        def tell(self):
-            return KeiInt(self._file.tell())
 
     @s
     def system(command, verbose=True):
@@ -881,6 +797,100 @@ class kei:
         else:
             raise KeiError("TypeError", "精度必须是整数")
 
+    class open(KeiBase):
+        """KeiLang open 函数类"""
+        def __init__(self, file, mode='r', encoding='utf-8'):
+            super().__init__("file")
+
+            # 转换参数
+            if isinstance(file, KeiString):
+                file = file.value
+            if isinstance(mode, KeiString):
+                mode = mode.value
+            if isinstance(encoding, KeiString):
+                encoding = encoding.value
+
+            self._file = open(file, mode, encoding=encoding)
+
+            self._methods = {
+                "read": self.read,
+                "readline": self.readline,
+                "readlines": self.readlines,
+                "write": self.write,
+                "writelines": self.writelines,
+                "close": self.close,
+                "flush": self.flush,
+                "seek": self.seek,
+                "tell": self.tell,
+                "remove": self.remove,
+            }
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            self.close()
+            return False
+
+        def remove(self):
+            import os
+            os.remove(self._file.name)
+
+        def read(self, size=-1):
+            if isinstance(size, KeiInt):
+                size = size.value
+            return KeiString(self._file.read(size))
+
+        def readline(self, size=-1):
+            if isinstance(size, KeiInt):
+                size = size.value
+            return KeiString(self._file.readline(size))
+
+        def readlines(self, hint=-1):
+            if isinstance(hint, KeiInt):
+                hint = hint.value
+            lines = self._file.readlines(hint)
+            return KeiList([KeiString(line) for line in lines])
+
+        def write(self, text):
+            if isinstance(text, KeiString):
+                text = text.value
+            return KeiInt(self._file.write(text))
+
+        def writelines(self, lines):
+            if isinstance(lines, KeiList):
+                lines = [line.value if isinstance(line, KeiString) else str(line) for line in lines.items]
+            self._file.writelines(lines)
+            return null
+
+        def close(self):
+            self._file.close()
+            return null
+
+        def flush(self):
+            self._file.flush()
+            return null
+
+        def seek(self, offset, whence=0):
+            if isinstance(offset, KeiInt):
+                offset = offset.value
+            if isinstance(whence, KeiInt):
+                whence = whence.value
+            return KeiInt(self._file.seek(offset, whence))
+
+        def tell(self):
+            return KeiInt(self._file.tell())
+
+    class decorator:
+        def __init__(self, name):
+            self.name = name
+
+        def __call__(self, func):
+            return func
+
+    static = decorator("static")
+    prop = decorator("prop")
+
 func = {
     "type": type,
     "isinstance": isinstance,
@@ -919,6 +929,8 @@ func = {
     "step": kei.step,
     "precision": kei.precision,
     "recursion": kei.recursion,
+    "static": kei.static,
+    "prop": kei.prop,
     "open": kei.open,
     "any": KeiBase,
     "int": KeiInt,

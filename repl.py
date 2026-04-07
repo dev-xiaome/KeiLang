@@ -5,7 +5,7 @@ import os
 import atexit
 import sys
 
-from lib.object import *
+from object import *
 
 try:
     readline = __import__('readline')

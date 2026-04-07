@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.7-15"
+__version__ = "1.7-17"
 
 class KeiState:
     stack: List[Any]
@@ -78,9 +78,10 @@ if os.path.isdir(pkg_dir):
             paths.append(sub_path)
 
 __py_exec__ = exec
+__py_eval__ = eval
 
 import stdlib
-from lib.object import *
+from object import *
 from lib.kei2py import *
 
 DEBUG = False
@@ -931,7 +932,7 @@ def process_fstring(template, env):
     return ''.join(result)
 
 def parse_block(tokens: list, pos: int, all_lines: list, linepos: int,
-                start_token: dict = None, end_token: str = '}') -> tuple[list, int, int]:
+                start_token: dict | None = None, end_token: str = '}') -> tuple[list, int, int]:
     """解析花括号块
 
     Args:
@@ -1366,8 +1367,20 @@ def parse_fn_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_
 
         if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '=>':
             pos += 1
-            expr, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
-            body = [{'type': 'return', 'value': expr}]
+            # 检查是否多返回值
+            values = []
+            while True:
+                val, pos, linepos = parse_expr(tokens, pos, ...)
+                values.append(val)
+                if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
+                    pos += 1
+                    continue
+                break
+
+            if len(values) == 1:
+                body = [{'type': 'return', 'value': values[0]}]
+            else:
+                body = [{'type': 'return', 'value': {'type': 'list', 'elements': values}}]
             __kei__.stack.pop()
             return {
                 'type': 'function', 'name': func_name, 'params': params,
@@ -1776,7 +1789,7 @@ def find_assign_pos(tokens: list, pos: int) -> int:
 
 def parse_compoundassign(tokens: list, pos: int, all_lines: list, linepos: int,
                           compound_op: str, source_line: str) -> tuple:
-    """解析复合赋值语句"""
+    """解析复合赋值语句，支持多变量、索引、属性等"""
     # 找到运算符位置
     op_pos = -1
     paren_count = bracket_count = brace_count = 0
@@ -1806,17 +1819,163 @@ def parse_compoundassign(tokens: list, pos: int, all_lines: list, linepos: int,
 
     # 解析左边
     left_tokens = tokens[pos:op_pos]
-    left_node, left_new_pos, _ = parse_expr(left_tokens, 0, allow_assign=True, all_lines=all_lines, linepos=linepos)
-    if not left_node or left_new_pos != len(left_tokens):
-        raise KeiError("SyntaxError", f"无效的赋值左边: {left_tokens}")
+
+    # 检查是否为多变量赋值（左边包含逗号）
+    left_comma_positions = []
+    paren_count = bracket_count = brace_count = 0
+
+    for i, token in enumerate(left_tokens):
+        if token['type'] == 'symbol':
+            if token['value'] == '(':
+                paren_count += 1
+            elif token['value'] == ')':
+                paren_count -= 1
+            elif token['value'] == '[':
+                bracket_count += 1
+            elif token['value'] == ']':
+                bracket_count -= 1
+            elif token['value'] == '{':
+                brace_count += 1
+            elif token['value'] == '}':
+                brace_count -= 1
+        if (token['type'] == 'symbol' and token['value'] == ','
+            and paren_count == 0 and bracket_count == 0 and brace_count == 0):
+            left_comma_positions.append(i)
+
+    if left_comma_positions:
+        # 多变量复合赋值 a, b, *rest, **kwargs += ...
+        vars_list = []
+        rest_var = None
+        kwargs_var = None
+        last_pos = 0
+
+        for comma_pos in left_comma_positions:
+            var_tokens = left_tokens[last_pos:comma_pos]
+            var_tokens = [t for t in var_tokens if t.get('type') != 'space']
+
+            if len(var_tokens) == 2 and var_tokens[0]['type'] == 'op' and var_tokens[0]['value'] == '**':
+                if var_tokens[1]['type'] == 'name':
+                    kwargs_var = var_tokens[1]['value']
+                else:
+                    raise KeiError("SyntaxError", f"** 后面必须是变量名, 得到 {var_tokens[1]}")
+            elif len(var_tokens) == 2 and var_tokens[0]['type'] == 'op' and var_tokens[0]['value'] == '*':
+                if var_tokens[1]['type'] == 'name':
+                    rest_var = var_tokens[1]['value']
+                else:
+                    raise KeiError("SyntaxError", f"* 后面必须是变量名, 得到 {var_tokens[1]}")
+            elif len(var_tokens) == 1 and var_tokens[0]['type'] == 'name':
+                vars_list.append(var_tokens[0]['value'])
+            elif len(var_tokens) == 1 and var_tokens[0]['type'] == 'symbol' and var_tokens[0]['value'] == '_':
+                vars_list.append('_')
+            elif len(var_tokens) > 0:
+                raise KeiError("SyntaxError", f"多变量赋值左边必须是变量名、*rest 或 **kwargs, 得到 {var_tokens}")
+
+            last_pos = comma_pos + 1
+
+        # 处理最后一个
+        var_tokens = left_tokens[last_pos:]
+        var_tokens = [t for t in var_tokens if t.get('type') != 'space']
+
+        if len(var_tokens) == 2 and var_tokens[0]['type'] == 'op' and var_tokens[0]['value'] == '**':
+            if var_tokens[1]['type'] == 'name':
+                kwargs_var = var_tokens[1]['value']
+            else:
+                raise KeiError("SyntaxError", f"** 后面必须是变量名, 得到 {var_tokens[1]}")
+        elif len(var_tokens) == 2 and var_tokens[0]['type'] == 'op' and var_tokens[0]['value'] == '*':
+            if var_tokens[1]['type'] == 'name':
+                rest_var = var_tokens[1]['value']
+            else:
+                raise KeiError("SyntaxError", f"* 后面必须是变量名, 得到 {var_tokens[1]}")
+        elif len(var_tokens) == 1 and var_tokens[0]['type'] == 'name':
+            vars_list.append(var_tokens[0]['value'])
+        elif len(var_tokens) == 1 and var_tokens[0]['type'] == 'symbol' and var_tokens[0]['value'] == '_':
+            vars_list.append('_')
+        elif len(var_tokens) > 0:
+            raise KeiError("SyntaxError", f"多变量赋值左边必须是变量名、*rest 或 **kwargs, 得到 {var_tokens}")
+
+        left_node = {
+            'type': 'multiassign',
+            'vars': vars_list,
+            'rest': rest_var,
+            'kwargs': kwargs_var
+        }
+    else:
+        # 普通左边表达式（可能是 name、attr、index 等）
+        left_node, left_new_pos, _ = parse_expr(left_tokens, 0, allow_assign=True, all_lines=all_lines, linepos=linepos)
+        if not left_node or left_new_pos != len(left_tokens):
+            raise KeiError("SyntaxError", f"无效的赋值左边: {left_tokens}")
 
     # 解析右边
     right_tokens = tokens[op_pos + 1:]
-    right_node, right_new_pos, _ = parse_expr(right_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
-    if not right_node:
-        raise KeiError("SyntaxError", "无效的赋值右边")
 
-    final_pos = op_pos + 1 + right_new_pos
+    # 检查右边是否为多值
+    right_comma_positions = []
+    paren_count = bracket_count = brace_count = 0
+
+    for i, token in enumerate(right_tokens):
+        if token['type'] == 'symbol':
+            if token['value'] == '(':
+                paren_count += 1
+            elif token['value'] == ')':
+                paren_count -= 1
+            elif token['value'] == '[':
+                bracket_count += 1
+            elif token['value'] == ']':
+                bracket_count -= 1
+            elif token['value'] == '{':
+                brace_count += 1
+            elif token['value'] == '}':
+                brace_count -= 1
+
+        if (token['type'] == 'symbol' and token['value'] == ','
+            and paren_count == 0 and bracket_count == 0 and brace_count == 0):
+            right_comma_positions.append(i)
+
+    if right_comma_positions:
+        # 多值右边 a, b, c += 1, 2, 3
+        elements = []
+        last_pos = 0
+
+        for comma_pos in right_comma_positions:
+            value_tokens = right_tokens[last_pos:comma_pos]
+
+            if value_tokens and value_tokens[0]['type'] == 'symbol' and value_tokens[0]['value'] == '[':
+                val_node, _, _ = parse_list(value_tokens, 0, all_lines=all_lines, linepos=linepos)
+            elif value_tokens and value_tokens[0]['type'] == 'symbol' and value_tokens[0]['value'] == '{':
+                val_node, _, _ = parse_dict(value_tokens, 0, all_lines=all_lines, linepos=linepos)
+            else:
+                val_node, _, _ = parse_expr(value_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
+
+            if val_node:
+                elements.append(val_node)
+            last_pos = comma_pos + 1
+
+        # 处理最后一个
+        value_tokens = right_tokens[last_pos:]
+        if value_tokens:
+            if value_tokens and value_tokens[0]['type'] == 'symbol' and value_tokens[0]['value'] == '[':
+                val_node, _, _ = parse_list(value_tokens, 0, all_lines=all_lines, linepos=linepos)
+            elif value_tokens and value_tokens[0]['type'] == 'symbol' and value_tokens[0]['value'] == '{':
+                val_node, _, _ = parse_dict(value_tokens, 0, all_lines=all_lines, linepos=linepos)
+            else:
+                val_node, _, _ = parse_expr(value_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
+            if val_node:
+                elements.append(val_node)
+
+        right_node = {'type': 'list', 'elements': elements}
+        final_pos = op_pos + 1 + len(right_tokens)
+    else:
+        # 普通右边
+        if right_tokens and right_tokens[0]['type'] == 'symbol' and right_tokens[0]['value'] == '{':
+            right_node, right_new_pos, _ = parse_dict(right_tokens, 0, all_lines=all_lines, linepos=linepos)
+        elif right_tokens and right_tokens[0]['type'] == 'symbol' and right_tokens[0]['value'] == '[':
+            right_node, right_new_pos, _ = parse_list(right_tokens, 0, all_lines=all_lines, linepos=linepos)
+        else:
+            right_node, right_new_pos, _ = parse_expr(right_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
+
+        if not right_node:
+            raise KeiError("SyntaxError", "无效的赋值右边")
+        final_pos = op_pos + 1 + right_new_pos
 
     node = {
         'type': 'compoundassign',
@@ -1830,20 +1989,174 @@ def parse_compoundassign(tokens: list, pos: int, all_lines: list, linepos: int,
 
 def parse_assign(tokens: list, pos: int, assign_pos: int, all_lines: list,
                  linepos: int, source_line: str) -> tuple:
-    """解析普通赋值语句"""
+    """解析赋值语句（支持解包、*rest、**kwargs）"""
     # 解析左边
     left_tokens = tokens[pos:assign_pos]
-    left_node, left_new_pos, _ = parse_expr(left_tokens, 0, allow_assign=True, all_lines=all_lines, linepos=linepos)
-    if not left_node or left_new_pos != len(left_tokens):
-        raise KeiError("SyntaxError", f"无效的赋值左边: {left_tokens}")
+
+    # 检查是否为 *var 或 **var 单独使用
+    if len(left_tokens) == 2 and left_tokens[0]['type'] == 'op':
+        if left_tokens[0]['value'] == '*' and left_tokens[1]['type'] == 'name':
+            # *var 单独使用 - 语法错误
+            raise KeiError("SyntaxError", f"*{left_tokens[1]['value']} 不能单独使用，只能在多变量赋值中使用（如 a, *rest = ...）")
+        elif left_tokens[0]['value'] == '**' and left_tokens[1]['type'] == 'name':
+            # **var 单独使用 - 语法错误
+            raise KeiError("SyntaxError", f"**{left_tokens[1]['value']} 不能单独使用，只能在多变量赋值中使用")
+
+    # 检查是否为多变量赋值（包含逗号）
+    left_comma_positions = []
+    paren_count = 0
+    bracket_count = 0
+    brace_count = 0
+
+    for i, token in enumerate(left_tokens):
+        if token['type'] == 'symbol':
+            if token['value'] == '(':
+                paren_count += 1
+            elif token['value'] == ')':
+                paren_count -= 1
+            elif token['value'] == '[':
+                bracket_count += 1
+            elif token['value'] == ']':
+                bracket_count -= 1
+            elif token['value'] == '{':
+                brace_count += 1
+            elif token['value'] == '}':
+                brace_count -= 1
+        if token['type'] == 'symbol' and token['value'] == ',' and paren_count == 0 and bracket_count == 0 and brace_count == 0:
+            left_comma_positions.append(i)
+
+    if left_comma_positions:
+        # 多变量赋值 a, b, *rest, **kwargs = ...
+        vars = []
+        rest_var = None
+        kwargs_var = None
+        last_pos = 0
+
+        for comma_pos in left_comma_positions:
+            var_tokens = left_tokens[last_pos:comma_pos]
+
+            # 去除空白（如果有的话）
+            var_tokens = [t for t in var_tokens if t['type'] != 'space'] if any(t.get('type') == 'space' for t in var_tokens) else var_tokens
+
+            if len(var_tokens) == 2 and var_tokens[0]['type'] == 'op' and var_tokens[0]['value'] == '**':
+                if var_tokens[1]['type'] == 'name':
+                    kwargs_var = var_tokens[1]['value']
+                else:
+                    raise KeiError("SyntaxError", f"** 后面必须是变量名, 得到 {var_tokens[1]}")
+            elif len(var_tokens) == 2 and var_tokens[0]['type'] == 'op' and var_tokens[0]['value'] == '*':
+                if var_tokens[1]['type'] == 'name':
+                    rest_var = var_tokens[1]['value']
+                else:
+                    raise KeiError("SyntaxError", f"* 后面必须是变量名, 得到 {var_tokens[1]}")
+            elif len(var_tokens) == 1 and var_tokens[0]['type'] == 'name':
+                vars.append(var_tokens[0]['value'])
+            elif len(var_tokens) == 1 and var_tokens[0]['type'] == 'symbol' and var_tokens[0]['value'] == '_':
+                vars.append('_')  # 忽略占位符
+            elif len(var_tokens) > 0:
+                raise KeiError("SyntaxError", f"多变量赋值左边必须是变量名、*rest 或 **kwargs, 得到 {var_tokens}")
+
+            last_pos = comma_pos + 1
+
+        # 处理最后一个
+        var_tokens = left_tokens[last_pos:]
+        var_tokens = [t for t in var_tokens if t['type'] != 'space'] if any(t.get('type') == 'space' for t in var_tokens) else var_tokens
+
+        if len(var_tokens) == 2 and var_tokens[0]['type'] == 'op' and var_tokens[0]['value'] == '**':
+            if var_tokens[1]['type'] == 'name':
+                kwargs_var = var_tokens[1]['value']
+            else:
+                raise KeiError("SyntaxError", f"** 后面必须是变量名, 得到 {var_tokens[1]}")
+        elif len(var_tokens) == 2 and var_tokens[0]['type'] == 'op' and var_tokens[0]['value'] == '*':
+            if var_tokens[1]['type'] == 'name':
+                rest_var = var_tokens[1]['value']
+            else:
+                raise KeiError("SyntaxError", f"* 后面必须是变量名, 得到 {var_tokens[1]}")
+        elif len(var_tokens) == 1 and var_tokens[0]['type'] == 'name':
+            vars.append(var_tokens[0]['value'])
+        elif len(var_tokens) == 1 and var_tokens[0]['type'] == 'symbol' and var_tokens[0]['value'] == '_':
+            vars.append('_')
+        elif len(var_tokens) > 0:
+            raise KeiError("SyntaxError", f"多变量赋值左边必须是变量名、*rest 或 **kwargs, 得到 {var_tokens}")
+
+        left_node = {'type': 'multiassign', 'vars': vars, 'rest': rest_var, 'kwargs': kwargs_var}
+    else:
+        # 普通赋值
+        left_node, left_new_pos, _ = parse_expr(left_tokens, 0, allow_assign=True, all_lines=all_lines, linepos=linepos)
+        if not left_node or left_new_pos != len(left_tokens):
+            raise KeiError("SyntaxError", f"无效的赋值左边: {left_tokens}")
 
     # 解析右边
     right_tokens = tokens[assign_pos + 1:]
-    right_node, right_new_pos, _ = parse_expr(right_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
-    if not right_node:
-        raise KeiError("SyntaxError", "无效的赋值右边")
 
-    final_pos = assign_pos + 1 + right_new_pos
+    # 检查是否为多值返回（右边有逗号）
+    right_comma_positions = []
+    paren_count = 0
+    bracket_count = 0
+    brace_count = 0
+
+    for i, token in enumerate(right_tokens):
+        if token['type'] == 'symbol':
+            if token['value'] == '(':
+                paren_count += 1
+            elif token['value'] == ')':
+                paren_count -= 1
+            elif token['value'] == '[':
+                bracket_count += 1
+            elif token['value'] == ']':
+                bracket_count -= 1
+            elif token['value'] == '{':
+                brace_count += 1
+            elif token['value'] == '}':
+                brace_count -= 1
+
+        if token['type'] == 'symbol' and token['value'] == ',' and paren_count == 0 and bracket_count == 0 and brace_count == 0:
+            right_comma_positions.append(i)
+
+    if right_comma_positions:
+        # 多值返回 a, b, c = 1, 2, 3
+        elements = []
+        last_pos = 0
+
+        for comma_pos in right_comma_positions:
+            value_tokens = right_tokens[last_pos:comma_pos]
+
+            if value_tokens and value_tokens[0]['type'] == 'symbol' and value_tokens[0]['value'] == '[':
+                val_node, _, _ = parse_list(value_tokens, 0, all_lines=all_lines, linepos=linepos)
+            elif value_tokens and value_tokens[0]['type'] == 'symbol' and value_tokens[0]['value'] == '{':
+                val_node, _, _ = parse_dict(value_tokens, 0, all_lines=all_lines, linepos=linepos)
+            else:
+                val_node, _, _ = parse_expr(value_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
+
+            if val_node:
+                elements.append(val_node)
+            last_pos = comma_pos + 1
+
+        # 处理最后一个
+        value_tokens = right_tokens[last_pos:]
+        if value_tokens:
+            if value_tokens and value_tokens[0]['type'] == 'symbol' and value_tokens[0]['value'] == '[':
+                val_node, _, _ = parse_list(value_tokens, 0, all_lines=all_lines, linepos=linepos)
+            elif value_tokens and value_tokens[0]['type'] == 'symbol' and value_tokens[0]['value'] == '{':
+                val_node, _, _ = parse_dict(value_tokens, 0, all_lines=all_lines, linepos=linepos)
+            else:
+                val_node, _, _ = parse_expr(value_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
+            if val_node:
+                elements.append(val_node)
+
+        right_node = {'type': 'list', 'elements': elements}
+        final_pos = assign_pos + 1 + len(right_tokens)
+    else:
+        # 普通右边
+        if right_tokens and right_tokens[0]['type'] == 'symbol' and right_tokens[0]['value'] == '{':
+            right_node, right_new_pos, _ = parse_dict(right_tokens, 0, all_lines=all_lines, linepos=linepos)
+        elif right_tokens and right_tokens[0]['type'] == 'symbol' and right_tokens[0]['value'] == '[':
+            right_node, right_new_pos, _ = parse_list(right_tokens, 0, all_lines=all_lines, linepos=linepos)
+        else:
+            right_node, right_new_pos, _ = parse_expr(right_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
+
+        if not right_node:
+            raise KeiError("SyntaxError", "无效的赋值右边")
+        final_pos = assign_pos + 1 + right_new_pos
 
     node = {
         'type': 'assign',
@@ -2106,31 +2419,6 @@ def parse_index_with_obj(obj_node, tokens, pos, all_lines=None, linepos=0):
         node = {'type': 'index', 'obj': obj_node, 'index': start}
     new_pos = end_pos + 1
     return node, new_pos, linepos
-
-def parse_assign(tokens: list, pos: int, assign_pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
-    """解析普通赋值语句"""
-    # 解析左边
-    left_tokens = tokens[pos:assign_pos]
-    left_node, left_new_pos, _ = parse_expr(left_tokens, 0, allow_assign=True, all_lines=all_lines, linepos=linepos)
-    if not left_node or left_new_pos != len(left_tokens):
-        raise KeiError("SyntaxError", f"无效的赋值左边: {left_tokens}")
-
-    # 解析右边
-    right_tokens = tokens[assign_pos + 1:]
-    right_node, right_new_pos, _ = parse_expr(right_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
-    if not right_node:
-        raise KeiError("SyntaxError", "无效的赋值右边")
-
-    final_pos = assign_pos + 1 + right_new_pos
-
-    node = {
-        'type': 'assign',
-        'left': left_node,
-        'right': right_node,
-        'source': source_line,
-        'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
-    }
-    return node, final_pos, linepos
 
 def parse_term(tokens, pos, in_call=False, all_lines=None, linepos=0):
     left, pos, linepos = parse_pow(tokens, pos, in_call, all_lines, linepos)
@@ -2962,7 +3250,7 @@ def get_from_env(name, env, default=undefined):
     return default
 
 def runtoken(node, env) -> tuple:
-    import keieval
+    import eval
 
     if node is None:
         raise KeiError("RuntimeError", "出现了未意料的None节点")
@@ -2987,51 +3275,51 @@ def runtoken(node, env) -> tuple:
 
         nodetypes.update(dict.fromkeys(
             ('null', 'int', 'float', 'str', 'bool', 'list', 'dict'),
-            keieval.node_literal))
+            eval.node_literal))
 
-        nodetypes['match'] = keieval.node_match
-        nodetypes['name'] = keieval.node_name
-        nodetypes['coalesce'] = keieval.node_coalesce
-        nodetypes['notnullassert'] = keieval.node_notnullassert
-        nodetypes['index'] = keieval.node_index
-        nodetypes['trysingle'] = keieval.node_trysingle
-        nodetypes['slice'] = keieval.node_slice
-        nodetypes['attr'] = keieval.node_attr
-        nodetypes['postfix'] = keieval.node_postfix
-        nodetypes['compoundassign'] = keieval.node_compoundassign
-        nodetypes['ternary'] = keieval.node_ternary
-        nodetypes['unternary'] = keieval.node_unternary
-        nodetypes['listcomp'] = keieval.node_listcomp
-        nodetypes['unlistcomp'] = keieval.node_listcomp
-        nodetypes['dictcomp'] = keieval.node_dictcomp
-        nodetypes['undictcomp'] = keieval.node_dictcomp
-        nodetypes['binop'] = keieval.node_binop
-        nodetypes['unary'] = keieval.node_unary
-        nodetypes['listscope'] = keieval.node_listscope
-        nodetypes['call'] = keieval.node_call
-        nodetypes['methodcall'] = keieval.node_call
-        nodetypes['assign'] = keieval.node_assign
-        nodetypes['return'] = keieval.node_return
-        nodetypes['if'] = keieval.node_if
-        nodetypes['unless'] = keieval.node_if
-        nodetypes['while'] = keieval.node_while
-        nodetypes['until'] = keieval.node_while
-        nodetypes['for'] = keieval.node_for
-        nodetypes['break'] = keieval.node_break
-        nodetypes['continue'] = keieval.node_break
-        nodetypes['function'] = keieval.node_block
-        nodetypes['class'] = keieval.node_class
-        nodetypes['import'] = keieval.node_import
-        nodetypes['fromimport'] = keieval.node_fromimport
-        nodetypes['del'] = keieval.node_del
-        nodetypes['raise'] = keieval.node_raise
-        nodetypes['use'] = keieval.node_use
-        nodetypes['namespace'] = keieval.node_namespace
-        nodetypes['with'] = keieval.node_with
-        nodetypes['lambda'] = keieval.node_lambda
-        nodetypes['try'] = keieval.node_try
-        nodetypes['global'] = keieval.node_global
-        nodetypes['typeassert'] = keieval.node_typeassert
+        nodetypes['match'] = eval.node_match
+        nodetypes['name'] = eval.node_name
+        nodetypes['coalesce'] = eval.node_coalesce
+        nodetypes['notnullassert'] = eval.node_notnullassert
+        nodetypes['index'] = eval.node_index
+        nodetypes['trysingle'] = eval.node_trysingle
+        nodetypes['slice'] = eval.node_slice
+        nodetypes['attr'] = eval.node_attr
+        nodetypes['postfix'] = eval.node_postfix
+        nodetypes['compoundassign'] = eval.node_compoundassign
+        nodetypes['ternary'] = eval.node_ternary
+        nodetypes['unternary'] = eval.node_unternary
+        nodetypes['listcomp'] = eval.node_listcomp
+        nodetypes['unlistcomp'] = eval.node_listcomp
+        nodetypes['dictcomp'] = eval.node_dictcomp
+        nodetypes['undictcomp'] = eval.node_dictcomp
+        nodetypes['binop'] = eval.node_binop
+        nodetypes['unary'] = eval.node_unary
+        nodetypes['listscope'] = eval.node_listscope
+        nodetypes['call'] = eval.node_call
+        nodetypes['methodcall'] = eval.node_call
+        nodetypes['assign'] = eval.node_assign
+        nodetypes['return'] = eval.node_return
+        nodetypes['if'] = eval.node_if
+        nodetypes['unless'] = eval.node_if
+        nodetypes['while'] = eval.node_while
+        nodetypes['until'] = eval.node_while
+        nodetypes['for'] = eval.node_for
+        nodetypes['break'] = eval.node_break
+        nodetypes['continue'] = eval.node_break
+        nodetypes['function'] = eval.node_block
+        nodetypes['class'] = eval.node_class
+        nodetypes['import'] = eval.node_import
+        nodetypes['fromimport'] = eval.node_fromimport
+        nodetypes['del'] = eval.node_del
+        nodetypes['raise'] = eval.node_raise
+        nodetypes['use'] = eval.node_use
+        nodetypes['namespace'] = eval.node_namespace
+        nodetypes['with'] = eval.node_with
+        nodetypes['lambda'] = eval.node_lambda
+        nodetypes['try'] = eval.node_try
+        nodetypes['global'] = eval.node_global
+        nodetypes['typeassert'] = eval.node_typeassert
 
         if node['type'] in nodetypes:
             return nodetypes[node['type']](node, env)

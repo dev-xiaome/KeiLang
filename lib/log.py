@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-from lib.object import true, false
+from object import true, false
 
 __log__ = true
 __color__ = false

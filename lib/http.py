@@ -3,7 +3,7 @@
 
 import requests
 from typing import Any, Union
-from lib.object import *
+from object import *
 from lib.kei2py import *
 
 def _to_python(obj: Any) -> Any:

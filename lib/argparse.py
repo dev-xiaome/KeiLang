@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-from lib.object import false, undefined, KeiString
+from object import false, undefined, KeiString
 
 class parser:
     def __init__(self, argv):

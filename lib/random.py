@@ -1,5 +1,5 @@
 import random as _random
-from lib.object import *
+from object import *
 from lib.kei2py import *
 
 def random():

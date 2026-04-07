@@ -4,7 +4,7 @@
 """KeiLang tkinter 包装库 - 自动转换 KeiLang ↔ Python 类型"""
 
 from typing import Any, Callable, Optional, Union, Dict
-from lib.object import *
+from object import *
 from lib.python import topy, tokei
 import tkinter as _tkinter
 from tkinter import ttk as _ttk

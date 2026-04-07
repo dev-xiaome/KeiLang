@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 import json as _json
-from lib.object import *
+from object import *
 from lib.kei2py import *
 
 def dump(obj, indent=0):

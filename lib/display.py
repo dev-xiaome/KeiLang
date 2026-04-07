@@ -1,5 +1,5 @@
 from stdlib import kei as stdlib
-from lib.object import *
+from object import *
 
 def render_tree(obj, prefix=KeiString(""), style=KeiString("╰")):
     lines = []

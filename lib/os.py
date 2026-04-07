@@ -2,7 +2,7 @@
 
 import os as _os
 from pathlib import Path
-from lib.object import *
+from object import *
 from lib.kei2py import *
 
 class KeiPath:

@@ -2627,9 +2627,16 @@ class KeiInstance(KeiBase):
         return None
 
     def __getitem__(self, key):
+        # 检查是否有 property
         method = self._get_method(key)
-
         if method:
+            if hasattr(method, 'is_property') and method.is_property:
+                # 调用 property 的 getter
+                return method(self)
+            if isinstance(method, KeiMethod):
+                return method.bind(self)
+            return method
+
             # 如果是方法且需要绑定 self
             if isinstance(method, KeiMethod):
                 return method.bind(self)  # ← 关键：绑定 self
@@ -2673,12 +2680,18 @@ class KeiMethod(KeiBase):
         self.klass = klass
         self.__name__ = method_obj['name']
         self.is_static = False
-        self.is_property = method_obj.get('is_property', False)
+        self.is_property = False
+
+        from kei import runtoken, __kei__
+        from stdlib import kei
+
         if 'decorators' in method_obj:
             for dec in method_obj['decorators']:
-                if dec['value'] == 'static':
+                obj, _ = runtoken(dec, __kei__.env.copy())
+                if obj is kei.prop:
+                    self.is_property = True
+                if obj is kei.static:
                     self.is_static = True
-                    break
 
     def bind(self, instance: KeiInstance) -> 'KeiBoundMethod':
         return KeiBoundMethod(self.method_obj, instance)

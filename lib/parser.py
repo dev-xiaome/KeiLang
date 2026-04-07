@@ -1,7 +1,7 @@
 #!/bin/bash
 
 import kei
-from lib.object import *
+from object import *
 from lib.kei2py import *
 
 def tokenize(codes):

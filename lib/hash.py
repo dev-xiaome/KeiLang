@@ -2,7 +2,7 @@
 """KeiLang 哈希函数库"""
 
 import hashlib
-from lib.object import *
+from object import *
 from lib.kei2py import *
 from stdlib import kei
 

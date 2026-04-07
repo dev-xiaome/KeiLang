@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 import math as _math
-from lib.object import *
+from object import *
 from lib.kei2py import *
 
 # 常量

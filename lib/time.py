@@ -3,7 +3,7 @@
 import time as _time  # 避免命名冲突
 
 from stdlib import kei as stdlib
-from lib.object import *
+from object import *
 
 def sleep(seconds):
     """睡眠指定秒数"""
