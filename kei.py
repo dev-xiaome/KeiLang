@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.7-17"
+__version__ = "1.7-18"
 
 class KeiState:
     stack: List[Any]
@@ -220,8 +220,8 @@ def error(errtype: str | None, info: str, stack: list=[], code:str|None=None, li
 
     print(f"{space} ·")
 
-    import traceback
-    traceback.print_exc()
+    #import traceback
+    #traceback.print_exc()
 
     if not __kei__.repl:
         sys.exit(1)
@@ -1199,8 +1199,6 @@ def parse_try_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source
         'var': var,
         'catchbody': catch_body,
         'finallybody': finally_body,
-        'source': source_line,
-        'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
     }
     return node, pos, linepos
 
@@ -1234,8 +1232,6 @@ def parse_class_stmt(tokens: list, pos: int, all_lines: list, linepos: int, sour
         'name': class_name,
         'parent': parent_class,
         'body': body,
-        'source': source_line,
-        'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
     }
     return node, pos, linepos
 
@@ -1294,8 +1290,6 @@ def parse_for_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source
         'vars': vars,
         'iterable': iterable,
         'body': body,
-        'source': source_line,
-        'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
     }
     return node, pos, linepos
 
@@ -1370,7 +1364,7 @@ def parse_fn_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_
             # 检查是否多返回值
             values = []
             while True:
-                val, pos, linepos = parse_expr(tokens, pos, ...)
+                val, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
                 values.append(val)
                 if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
                     pos += 1
@@ -1386,7 +1380,6 @@ def parse_fn_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_
                 'type': 'function', 'name': func_name, 'params': params,
                 'defaults': defaults, 'typehints': type_hints, 'hint': hint,
                 'body': body,
-                'source': source_line, 'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
             }, pos, linepos
 
         body, pos, linepos = parse_block(tokens, pos, all_lines, linepos, {'type': 'symbol', 'value': '{'})
@@ -1396,7 +1389,6 @@ def parse_fn_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_
             'type': 'function', 'name': func_name, 'params': params,
             'defaults': defaults, 'typehints': type_hints, 'hint': hint,
             'body': body,
-            'source': source_line, 'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
         }, pos, linepos
     except:
         __kei__.stack.pop()
@@ -1415,8 +1407,6 @@ def parse_if_while_stmt(tokens: list, pos: int, all_lines: list, linepos: int, s
         'type': stmt_type,
         'cond': cond,
         'body': body,
-        'source': source_line,
-        'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
     }
 
     # if/unless 需要处理 elif/else
@@ -1515,8 +1505,6 @@ def parse_match_stmt(tokens: list, pos: int, all_lines: list, linepos: int, sour
         'type': 'match',
         'value': value_expr,
         'arms': arms,
-        'source': source_line,
-        'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
     }
     return node, current_pos, current_line
 
@@ -1539,8 +1527,6 @@ def parse_return_stmt(tokens: list, pos: int, all_lines: list, linepos: int, sou
     else:
         node = {'type': 'return', 'value': {'type': 'list', 'elements': values}}
 
-    node['source'] = source_line
-    node['linenum'] = tokens[pos]['linenum'] if pos < len(tokens) else linepos
     return node, pos, linepos
 
 def parse_with_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
@@ -1563,8 +1549,6 @@ def parse_with_stmt(tokens: list, pos: int, all_lines: list, linepos: int, sourc
         'expr': expr,
         'as_var': as_var,
         'body': body,
-        'source': source_line,
-        'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
     }
     return node, pos, linepos
 
@@ -1585,8 +1569,6 @@ def parse_namespace_stmt(tokens: list, pos: int, all_lines: list, linepos: int, 
         'type': 'namespace',
         'name': ns_name,
         'body': body,
-        'source': source_line,
-        'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
     }
     return node, pos, linepos
 
@@ -1617,8 +1599,6 @@ def parse_global_del_raise_use(tokens: list, pos: int, all_lines: list, linepos:
     node = {
         'type': stmt_type,
         'names': targets,
-        'source': source_line,
-        'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
     }
     return node, pos, linepos
 
@@ -1667,8 +1647,6 @@ def parse_import_stmt(tokens: list, pos: int, all_lines: list, linepos: int, sou
     node = {
         'type': 'import',
         'modules': modules,
-        'source': source_line,
-        'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
     }
     return node, pos, linepos
 
@@ -1729,8 +1707,6 @@ def parse_from_stmt(tokens: list, pos: int, all_lines: list, linepos: int, sourc
         'type': 'fromimport',
         'module': module_name,
         'imports': imports,
-        'source': source_line,
-        'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
     }
     return node, pos, linepos
 
@@ -1893,6 +1869,9 @@ def parse_compoundassign(tokens: list, pos: int, all_lines: list, linepos: int,
         elif len(var_tokens) > 0:
             raise KeiError("SyntaxError", f"多变量赋值左边必须是变量名、*rest 或 **kwargs, 得到 {var_tokens}")
 
+        if kwargs_var:
+            raise KeiError("SyntaxError", "**kwargs 只能在函数参数中使用")
+
         left_node = {
             'type': 'multiassign',
             'vars': vars_list,
@@ -1982,8 +1961,6 @@ def parse_compoundassign(tokens: list, pos: int, all_lines: list, linepos: int,
         'left': left_node,
         'right': right_node,
         'op': compound_op,
-        'source': source_line,
-        'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
     }
     return node, final_pos, linepos
 
@@ -2078,6 +2055,9 @@ def parse_assign(tokens: list, pos: int, assign_pos: int, all_lines: list,
         elif len(var_tokens) > 0:
             raise KeiError("SyntaxError", f"多变量赋值左边必须是变量名、*rest 或 **kwargs, 得到 {var_tokens}")
 
+        if kwargs_var:
+            raise KeiError("SyntaxError", "**kwargs 只能在函数参数中使用")
+
         left_node = {'type': 'multiassign', 'vars': vars, 'rest': rest_var, 'kwargs': kwargs_var}
     else:
         # 普通赋值
@@ -2162,8 +2142,6 @@ def parse_assign(tokens: list, pos: int, assign_pos: int, all_lines: list,
         'type': 'assign',
         'left': left_node,
         'right': right_node,
-        'source': source_line,
-        'linenum': tokens[pos]['linenum'] if pos < len(tokens) else linepos
     }
     return node, final_pos, linepos
 
