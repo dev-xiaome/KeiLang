@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.7-18"
+__version__ = "1.7-19"
 
 class KeiState:
     stack: List[Any]
@@ -194,8 +194,11 @@ def error(errtype: str | None, info: str, stack: list=[], code:str|None=None, li
     print(f"{space} ·")
 
     for s in stack:
-        if type(s) is tuple and s[1].strip():
-            print(f"{space} | in \033[36;1m{s[0]}: {s[1].strip()}\033[0m")
+        if type(s) is tuple:
+            if s[1].strip():
+                print(f"{space} | in \033[36;1m{s[0]}: {s[1].strip()}\033[0m")
+            else:
+                print(f"{space} | in \033[36;1m{s[0]}\033[0m")
         else:
             print(f"{space} | in \033[36;1m{s}\033[0m")
 
@@ -1372,9 +1375,9 @@ def parse_fn_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_
                 break
 
             if len(values) == 1:
-                body = [{'type': 'return', 'value': values[0]}]
+                body = [{'type': 'return', 'value': values[0], 'linenum': globals()['linenum'], 'source': globals()['source']}]
             else:
-                body = [{'type': 'return', 'value': {'type': 'list', 'elements': values}}]
+                body = [{'type': 'return', 'value': {'type': 'list', 'elements': values}, 'linenum': globals()['linenum'], 'source': globals()['source']}]
             __kei__.stack.pop()
             return {
                 'type': 'function', 'name': func_name, 'params': params,
@@ -1820,6 +1823,7 @@ def parse_compoundassign(tokens: list, pos: int, all_lines: list, linepos: int,
 
     if left_comma_positions:
         # 多变量复合赋值 a, b, *rest, **kwargs += ...
+        # 支持 a: int, b: string += ...
         vars_list = []
         rest_var = None
         kwargs_var = None
@@ -1829,20 +1833,54 @@ def parse_compoundassign(tokens: list, pos: int, all_lines: list, linepos: int,
             var_tokens = left_tokens[last_pos:comma_pos]
             var_tokens = [t for t in var_tokens if t.get('type') != 'space']
 
+            # 检查是否是 **kwargs
             if len(var_tokens) == 2 and var_tokens[0]['type'] == 'op' and var_tokens[0]['value'] == '**':
                 if var_tokens[1]['type'] == 'name':
                     kwargs_var = var_tokens[1]['value']
                 else:
                     raise KeiError("SyntaxError", f"** 后面必须是变量名, 得到 {var_tokens[1]}")
+            # 检查是否是 *rest
             elif len(var_tokens) == 2 and var_tokens[0]['type'] == 'op' and var_tokens[0]['value'] == '*':
                 if var_tokens[1]['type'] == 'name':
                     rest_var = var_tokens[1]['value']
                 else:
                     raise KeiError("SyntaxError", f"* 后面必须是变量名, 得到 {var_tokens[1]}")
+            # 检查是否是带类型注解的变量 x: int
+            elif len(var_tokens) >= 3 and var_tokens[0]['type'] == 'name' and var_tokens[1]['type'] == 'symbol' and var_tokens[1]['value'] == ':':
+                var_name = var_tokens[0]['value']
+                var_linenum = var_tokens[0].get('linenum', linepos)
+
+                type_tokens = var_tokens[2:]
+                if not type_tokens:
+                    raise KeiError("SyntaxError", "类型注解不能为空")
+
+                type_node, type_new_pos, type_linepos = parse_expr(
+                    type_tokens, 0, allow_assign=False,
+                    all_lines=all_lines, linepos=linepos
+                )
+
+                if type_node is None or type_new_pos != len(type_tokens):
+                    raise KeiError("SyntaxError", f"无效的类型注解: {type_tokens}")
+
+                vars_list.append({
+                    'name': var_name,
+                    'hint': type_node,
+                    'linenum': var_linenum
+                })
+            # 普通变量名
             elif len(var_tokens) == 1 and var_tokens[0]['type'] == 'name':
-                vars_list.append(var_tokens[0]['value'])
+                vars_list.append({
+                    'name': var_tokens[0]['value'],
+                    'hint': None,
+                    'linenum': var_tokens[0].get('linenum', linepos)
+                })
+            # 占位符 _
             elif len(var_tokens) == 1 and var_tokens[0]['type'] == 'symbol' and var_tokens[0]['value'] == '_':
-                vars_list.append('_')
+                vars_list.append({
+                    'name': '_',
+                    'hint': None,
+                    'linenum': var_tokens[0].get('linenum', linepos)
+                })
             elif len(var_tokens) > 0:
                 raise KeiError("SyntaxError", f"多变量赋值左边必须是变量名、*rest 或 **kwargs, 得到 {var_tokens}")
 
@@ -1862,10 +1900,39 @@ def parse_compoundassign(tokens: list, pos: int, all_lines: list, linepos: int,
                 rest_var = var_tokens[1]['value']
             else:
                 raise KeiError("SyntaxError", f"* 后面必须是变量名, 得到 {var_tokens[1]}")
+        elif len(var_tokens) >= 3 and var_tokens[0]['type'] == 'name' and var_tokens[1]['type'] == 'symbol' and var_tokens[1]['value'] == ':':
+            var_name = var_tokens[0]['value']
+            var_linenum = var_tokens[0].get('linenum', linepos)
+
+            type_tokens = var_tokens[2:]
+            if not type_tokens:
+                raise KeiError("SyntaxError", "类型注解不能为空")
+
+            type_node, type_new_pos, type_linepos = parse_expr(
+                type_tokens, 0, allow_assign=False,
+                all_lines=all_lines, linepos=linepos
+            )
+
+            if type_node is None or type_new_pos != len(type_tokens):
+                raise KeiError("SyntaxError", f"无效的类型注解: {type_tokens}")
+
+            vars_list.append({
+                'name': var_name,
+                'hint': type_node,
+                'linenum': var_linenum
+            })
         elif len(var_tokens) == 1 and var_tokens[0]['type'] == 'name':
-            vars_list.append(var_tokens[0]['value'])
+            vars_list.append({
+                'name': var_tokens[0]['value'],
+                'hint': None,
+                'linenum': var_tokens[0].get('linenum', linepos)
+            })
         elif len(var_tokens) == 1 and var_tokens[0]['type'] == 'symbol' and var_tokens[0]['value'] == '_':
-            vars_list.append('_')
+            vars_list.append({
+                'name': '_',
+                'hint': None,
+                'linenum': var_tokens[0].get('linenum', linepos)
+            })
         elif len(var_tokens) > 0:
             raise KeiError("SyntaxError", f"多变量赋值左边必须是变量名、*rest 或 **kwargs, 得到 {var_tokens}")
 
@@ -1880,11 +1947,35 @@ def parse_compoundassign(tokens: list, pos: int, all_lines: list, linepos: int,
         }
     else:
         # 普通左边表达式（可能是 name、attr、index 等）
-        left_node, left_new_pos, _ = parse_expr(left_tokens, 0, allow_assign=True, all_lines=all_lines, linepos=linepos)
-        if not left_node or left_new_pos != len(left_tokens):
-            raise KeiError("SyntaxError", f"无效的赋值左边: {left_tokens}")
+        # 支持普通变量的类型注解 x: int += 1
+        if len(left_tokens) >= 3 and left_tokens[0]['type'] == 'name' and left_tokens[1]['type'] == 'symbol' and left_tokens[1]['value'] == ':':
+            var_name = left_tokens[0]['value']
+            var_linenum = left_tokens[0].get('linenum', linepos)
 
-    # 解析右边
+            type_tokens = left_tokens[2:]
+            if not type_tokens:
+                raise KeiError("SyntaxError", "类型注解不能为空")
+
+            type_node, type_new_pos, type_linepos = parse_expr(
+                type_tokens, 0, allow_assign=False,
+                all_lines=all_lines, linepos=linepos
+            )
+
+            if type_node is None or type_new_pos != len(type_tokens):
+                raise KeiError("SyntaxError", f"无效的类型注解: {type_tokens}")
+
+            left_node = {
+                'type': 'name',
+                'value': var_name,
+                'hint': type_node,
+                'linenum': var_linenum
+            }
+        else:
+            left_node, left_new_pos, _ = parse_expr(left_tokens, 0, allow_assign=True, all_lines=all_lines, linepos=linepos)
+            if not left_node or left_new_pos != len(left_tokens):
+                raise KeiError("SyntaxError", f"无效的赋值左边: {left_tokens}")
+
+    # 解析右边（保持不变）
     right_tokens = tokens[op_pos + 1:]
 
     # 检查右边是否为多值
@@ -1966,17 +2057,15 @@ def parse_compoundassign(tokens: list, pos: int, all_lines: list, linepos: int,
 
 def parse_assign(tokens: list, pos: int, assign_pos: int, all_lines: list,
                  linepos: int, source_line: str) -> tuple:
-    """解析赋值语句（支持解包、*rest、**kwargs）"""
+    """解析赋值语句（支持解包、*rest、**kwargs、变量类型注解）"""
     # 解析左边
     left_tokens = tokens[pos:assign_pos]
 
     # 检查是否为 *var 或 **var 单独使用
     if len(left_tokens) == 2 and left_tokens[0]['type'] == 'op':
         if left_tokens[0]['value'] == '*' and left_tokens[1]['type'] == 'name':
-            # *var 单独使用 - 语法错误
             raise KeiError("SyntaxError", f"*{left_tokens[1]['value']} 不能单独使用，只能在多变量赋值中使用（如 a, *rest = ...）")
         elif left_tokens[0]['value'] == '**' and left_tokens[1]['type'] == 'name':
-            # **var 单独使用 - 语法错误
             raise KeiError("SyntaxError", f"**{left_tokens[1]['value']} 不能单独使用，只能在多变量赋值中使用")
 
     # 检查是否为多变量赋值（包含逗号）
@@ -2004,6 +2093,7 @@ def parse_assign(tokens: list, pos: int, assign_pos: int, all_lines: list,
 
     if left_comma_positions:
         # 多变量赋值 a, b, *rest, **kwargs = ...
+        # 支持 a: int, b: string = 1, "hello"
         vars = []
         rest_var = None
         kwargs_var = None
@@ -2012,23 +2102,58 @@ def parse_assign(tokens: list, pos: int, assign_pos: int, all_lines: list,
         for comma_pos in left_comma_positions:
             var_tokens = left_tokens[last_pos:comma_pos]
 
-            # 去除空白（如果有的话）
             var_tokens = [t for t in var_tokens if t['type'] != 'space'] if any(t.get('type') == 'space' for t in var_tokens) else var_tokens
 
+            # 检查是否是 **kwargs
             if len(var_tokens) == 2 and var_tokens[0]['type'] == 'op' and var_tokens[0]['value'] == '**':
                 if var_tokens[1]['type'] == 'name':
                     kwargs_var = var_tokens[1]['value']
                 else:
                     raise KeiError("SyntaxError", f"** 后面必须是变量名, 得到 {var_tokens[1]}")
+            # 检查是否是 *rest
             elif len(var_tokens) == 2 and var_tokens[0]['type'] == 'op' and var_tokens[0]['value'] == '*':
                 if var_tokens[1]['type'] == 'name':
                     rest_var = var_tokens[1]['value']
                 else:
                     raise KeiError("SyntaxError", f"* 后面必须是变量名, 得到 {var_tokens[1]}")
+            # 检查是否是带类型注解的变量 x: int
+            elif len(var_tokens) >= 3 and var_tokens[0]['type'] == 'name' and var_tokens[1]['type'] == 'symbol' and var_tokens[1]['value'] == ':':
+                var_name = var_tokens[0]['value']
+                var_linenum = var_tokens[0].get('linenum', linepos)
+
+                # 解析类型表达式
+                type_tokens = var_tokens[2:]
+                if not type_tokens:
+                    raise KeiError("SyntaxError", "类型注解不能为空")
+
+                type_node, type_new_pos, type_linepos = parse_expr(
+                    type_tokens, 0, allow_assign=False,
+                    all_lines=all_lines, linepos=linepos
+                )
+
+                if type_node is None or type_new_pos != len(type_tokens):
+                    raise KeiError("SyntaxError", f"无效的类型注解: {type_tokens}")
+
+                # 创建带 hint 的变量信息
+                vars.append({
+                    'name': var_name,
+                    'hint': type_node,
+                    'linenum': var_linenum
+                })
+            # 普通变量名
             elif len(var_tokens) == 1 and var_tokens[0]['type'] == 'name':
-                vars.append(var_tokens[0]['value'])
+                vars.append({
+                    'name': var_tokens[0]['value'],
+                    'hint': None,
+                    'linenum': var_tokens[0].get('linenum', linepos)
+                })
+            # 占位符 _
             elif len(var_tokens) == 1 and var_tokens[0]['type'] == 'symbol' and var_tokens[0]['value'] == '_':
-                vars.append('_')  # 忽略占位符
+                vars.append({
+                    'name': '_',
+                    'hint': None,
+                    'linenum': var_tokens[0].get('linenum', linepos)
+                })
             elif len(var_tokens) > 0:
                 raise KeiError("SyntaxError", f"多变量赋值左边必须是变量名、*rest 或 **kwargs, 得到 {var_tokens}")
 
@@ -2038,34 +2163,100 @@ def parse_assign(tokens: list, pos: int, assign_pos: int, all_lines: list,
         var_tokens = left_tokens[last_pos:]
         var_tokens = [t for t in var_tokens if t['type'] != 'space'] if any(t.get('type') == 'space' for t in var_tokens) else var_tokens
 
+        # 检查是否是 **kwargs
         if len(var_tokens) == 2 and var_tokens[0]['type'] == 'op' and var_tokens[0]['value'] == '**':
             if var_tokens[1]['type'] == 'name':
                 kwargs_var = var_tokens[1]['value']
             else:
                 raise KeiError("SyntaxError", f"** 后面必须是变量名, 得到 {var_tokens[1]}")
+        # 检查是否是 *rest
         elif len(var_tokens) == 2 and var_tokens[0]['type'] == 'op' and var_tokens[0]['value'] == '*':
             if var_tokens[1]['type'] == 'name':
                 rest_var = var_tokens[1]['value']
             else:
                 raise KeiError("SyntaxError", f"* 后面必须是变量名, 得到 {var_tokens[1]}")
+        # 检查是否是带类型注解的变量 x: int
+        elif len(var_tokens) >= 3 and var_tokens[0]['type'] == 'name' and var_tokens[1]['type'] == 'symbol' and var_tokens[1]['value'] == ':':
+            var_name = var_tokens[0]['value']
+            var_linenum = var_tokens[0].get('linenum', linepos)
+
+            type_tokens = var_tokens[2:]
+            if not type_tokens:
+                raise KeiError("SyntaxError", "类型注解不能为空")
+
+            type_node, type_new_pos, type_linepos = parse_expr(
+                type_tokens, 0, allow_assign=False,
+                all_lines=all_lines, linepos=linepos
+            )
+
+            if type_node is None or type_new_pos != len(type_tokens):
+                raise KeiError("SyntaxError", f"无效的类型注解: {type_tokens}")
+
+            vars.append({
+                'name': var_name,
+                'hint': type_node,
+                'linenum': var_linenum
+            })
+        # 普通变量名
         elif len(var_tokens) == 1 and var_tokens[0]['type'] == 'name':
-            vars.append(var_tokens[0]['value'])
+            vars.append({
+                'name': var_tokens[0]['value'],
+                'hint': None,
+                'linenum': var_tokens[0].get('linenum', linepos)
+            })
         elif len(var_tokens) == 1 and var_tokens[0]['type'] == 'symbol' and var_tokens[0]['value'] == '_':
-            vars.append('_')
+            vars.append({
+                'name': '_',
+                'hint': None,
+                'linenum': var_tokens[0].get('linenum', linepos)
+            })
         elif len(var_tokens) > 0:
             raise KeiError("SyntaxError", f"多变量赋值左边必须是变量名、*rest 或 **kwargs, 得到 {var_tokens}")
 
         if kwargs_var:
             raise KeiError("SyntaxError", "**kwargs 只能在函数参数中使用")
 
-        left_node = {'type': 'multiassign', 'vars': vars, 'rest': rest_var, 'kwargs': kwargs_var}
+        left_node = {
+            'type': 'multiassign',
+            'vars': vars,
+            'rest': rest_var,
+            'kwargs': kwargs_var
+        }
     else:
-        # 普通赋值
-        left_node, left_new_pos, _ = parse_expr(left_tokens, 0, allow_assign=True, all_lines=all_lines, linepos=linepos)
-        if not left_node or left_new_pos != len(left_tokens):
-            raise KeiError("SyntaxError", f"无效的赋值左边: {left_tokens}")
+        # 普通赋值 - 支持变量类型注解 x: int = 42
+        if len(left_tokens) >= 3 and left_tokens[0]['type'] == 'name' and left_tokens[1]['type'] == 'symbol' and left_tokens[1]['value'] == ':':
+            var_name = left_tokens[0]['value']
+            var_linenum = left_tokens[0].get('linenum', linepos)
 
-    # 解析右边
+            type_tokens = left_tokens[2:]
+            if not type_tokens:
+                raise KeiError("SyntaxError", "类型注解不能为空")
+
+            type_node, type_new_pos, type_linepos = parse_expr(
+                type_tokens, 0, allow_assign=False,
+                all_lines=all_lines, linepos=linepos
+            )
+
+            if type_node is None or type_new_pos != len(type_tokens):
+                raise KeiError("SyntaxError", f"无效的类型注解: {type_tokens}")
+
+            left_node = {
+                'type': 'name',
+                'value': var_name,
+                'hint': type_node,
+                'linenum': var_linenum
+            }
+        else:
+            left_node, left_new_pos, left_linepos = parse_expr(
+                left_tokens, 0, allow_assign=True,
+                all_lines=all_lines, linepos=linepos
+            )
+            if not left_node or left_new_pos != len(left_tokens):
+                raise KeiError("SyntaxError", f"无效的赋值左边: {left_tokens}")
+            if left_linepos > linepos:
+                linepos = left_linepos
+
+    # 解析右边（保持不变）
     right_tokens = tokens[assign_pos + 1:]
 
     # 检查是否为多值返回（右边有逗号）
@@ -2093,7 +2284,6 @@ def parse_assign(tokens: list, pos: int, assign_pos: int, all_lines: list,
             right_comma_positions.append(i)
 
     if right_comma_positions:
-        # 多值返回 a, b, c = 1, 2, 3
         elements = []
         last_pos = 0
 
@@ -2101,48 +2291,55 @@ def parse_assign(tokens: list, pos: int, assign_pos: int, all_lines: list,
             value_tokens = right_tokens[last_pos:comma_pos]
 
             if value_tokens and value_tokens[0]['type'] == 'symbol' and value_tokens[0]['value'] == '[':
-                val_node, _, _ = parse_list(value_tokens, 0, all_lines=all_lines, linepos=linepos)
+                val_node, _, val_linepos = parse_list(value_tokens, 0, all_lines=all_lines, linepos=linepos)
             elif value_tokens and value_tokens[0]['type'] == 'symbol' and value_tokens[0]['value'] == '{':
-                val_node, _, _ = parse_dict(value_tokens, 0, all_lines=all_lines, linepos=linepos)
+                val_node, _, val_linepos = parse_dict(value_tokens, 0, all_lines=all_lines, linepos=linepos)
             else:
-                val_node, _, _ = parse_expr(value_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
+                val_node, _, val_linepos = parse_expr(value_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
 
             if val_node:
                 elements.append(val_node)
+            if val_linepos > linepos:
+                linepos = val_linepos
             last_pos = comma_pos + 1
 
-        # 处理最后一个
         value_tokens = right_tokens[last_pos:]
         if value_tokens:
             if value_tokens and value_tokens[0]['type'] == 'symbol' and value_tokens[0]['value'] == '[':
-                val_node, _, _ = parse_list(value_tokens, 0, all_lines=all_lines, linepos=linepos)
+                val_node, _, val_linepos = parse_list(value_tokens, 0, all_lines=all_lines, linepos=linepos)
             elif value_tokens and value_tokens[0]['type'] == 'symbol' and value_tokens[0]['value'] == '{':
-                val_node, _, _ = parse_dict(value_tokens, 0, all_lines=all_lines, linepos=linepos)
+                val_node, _, val_linepos = parse_dict(value_tokens, 0, all_lines=all_lines, linepos=linepos)
             else:
-                val_node, _, _ = parse_expr(value_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
+                val_node, _, val_linepos = parse_expr(value_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
             if val_node:
                 elements.append(val_node)
+            if val_linepos > linepos:
+                linepos = val_linepos
 
         right_node = {'type': 'list', 'elements': elements}
         final_pos = assign_pos + 1 + len(right_tokens)
     else:
-        # 普通右边
         if right_tokens and right_tokens[0]['type'] == 'symbol' and right_tokens[0]['value'] == '{':
-            right_node, right_new_pos, _ = parse_dict(right_tokens, 0, all_lines=all_lines, linepos=linepos)
+            right_node, right_new_pos, right_linepos = parse_dict(right_tokens, 0, all_lines=all_lines, linepos=linepos)
         elif right_tokens and right_tokens[0]['type'] == 'symbol' and right_tokens[0]['value'] == '[':
-            right_node, right_new_pos, _ = parse_list(right_tokens, 0, all_lines=all_lines, linepos=linepos)
+            right_node, right_new_pos, right_linepos = parse_list(right_tokens, 0, all_lines=all_lines, linepos=linepos)
         else:
-            right_node, right_new_pos, _ = parse_expr(right_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
+            right_node, right_new_pos, right_linepos = parse_expr(right_tokens, 0, allow_assign=False, all_lines=all_lines, linepos=linepos)
 
         if not right_node:
             raise KeiError("SyntaxError", "无效的赋值右边")
+
         final_pos = assign_pos + 1 + right_new_pos
+        if right_linepos > linepos:
+            linepos = right_linepos
 
     node = {
         'type': 'assign',
         'left': left_node,
         'right': right_node,
+        'linenum': tokens[pos].get('linenum', linepos) if pos < len(tokens) else linepos
     }
+
     return node, final_pos, linepos
 
 def parse_call(name, tokens, pos, is_attr=False, all_lines=None, linepos=0):
@@ -2508,6 +2705,18 @@ def parse_logic(tokens, pos, in_call=False, allow_assign=False, in_comp=False, a
         t = tokens[pos]
         if t["type"] != "op":
             break
+
+        # 处理 not（一元）
+        if t["value"] == "not":
+            pos += 1
+            right, new_pos, linepos = parse_compare(tokens, pos, in_call, allow_assign, in_comp, all_lines, linepos)
+            if right is None:
+                raise KeiError("SyntaxError", f"运算符 'not' 后面缺少表达式")
+            left = {"type": "unary", "op": "not", "expr": right}
+            pos = new_pos
+            continue
+
+        # 处理 and / or（二元）
         if t["value"] in {"and", "or"}:
             op = t["value"]
             pos += 1
@@ -2848,10 +3057,7 @@ def parse_unary_prefix(tokens, pos, in_call=False, all_lines=None, linepos=0):
     if pos >= len(tokens):
         return None, pos, linepos
     t = tokens[pos]
-    if t["type"] == "op" and t["value"] == "not":
-        pos += 1
-        expr, pos, linepos = parse_unary_prefix(tokens, pos, in_call, all_lines, linepos)
-        return {"type": "unary", "op": "not", "expr": expr}, pos, linepos
+
     if t["type"] == "op" and t["value"] == "-":
         pos += 1
         expr, pos, linepos = parse_unary_prefix(tokens, pos, in_call, all_lines, linepos)
@@ -3511,6 +3717,8 @@ def runtoken(node, env) -> tuple:
         if __kei__.catch or not __kei__.error:
             raise
 
+        __kei__.stack.append(get_from_env('__caller__', env, '<global>'))
+
         error_config = {
             ZeroDivisionError: ("ZeroDivisionError", "无法对 0 进行除法"),
             OverflowError: ("OverflowError", f"数值过大, 无法处理: {e}"),
@@ -3589,14 +3797,11 @@ def exec(code, env=None):
     return env, ret
 
 def execmain(code, env=None, step=False):
-    if len(sys.argv) >= 3:
-        cmd_args = []
-        for arg in sys.argv[1:]:
-            cmd_args.append(f"{arg}")
+    cmd_args = []
+    for arg in sys.argv[1:]:
+        cmd_args.append(f"{arg}")
 
-        code += f"\nmain({content(cmd_args)});"
-    else:
-        code += f"\nmain([]);"
+    code += f"\nmain({content(cmd_args)});"
 
     __kei__.step = step
 

@@ -14,6 +14,7 @@ class _undefined:
     def __bool__(self): return False
     def __eq__(self, other): return isinstance(other, _undefined)
     def __hash__(self): return 0
+    def __deepcopy__(self, memo): return self
 
 class _null:
     def __repr__(self): return "null"
@@ -21,6 +22,7 @@ class _null:
     def __bool__(self): return False
     def __eq__(self, other): return isinstance(other, _null)
     def __hash__(self): return 0
+    def __deepcopy__(self, memo): return self
 
 class _omit:
     def __repr__(self): return "..."
@@ -28,6 +30,7 @@ class _omit:
     def __bool__(self): return False
     def __eq__(self, other): return isinstance(other, _omit)
     def __hash__(self): return 0
+    def __deepcopy__(self, memo): return self
 
 undefined = _undefined()
 null = _null()
@@ -1322,6 +1325,8 @@ class KeiBool(KeiBase):
             return method()
         return "true" if self.value else "false"
 
+    def __deepcopy__(self, memo):
+        return self
 
 true = KeiBool(True)
 false = KeiBool(False)
@@ -2132,82 +2137,65 @@ class KeiDict(KeiBase):
         }
 
     def _items(self):
-        return KeiList([KeiList([KeiString(k), v]) for k, v in self.items.items()])
+        return KeiList([KeiList([k, v]) for k, v in self.items.items()])
+
     def items(self):
         return self._items()
 
     def __len__(self):
-        method = self._get_method('__len__')
-        if method:
-            return method()
         return len(self.items)
 
     def _keys(self):
-        return KeiList([KeiString(k) for k in self.items.keys()])
+        return KeiList(list(self.items.keys()))
+
     def keys(self):
         return self._keys()
 
     def _values(self):
         return KeiList(list(self.items.values()))
+
     def values(self):
         return self._values()
 
     def _get(self, key, default=undefined):
-        if isinstance(key, KeiString):
-            k = key.value
-        elif isinstance(key, (KeiInt, KeiFloat, KeiBool)):
-            k = to_python(key)
-        else:
-            k = key
-        return self.items.get(k, default)
+        # key 可能是 KeiString 或其他 Kei 类型
+        return self.items.get(key, default)
+
     def get(self, key, default=undefined):
         return self._get(key, default)
 
-    def _set(self, key, _value):
-        if isinstance(key, KeiString):
-            k = key.value
-        elif isinstance(key, (KeiInt, KeiFloat, KeiBool)):
-            k = to_python(key)
-        else:
-            k = key
-        self.items[k] = _value
-        return _value
-    def set(self, key, _value):
-        return self._set(key, _value)
+    def _set(self, key, value):
+        self.items[key] = value
+        return value
+
+    def set(self, key, value):
+        return self._set(key, value)
 
     def _has(self, key):
-        if isinstance(key, KeiString):
-            k = key.value
-        elif isinstance(key, (KeiInt, KeiFloat, KeiBool)):
-            k = to_python(key)
-        else:
-            k = key
-        return true if k in self.items else false
+        return true if key in self.items else false
+
     def has(self, key):
         return self._has(key)
 
     def _delete(self, key):
-        if isinstance(key, KeiString):
-            k = key.value
-        elif isinstance(key, (KeiInt, KeiFloat, KeiBool)):
-            k = to_python(key)
-        else:
-            k = key
-        if k in self.items:
-            del self.items[k]
+        if key in self.items:
+            del self.items[key]
             return true
         return false
+
     def delete(self, key):
         return self._delete(key)
 
     def _clear(self):
         self.items.clear()
         return null
+
     def clear(self):
         return self._clear()
 
     def _length(self):
         return KeiInt(len(self.items))
+
     def length(self):
         return self._length()
 
@@ -2217,110 +2205,29 @@ class KeiDict(KeiBase):
         elif isinstance(other, dict):
             self.items.update(other)
         return self
+
     def update(self, other):
         return self._update(other)
 
     def _map(self, func):
-        for k in self.items:
+        for k in list(self.items.keys()):
             self.items[k] = func(self.items[k])
         return self
+
     def map(self, func):
         return self._map(func)
 
-    def _default_getitem(self, key):
-        """覆盖基类的 _default_getitem"""
-        if isinstance(key, str):
-            if key in self._methods:
-                method = self._methods[key]
-                if hasattr(method, '__self__'):
-                    return method
-                return self._wrap_method(method)
-            if key in self._props:
-                return self._props[key]
-            return undefined
-
-        if isinstance(key, KeiString):
-            k = key.value
-        elif isinstance(key, (KeiInt, KeiFloat, KeiBool)):
-            k = to_python(key)
-        else:
-            k = key
-
-        if k in self.items:
-            return self.items[k]
-        return undefined
-
-    def _default_setitem(self, key, value):
-        """覆盖基类的 _default_setitem"""
-        if isinstance(key, str):
-            if key in self._methods:
-                raise KeiError("TypeError", f"不能修改方法 {key}")
-            self._props[key] = value
-            return
-
-        if isinstance(key, KeiString):
-            k = key.value
-        elif isinstance(key, (KeiInt, KeiFloat, KeiBool)):
-            k = to_python(key)
-        else:
-            k = key
-        self.items[k] = value
-
     def __getitem__(self, key):
-        method = self._get_method('__getitem__')
-        if method:
-            return method(key)
-        return self._default_getitem(key)
+        # key 直接使用（应该是 KeiString）
+        return self.items.get(key, undefined)
 
     def __setitem__(self, key, value):
-        method = self._get_method('__setitem__')
-        if method:
-            method(key, value)
-            return
-        self._default_setitem(key, value)
+        self.items[key] = value
 
     def __contains__(self, key):
-        method = self._get_method('__contains__')
-        if method:
-            return method(key)
-        if isinstance(key, KeiString):
-            k = key.value
-        elif isinstance(key, (KeiInt, KeiFloat, KeiBool)):
-            k = to_python(key)
-        else:
-            k = key
-        return k in self.items
-
-    def __add__(self, other):
-        method = self._get_method('__add__')
-        if method:
-            return method(other)
-        if isinstance(other, KeiDict):
-            new_dict = self.items.copy()
-            new_dict.update(other.items)
-            return KeiDict(new_dict)
-        return undefined
-
-    def __radd__(self, other):
-        return self.__add__(other)
-
-    def __or__(self, other):
-        method = self._get_method('__or__')
-        if method:
-            return method(other)
-        if isinstance(other, KeiDict):
-            new_dict = self.items.copy()
-            new_dict.update(other.items)
-            return KeiDict(new_dict)
-        return undefined
-
-    def __ror__(self, other):
-        return self.__or__(other)
+        return key in self.items
 
     def __eq__(self, other):
-        method = self._get_method('__eq__')
-        if method:
-            return method(other)
         if isinstance(other, KeiDict):
             if len(self.items) != len(other.items):
                 return false
@@ -2331,20 +2238,12 @@ class KeiDict(KeiBase):
         return false
 
     def __ne__(self, other):
-        method = self._get_method('__ne__')
-        if method:
-            return method(other)
-        if isinstance(other, KeiDict):
-            return true if not self.__eq__(other) else false
-        return true
+        return true if not self.__eq__(other) else false
 
     def __bool__(self):
         return len(self.items) > 0
 
     def __repr__(self):
-        method = self._get_method('__repr__')
-        if method:
-            return method()
         items = ", ".join(f"{k}: {repr(v)}" for k, v in self.items.items())
         return f"{{{items}}}"
 
@@ -2369,6 +2268,7 @@ class KeiFunction(KeiBase):
             if name is None:
                 name = self.__name__
             __kei__.stack.append((name, linecode))
+
             pushed = True
 
         params = self.func_obj['params']
@@ -2547,17 +2447,42 @@ class KeiClass(KeiBase):
             new_env['self'] = instance
             params = init_method['params'][1:]
 
-            for i, p in enumerate(params):
-                if i < len(args):
-                    new_env[p] = args[i]
-                elif p in kwargs:
-                    new_env[p] = kwargs[p]
-                elif p in init_method.get('defaults', {}):
-                    from kei import runtoken
-                    default_val, _ = runtoken(init_method['defaults'][p], init_method['closure'])
-                    new_env[p] = default_val
-                else:
-                    new_env[p] = undefined
+            # 转换 args 为列表以便操作
+            args_list = list(args)
+            i = 0
+            param_idx = 0
+
+            while param_idx < len(params):
+                p = params[param_idx]
+
+                if p.startswith('**'):  # **kwargs
+                    param_name = p[2:]
+                    # 收集所有未处理的关键字参数
+                    new_env[param_name] = KeiDict(kwargs)
+                    param_idx += 1
+
+                elif p.startswith('*'):  # *args
+                    param_name = p[1:]
+                    # 收集所有剩余的位置参数
+                    remaining_args = args_list[i:]
+                    new_env[param_name] = KeiList(remaining_args)
+                    param_idx += 1
+                    # *args 吸收了所有剩余参数，不再处理后续参数
+                    break
+
+                else:  # 普通参数
+                    if i < len(args_list):
+                        new_env[p] = args_list[i]
+                        i += 1
+                    elif p in kwargs:
+                        new_env[p] = kwargs[p]
+                    elif p in init_method.get('defaults', {}):
+                        from kei import runtoken
+                        default_val, _ = runtoken(init_method['defaults'][p], init_method['closure'])
+                        new_env[p] = default_val
+                    else:
+                        new_env[p] = undefined
+                    param_idx += 1
 
             from kei import runtoken
             for stmt in init_method['body']:

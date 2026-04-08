@@ -285,242 +285,248 @@ def node_postfix(node, env) -> tuple: # if node['type'] == 'postfix':
         else:
             raise KeiError("TypeError", f"无法对 {type(val)} 进行 -- 运算")
 
-def node_compoundassign(node, env) -> tuple: # if node['type'] == 'compoundassign':
-    """复合赋值：先获取当前值，运算后再赋值"""
-    op = node['op']
-    right_val, right_flag = runtoken(node['right'], env)
+def node_compoundassign(node, env) -> tuple:
+    """复合赋值 += -= *= /= """
     left = node['left']
+    right_node = node['right']
+    op = node['op']
 
-    if right_flag:
-        return right_val, True
+    # 先计算右边的值
+    right_val, _ = runtoken(right_node, env)
 
-    # 获取左边的当前值
-    def get_left_value(left_node):
-        if left_node['type'] == 'multiassign':
-            # 对于多变量，返回列表
-            values = []
-            vars_list = left_node['vars']
-            for var in vars_list:
-                if var == '_':
-                    values.append(undefined)
-                else:
-                    values.append(env.get(var, undefined))
-            if left_node.get('rest'):
-                values.append(env.get(left_node['rest'], KeiList([])))
-            if left_node.get('kwargs'):
-                values.append(env.get(left_node['kwargs'], KeiDict({})))
-            return KeiList(values), False
+    # ========== 多变量复合赋值 ==========
+    if left['type'] == 'multiassign':
+        vars_list = left['vars']  # list of dict: [{'name': 'x', 'hint': node}, ...]
+        rest_var = left.get('rest')
+        kwargs_var = left.get('kwargs')
 
-        elif left_node['type'] == 'name':
-            name = left_node['value']
-            if '.' in name:
-                parts = name.split('.')
-                obj = env
-                for part in parts[:-1]:
-                    if isinstance(obj, KeiBase):
-                        obj = obj[part]
-                    elif isinstance(obj, dict):
-                        obj = obj.get(part, undefined)
-                    else:
-                        obj = getattr(obj, part, undefined)
-                    if obj is undefined:
-                        break
-                if obj is not undefined:
-                    val = obj[parts[-1]] if isinstance(obj, KeiBase) else getattr(obj, parts[-1], undefined)
-                    return val, False
-            return env.get(name, undefined), False
+        if kwargs_var:
+            raise KeiError("TypeError", "**kwargs 不支持复合赋值")
 
-        elif left_node['type'] == 'attr':
-            obj, _ = runtoken(left_node['obj'], env)
-            attr = left_node['attr']
-            if isinstance(obj, KeiBase):
-                return obj[attr], False
-            elif isinstance(obj, dict):
-                return obj.get(attr, undefined), False
+        # 获取左边每个变量的当前值
+        current_vals = []
+        for var_info in vars_list:
+            if isinstance(var_info, dict):
+                var_name = var_info['name']
             else:
-                return getattr(obj, attr, undefined), False
+                var_name = var_info
+            current_vals.append(env.get(var_name, undefined))
 
-        elif left_node['type'] == 'index':
-            obj, _ = runtoken(left_node['obj'], env)
-            index, _ = runtoken(left_node['index'], env)
-            if isinstance(obj, KeiBase):
-                if isinstance(index, KeiInt):
-                    return obj[index.value], False
-                else:
-                    return obj[index], False
-            elif isinstance(obj, (list, dict)):
-                idx = index.value if isinstance(index, KeiInt) else index
-                return obj[idx] if idx < len(obj) else undefined, False
-            else:
-                return undefined, False
-
-        elif left_node['type'] == 'slice':
-            obj, _ = runtoken(left_node['obj'], env)
-            # 切片不支持直接获取值用于复合赋值
-            raise KeiError("TypeError", "切片不能用于复合赋值")
-
+        # 右边必须是列表或多值
+        if isinstance(right_val, KeiList):
+            right_items = right_val.items
+        elif isinstance(right_val, (list, tuple)):
+            right_items = list(right_val)
         else:
-            raise KeiError("TypeError", f"不支持的复合赋值目标: {left_node.get('type')}")
+            right_items = [right_val]
 
-    left_val, left_flag = get_left_value(left)
+        # 执行复合运算
+        result_vals = []
+        for i, current in enumerate(current_vals):
+            if i < len(right_items):
+                r = right_items[i]
+            else:
+                r = right_items[-1] if right_items else undefined
 
-    if left_flag:
-        return left_val, True
+            if op == '+=':
+                result = current + r
+            elif op == '-=':
+                result = current - r
+            elif op == '*=':
+                result = current * r
+            elif op == '/=':
+                result = current / r
+            else:
+                raise KeiError("TypeError", f"不支持的复合运算符: {op}")
+            result_vals.append(result)
 
-    # 执行运算
-    try:
+        # 处理 *rest
+        if rest_var:
+            rest_items = right_items[len(vars_list):]
+            env[rest_var] = KeiList(rest_items)
+
+        # 赋值回去并检查类型
+        for i, var_info in enumerate(vars_list):
+            if isinstance(var_info, dict):
+                var_name = var_info['name']
+                var_hint = var_info.get('hint')
+            else:
+                var_name = var_info
+                var_hint = None
+
+            if var_name == '_':
+                continue
+
+            val = result_vals[i] if i < len(result_vals) else undefined
+
+            # 类型检查
+            if var_hint is not None:
+                val, _ = node_typeassert_typecheck(val, var_hint, env)
+
+            env[var_name] = val
+
+        return result_vals[0] if result_vals else undefined, False
+
+    # ========== 普通变量 name ==========
+    elif left['type'] == 'name':
+        var_name = left['value']
+        var_hint = left.get('hint')
+
+        # 获取当前值
+        current_val = env.get(var_name, undefined)
+
+        # 执行运算
         if op == '+=':
-            result = left_val.__add__(right_val)
+            result = current_val + right_val
         elif op == '-=':
-            result = left_val.__sub__(right_val)
+            result = current_val - right_val
         elif op == '*=':
-            result = left_val.__mul__(right_val)
+            result = current_val * right_val
         elif op == '/=':
-            if right_val == 0:
-                raise KeiError("ZeroDivisionError", "除数不能为零")
-            result = left_val.__truediv__(right_val)
+            result = current_val / right_val
         else:
-            raise KeiError("SyntaxError", f"不支持的复合赋值操作符: {op}")
-    except AttributeError:
-        raise KeiError("TypeError", f"{left_val} 和 {right_val} 无法 {op} 运算")
-    except TypeError:
-        raise KeiError("TypeError", f"{left_val} 和 {right_val} 无法 {op} 运算")
+            raise KeiError("TypeError", f"不支持的复合运算符: {op}")
 
-    # 将结果赋值回去
-    def set_left_value(left_node, value):
-        if left_node['type'] == 'multiassign':
-            # 多变量复合赋值
-            vars_list = left_node['vars']
-            rest_var = left_node.get('rest')
-            kwargs_var = left_node.get('kwargs')
+        # 类型检查
+        if var_hint is not None:
+            result, _ = node_typeassert_typecheck(result, var_hint, env)
 
-            if isinstance(value, KeiList):
-                right_items = value.items
-            elif isinstance(value, (list, tuple)):
-                right_items = list(value)
+        env[var_name] = result
+        return result, False
+
+    # ========== 索引赋值 ==========
+    elif left['type'] == 'index':
+        obj, _ = runtoken(left['obj'], env)
+        index, _ = runtoken(left['index'], env)
+
+        # 获取当前值
+        if isinstance(obj, KeiList):
+            idx = index.value if isinstance(index, KeiInt) else index
+            current_val = obj.items[idx]
+        elif isinstance(obj, KeiDict):
+            current_val = obj.get(index, undefined)
+        else:
+            raise KeiError("TypeError", f"不支持对 {type(obj)} 进行索引复合赋值")
+
+        # 执行运算
+        if op == '+=':
+            result = current_val + right_val
+        elif op == '-=':
+            result = current_val - right_val
+        elif op == '*=':
+            result = current_val * right_val
+        elif op == '/=':
+            result = current_val / right_val
+        else:
+            raise KeiError("TypeError", f"不支持的复合运算符: {op}")
+
+        # 赋值回去
+        if isinstance(obj, KeiList):
+            obj.items[idx] = result
+        elif isinstance(obj, KeiDict):
+            obj[index] = result
+        else:
+            raise KeiError("TypeError", f"不支持对 {type(obj)} 进行索引复合赋值")
+
+        return result, False
+
+    # ========== 属性赋值 ==========
+    elif left['type'] == 'attr':
+        obj, _ = runtoken(left['obj'], env)
+        attr = left['attr']
+
+        # 获取当前值
+        if isinstance(obj, KeiBase):
+            current_val = obj.get(attr, undefined)
+        elif isinstance(obj, dict):
+            current_val = obj.get(attr, undefined)
+        else:
+            current_val = getattr(obj, attr, undefined)
+
+        # 执行运算
+        if op == '+=':
+            result = current_val + right_val
+        elif op == '-=':
+            result = current_val - right_val
+        elif op == '*=':
+            result = current_val * right_val
+        elif op == '/=':
+            result = current_val / right_val
+        else:
+            raise KeiError("TypeError", f"不支持的复合运算符: {op}")
+
+        # 赋值回去
+        if isinstance(obj, KeiBase):
+            obj[attr] = result
+        elif isinstance(obj, dict):
+            obj[attr] = result
+        else:
+            setattr(obj, attr, result)
+
+        return result, False
+
+    # ========== 切片赋值 ==========
+    elif left['type'] == 'slice':
+        obj, _ = runtoken(left['obj'], env)
+        start_node = left.get('start')
+        end_node = left.get('end')
+        step_node = left.get('step')
+
+        start = runtoken(start_node, env)[0] if start_node else None
+        end = runtoken(end_node, env)[0] if end_node else None
+        step = runtoken(step_node, env)[0] if step_node else None
+
+        if isinstance(start, KeiInt):
+            start = start.value
+        if isinstance(end, KeiInt):
+            end = end.value
+        if isinstance(step, KeiInt):
+            step = step.value
+
+        if isinstance(obj, KeiList):
+            length = len(obj.items)
+            if start is None:
+                start = 0
+            if end is None:
+                end = length
+            if start < 0:
+                start = length + start
+            if end < 0:
+                end = length + end
+
+            # 获取切片当前值
+            current_slice = obj.items[start:end:step]
+
+            # 对切片的每个元素进行复合运算
+            if isinstance(right_val, KeiList):
+                for i, idx in enumerate(range(start, end, step or 1)):
+                    if i < len(right_val.items):
+                        if op == '+=':
+                            obj.items[idx] = current_slice[i] + right_val.items[i]
+                        elif op == '-=':
+                            obj.items[idx] = current_slice[i] - right_val.items[i]
+                        elif op == '*=':
+                            obj.items[idx] = current_slice[i] * right_val.items[i]
+                        elif op == '/=':
+                            obj.items[idx] = current_slice[i] / right_val.items[i]
             else:
-                right_items = [value]
+                for idx in range(start, end, step or 1):
+                    if op == '+=':
+                        obj.items[idx] = obj.items[idx] + right_val
+                    elif op == '-=':
+                        obj.items[idx] = obj.items[idx] - right_val
+                    elif op == '*=':
+                        obj.items[idx] = obj.items[idx] * right_val
+                    elif op == '/=':
+                        obj.items[idx] = obj.items[idx] / right_val
 
-            # 赋值给 vars
-            for i, var in enumerate(vars_list):
-                if var == '_':
-                    continue
-                if i < len(right_items):
-                    env[var] = right_items[i]
-                else:
-                    env[var] = undefined
+            return obj, False
 
-            # 处理 *rest
-            if rest_var:
-                rest_items = right_items[len(vars_list):]
-                env[rest_var] = KeiList(rest_items)
+        else:
+            raise KeiError("TypeError", f"不支持对 {type(obj)} 进行切片复合赋值")
 
-            # 处理 **kwargs
-            if kwargs_var:
-                # 多变量复合赋值时，**kwargs 接收剩余的关键字参数
-                if len(right_items) > len(vars_list):
-                    rest_dict = {}
-                    for item in right_items[len(vars_list):]:
-                        if isinstance(item, KeiDict):
-                            rest_dict.update(item.items)
-                        elif isinstance(item, dict):
-                            rest_dict.update(item)
-                    env[kwargs_var] = KeiDict(rest_dict)
-
-        elif left_node['type'] == 'name':
-            name = left_node['value']
-            if '.' in name:
-                parts = name.split('.')
-                obj = env
-                for part in parts[:-1]:
-                    if isinstance(obj, KeiBase):
-                        obj = obj[part]
-                    elif isinstance(obj, dict):
-                        obj = obj.get(part)
-                    else:
-                        obj = getattr(obj, part)
-                last_part = parts[-1]
-                if isinstance(obj, KeiBase):
-                    obj[last_part] = value
-                elif isinstance(obj, dict):
-                    obj[last_part] = value
-                else:
-                    setattr(obj, last_part, value)
-            else:
-                env[name] = value
-
-        elif left_node['type'] == 'attr':
-            obj, _ = runtoken(left_node['obj'], env)
-            attr = left_node['attr']
-            if isinstance(obj, KeiBase):
-                obj[attr] = value
-            elif isinstance(obj, dict):
-                obj[attr] = value
-            else:
-                setattr(obj, attr, value)
-
-        elif left_node['type'] == 'index':
-            obj, _ = runtoken(left_node['obj'], env)
-            index, _ = runtoken(left_node['index'], env)
-            if isinstance(obj, KeiBase):
-                if isinstance(index, KeiInt):
-                    obj[index.value] = value
-                else:
-                    obj[index] = value
-            elif isinstance(obj, (list, dict)):
-                idx = index.value if isinstance(index, KeiInt) else index
-                obj[idx] = value
-
-        elif left_node['type'] == 'slice':
-            obj, _ = runtoken(left_node['obj'], env)
-            start, _ = runtoken(left_node['start'], env) if left_node.get('start') else (None, False)
-            end, _ = runtoken(left_node['end'], env) if left_node.get('end') else (None, False)
-            step, _ = runtoken(left_node['step'], env) if left_node.get('step') else (None, False)
-
-            if isinstance(start, KeiInt):
-                start = start.value
-            if isinstance(end, KeiInt):
-                end = end.value
-            if isinstance(step, KeiInt):
-                step = step.value
-
-            if isinstance(obj, KeiString):
-                length = len(obj.value)
-                if start is not None and start < 0:
-                    start = length + start
-                if end is not None and end < 0:
-                    end = length + end
-
-                if isinstance(value, KeiString):
-                    new_str = value.value
-                else:
-                    new_str = str(value)
-
-                if start is None:
-                    start = 0
-                if end is None:
-                    end = length
-
-                obj.value = obj.value[:start] + new_str + obj.value[end:]
-
-            elif isinstance(obj, KeiList):
-                if start is None:
-                    start = 0
-                if end is None:
-                    end = len(obj.items)
-
-                if isinstance(value, KeiList):
-                    new_items = value.items
-                else:
-                    new_items = [value]
-
-                obj.items = obj.items[:start] + new_items + obj.items[end:]
-
-            else:
-                raise KeiError("TypeError", f"不支持对 {type(obj)} 进行切片赋值")
-
-    set_left_value(left, result)
-    return result, (left_flag or right_flag)
+    else:
+        raise KeiError("TypeError", f"无效的复合赋值目标: {left.get('type')}")
 
 def node_ternary(node, env) -> tuple: # if node['type'] == 'ternary':
     cond_val, cond_flag = runtoken(node['cond'], env)
@@ -939,6 +945,7 @@ def node_call(node, env) -> tuple: # if node['type'] in {'call', 'methodcall'}:
                     result = method(linecode=call_source, name=get_from_env('__caller__', env, '<global>'), *args, **kwargs)
                 else:
                     result = method(*args, **kwargs)
+
                 return result, False
             raise KeiError("NameError", f"对象没有方法 {method_name}")
 
@@ -960,10 +967,7 @@ def node_call(node, env) -> tuple: # if node['type'] in {'call', 'methodcall'}:
                             new_env[p] = args[i]
                         elif p in kwargs:
                             new_env[p] = kwargs[p]
-                    for stmt in init_method['body']:
-                        val, is_return = runtoken(stmt, new_env)
-                        if is_return and val is not None:
-                            break
+
                 return instance, False
 
             if isinstance(func_obj, KeiFunction):
@@ -1130,8 +1134,21 @@ def node_assign(node, env) -> tuple: # if node['type'] == 'assign':
     val, flag = runtoken(node['right'], env)
     left = node['left']
 
-    if left['type'] == 'multiassign':
-        vars_list = left['vars']
+    # 如果有类型注解 hint，先进行类型断言
+    if left.get('hint') is not None:
+        # 构造一个临时的 typeassert 节点
+        typeassert_node = {
+            'type': 'typeassert',
+            'expr': {'type': 'name', 'value': left['value']},
+            'hint': left['hint'],
+            'linenum': left.get('linenum', node.get('linenum', 0))
+        }
+        # 先断言值的类型（注意：这里用 val 而不是从 env 取值）
+        # 因为变量还没赋值，需要检查 val 是否符合类型
+        val, flag = node_typeassert_typecheck(val, typeassert_node['hint'], env)
+
+    elif left['type'] == 'multiassign':
+        vars_list = left['vars']  # 现在是 list of dict: [{'name': 'x', 'hint': node, 'linenum': 1}, ...]
         rest_var = left.get('rest')
         kwargs_var = left.get('kwargs')
 
@@ -1144,13 +1161,29 @@ def node_assign(node, env) -> tuple: # if node['type'] == 'assign':
             right_items = [val]
 
         # 赋值给 vars
-        for i, var in enumerate(vars_list):
-            if var == '_':
-                continue
-            if i < len(right_items):
-                env[var] = right_items[i]
+        for i, var_info in enumerate(vars_list):
+            # var_info 是 dict，不是字符串！
+            if isinstance(var_info, dict):
+                var_name = var_info['name']
+                var_hint = var_info.get('hint')
             else:
-                env[var] = undefined
+                # 兼容旧格式（字符串）
+                var_name = var_info
+                var_hint = None
+
+            if var_name == '_':
+                continue
+
+            if i < len(right_items):
+                var_val = right_items[i]
+            else:
+                var_val = undefined
+
+            # 如果有类型注解，先检查
+            if var_hint is not None:
+                var_val, _ = node_typeassert_typecheck(var_val, var_hint, env)
+
+            env[var_name] = var_val
 
         # 处理 *rest
         if rest_var:
@@ -1302,9 +1335,38 @@ def node_assign(node, env) -> tuple: # if node['type'] == 'assign':
 
     return val, flag
 
+def node_typeassert_typecheck(val, hint_node, env):
+    """独立的类型检查函数，供 node_assign 使用"""
+    hint = runtoken(hint_node, env)[0]
+
+    if isinstance(hint, KeiList):
+        for h in hint.items:
+            if type(val) is KeiInt and h is KeiFloat:
+                break
+
+            if not isinstance(h, type):
+                h = type(h)
+
+            if (isinstance(val, h) or (isinstance(val, type) and issubclass(val, h))):
+                break
+        else:
+            raise KeiError("TypeError", f"类型错误: 期望 {content(hint)}, 得到 {content(type(val))}")
+
+    else:
+        if type(val) is KeiInt and hint is KeiFloat:
+            return val, False
+
+        if not isinstance(hint, type):
+            hint = type(hint)
+
+        if not (isinstance(val, hint) or (isinstance(val, type) and issubclass(val, hint))):
+            raise KeiError("TypeError", f"类型错误: 期望 {content(hint)}, 得到 {content(type(val))}")
+
+    return val, False
+
 def node_return(node, env) -> tuple: # if node['type'] == 'return':
     if node['value'] is None:
-        return None, True
+        return null, True
     val, flag = runtoken(node['value'], env)
     return val, True
 
@@ -1524,6 +1586,9 @@ def node_class(node, env) -> tuple: # if node['type'] == 'class':
 
 def _get_exported_dict(module_env, module_dict):
     """从模块环境中构建导出字典（统一规则）"""
+    # 特殊允许的私有变量
+    ALLOWED_PRIVATE = ('__import__', '__init__', '__all__')
+
     # 获取 __all__
     all_names = None
     if '__all__' in module_env:
@@ -1537,19 +1602,24 @@ def _get_exported_dict(module_env, module_dict):
         elif isinstance(all_val, str):
             all_names = [all_val]
 
-    # 构建模块字典（包含所有非私有和 __all__ 指定的）
+    # 构建模块字典
     for k, v in module_env.items():
+        # 普通变量（非 __ 开头）
         if not k.startswith('__'):
             module_dict[k] = v
+        # __all__ 特殊处理
         elif k == '__all__':
             module_dict['__all__'] = v
+        # 允许的特殊私有变量
+        elif k in ALLOWED_PRIVATE:
+            module_dict[k] = v
+        # 在 __all__ 中的也加入
         elif all_names is not None and k in all_names:
-            # 即使以 __ 开头，只要在 __all__ 里就加入
             module_dict[k] = v
 
     # 构建导出字典
     if all_names is not None:
-        # __all__ 最高优先级：只导出 __all__ 中存在的
+        # __all__ 最高优先级
         exported_dict = {}
         for name in all_names:
             if name in module_dict:
@@ -1557,8 +1627,9 @@ def _get_exported_dict(module_env, module_dict):
             elif name in module_env:
                 exported_dict[name] = module_env[name]
     else:
-        # 没有 __all__：导出所有非 _ 开头的
-        exported_dict = {k: v for k, v in module_dict.items() if not k.startswith('_')}
+        # 没有 __all__：导出非 _ 开头的 + 允许的私有变量
+        exported_dict = {k: v for k, v in module_dict.items()
+                        if not k.startswith('_') or k in ALLOWED_PRIVATE}
 
     return exported_dict
 
@@ -1606,6 +1677,11 @@ def node_import(node, env) -> tuple:
                     else:
                         name = alias or module_name
                         env[name] = KeiNamespace(name, exported_dict)
+
+                    if "__import__" in exported_dict:
+                        importfunc = exported_dict.get("__import__")
+                        if callable(importfunc):
+                            importfunc()
 
                     return None, False
 
@@ -1705,6 +1781,11 @@ def node_fromimport(node, env) -> tuple:
                 env[alias] = module_env[name]
             else:
                 raise KeiError("ImportError", f"无法从 {module_name} 导入 {name}")
+
+    if "__import__" in exported_dict:
+        importfunc = exported_dict.get("__import__")
+        if callable(importfunc):
+            importfunc()
 
     return None, False
 
@@ -1899,8 +1980,8 @@ def node_try(node, env) -> tuple: # if node['type'] == 'try':
                     if f_is_return:
                         return f_val, True
         except:
-            linenum = globals()['linenum']
-            source  = globals()['source']
+            linenum = globals().get('linenum', node.get('linenum', -1))
+            source  = globals().get('source', node.get('source', '未知行'))
 
             if node['finallybody']:
                 for f_stmt in node['finallybody']:
@@ -1935,29 +2016,4 @@ def node_global(node, env) -> tuple: # if node['type'] == 'global':
 
 def node_typeassert(node, env) -> tuple: # if node['type'] == 'typeassert':
     val, flag = runtoken(node['expr'], env)
-    hint = runtoken(node['hint'], env)[0]
-
-    if isinstance(hint, KeiList):
-        for h in hint.items:
-            if type(val) is KeiInt and h is KeiFloat:
-                break
-
-            if not isinstance(h, type):
-                h = type(h)
-
-            if (isinstance(val, h) or (isinstance(val, type) and issubclass(val, h))):
-                break
-        else:
-            raise KeiError("TypeError", f"类型错误: 期望 {content(hint)}, 得到 {content(type(val))}")
-
-    else:
-        if type(val) is KeiInt and hint is KeiFloat:
-            return val, flag
-
-        if not isinstance(hint, type):
-            hint = type(hint)
-
-        if not (isinstance(val, hint) or (isinstance(val, type) and issubclass(val, hint))):
-            raise KeiError("TypeError", f"类型错误: 期望 {content(hint)}, 得到 {content(type(val))}")
-
-    return val, flag
+    return node_typeassert_typecheck(val, node['hint'], env)
