@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.7-19"
+__version__ = "1.7-20"
 
 class KeiState:
     stack: List[Any]
@@ -24,6 +24,8 @@ class KeiState:
     error: bool
     var: list
     env: dict
+    recursion: int
+    maxrecursion: int
 
     _instance: Optional['KeiState'] = None
 
@@ -39,6 +41,8 @@ class KeiState:
             cls._instance.error = True
             cls._instance.var = []
             cls._instance.env = {}
+            cls._instance.recursion = 0
+            cls._instance.maxrecursion = 1024
 
         return cls._instance
 
@@ -1324,7 +1328,7 @@ def parse_fn_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_
 
                 if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ':':
                     pos += 1
-                    #print(tokens[pos])
+
                     type_node, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
                     type_hints[param_name] = type_node
 

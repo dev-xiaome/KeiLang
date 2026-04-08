@@ -752,27 +752,23 @@ class kei:
         return null
 
     @s
-    def repr(value):
-        return KeiString(content(value, _in_container=True))
-
-    @s
     def hasattr(obj, value):
         return hasattr(obj, to_str(value))
 
     @s
     def recursion(c=None):
-        import sys
+        from kei import __kei__
 
         if c is None:
-            return KeiInt(sys.getrecursionlimit())
+            return KeiInt(__kei__.maxrecursion)
 
         if type(c) is KeiInt:
             c = c.value
 
             if c > 0:
-                sys.setrecursionlimit(c)
+                __kei__.maxrecursion = c
             elif c == 0:
-                sys.setrecursionlimit(1024)
+                __kei__.maxrecursion = 1024
             else:
                 raise KeiError("ValueError", "最大递归次数不能是负数")
         else:
@@ -796,6 +792,10 @@ class kei:
                 raise KeiError("ValueError", "精度不能是负数")
         else:
             raise KeiError("TypeError", "精度必须是整数")
+
+    @s
+    def dir(*args, **kwargs):
+        return KeiList(dir(*args, **kwargs))
 
     class open(KeiBase):
         """KeiLang open 函数类"""
@@ -894,11 +894,11 @@ class kei:
 func = {
     "type": type,
     "isinstance": isinstance,
-    'dir': dir,
     'hash': hash,
     'copy': __import__('copy').copy,
     'deepcopy': __import__('copy').deepcopy,
     "hasattr": kei.hasattr,
+    'dir': kei.dir,
     "factorial": kei.factorial,
     "assert": kei._assert,
     "print": kei.print,
@@ -925,7 +925,6 @@ func = {
     "read": kei.read,
     "write": kei.write,
     "breakpoint": kei.breakpoint,
-    "repr": kei.repr,
     "step": kei.step,
     "precision": kei.precision,
     "recursion": kei.recursion,

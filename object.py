@@ -1723,6 +1723,7 @@ class KeiList(KeiBase):
             "includes": self._includes,
             "uniq": self._uniq,
             "append": self._append,
+            "delete": self._delete,
         }
 
     def __bool__(self):
@@ -1740,6 +1741,14 @@ class KeiList(KeiBase):
         return self
     def append(self, *values):
         return self._append(*values)
+
+    def _delete(self, *values):
+        for v in values:
+            self.items.remove(v)
+        return self
+
+    def delete(self, *values):
+        return self.items._delete(*values)
 
     def _uniq(self):
         result = []
@@ -2113,7 +2122,7 @@ class KeiList(KeiBase):
         return f"[{items}]"
 
     def __dir__(self):
-        return list(self._methods.keys()) + ['items']
+        return list(self._methods.keys())
 
 # ========== 字典类型 ==========
 
@@ -2248,7 +2257,7 @@ class KeiDict(KeiBase):
         return f"{{{items}}}"
 
     def __dir__(self):
-        return list(self._methods.keys()) + ['items']
+        return list(self._methods.keys())
 
 # ========== 函数类型 ==========
 
@@ -2270,6 +2279,10 @@ class KeiFunction(KeiBase):
             __kei__.stack.append((name, linecode))
 
             pushed = True
+
+        __kei__.recursion += 1
+        if __kei__.recursion > __kei__.maxrecursion:
+            raise KeiError("RecursionError", "递归深度超过限制")
 
         params = self.func_obj['params']
         typeassert = self.func_obj.get('typeassert', None)
@@ -2397,6 +2410,8 @@ class KeiFunction(KeiBase):
         except:
             raise
         finally:
+            __kei__.recursion -= 1
+
             if pushed:
                 __kei__.stack.pop()
 
@@ -2404,7 +2419,7 @@ class KeiFunction(KeiBase):
         return f"<function {self.__name__}>"
 
     def __dir__(self):
-        return ['__name__']
+        return []
 
 
 # ========== 类类型 ==========
@@ -2436,18 +2451,13 @@ class KeiClass(KeiBase):
 
         init_method = self._methods_map.get('__init__')
         if init_method:
-            try:
-                new_env = copy.deepcopy(init_method['closure'])
-            except:
-                try:
-                    new_env = copy.copy(init_method['closure'])
-                except:
-                    new_env = init_method['closure']
+            new_env = {}
+            new_env.update(init_method['closure'])  # 把 closure 的内容复制进来
+            new_env['self'] = instance
 
             new_env['self'] = instance
             params = init_method['params'][1:]
 
-            # 转换 args 为列表以便操作
             args_list = list(args)
             i = 0
             param_idx = 0
@@ -2455,22 +2465,21 @@ class KeiClass(KeiBase):
             while param_idx < len(params):
                 p = params[param_idx]
 
-                if p.startswith('**'):  # **kwargs
+                if p.startswith('**'):
                     param_name = p[2:]
-                    # 收集所有未处理的关键字参数
-                    new_env[param_name] = KeiDict(kwargs)
+                    # 过滤内部参数
+                    internal_keys = {'linecode', 'name'}
+                    filtered_kwargs = {k: v for k, v in kwargs.items() if k not in internal_keys}
+                    new_env[param_name] = KeiDict(filtered_kwargs)
                     param_idx += 1
 
-                elif p.startswith('*'):  # *args
+                elif p.startswith('*'):
                     param_name = p[1:]
-                    # 收集所有剩余的位置参数
                     remaining_args = args_list[i:]
                     new_env[param_name] = KeiList(remaining_args)
                     param_idx += 1
-                    # *args 吸收了所有剩余参数，不再处理后续参数
-                    break
 
-                else:  # 普通参数
+                else:
                     if i < len(args_list):
                         new_env[p] = args_list[i]
                         i += 1
@@ -2676,11 +2685,19 @@ class KeiBoundMethod(KeiBase):
         else:
             params_to_use = params
 
+        # ========== 加这里 ==========
+        defaults = self.method_obj.get('defaults', {})
+        # ============================
+
         for i, p in enumerate(params_to_use):
             if i < len(args):
                 new_env[p] = args[i]
             elif p in kwargs:
                 new_env[p] = kwargs[p]
+            elif p in defaults:  # ← 加这个分支！
+                from kei import runtoken
+                default_val, _ = runtoken(defaults[p], self.method_obj['closure'])
+                new_env[p] = default_val
             else:
                 new_env[p] = undefined
 
@@ -2709,32 +2726,47 @@ class KeiNamespace(KeiBase):
             self.env = {}
             self.env[self.__name__] = env
 
+        self.nsenv = self.env[self.__name__]
+
+        self._methods = {
+            "get": self._get,
+            "keys": self._keys,
+        }
+
+    def __call__(self, *args, **kwargs):
+        # 查找 __call__ 方法
+        call_method = self.get('__call__')
+
+        if call_method and callable(call_method):
+            return call_method(*args, **kwargs)
+        raise KeiError("TypeError", f"命名空间 {self.__name__} 不可调用")
+
     def __getattr__(self, key):
-        if key in self.env[self.__name__]:
-            return self.env[self.__name__][key]
+        if key in self.nsenv:
+            return self.nsenv[key]
         return undefined
 
     def __getitem__(self, key):
-        result = self.env[self.__name__].get(key, undefined)
+        result = self.nsenv.get(key, undefined)
         return result
 
     def __setitem__(self, key, value):
-        self.env[self.__name__][key] = value
+        self.nsenv[key] = value
 
     def __repr__(self):
         return f"<namespace {self.__name__}>"
 
     def __dir__(self):
-        return list(self.env[self.__name__].keys()) + ['__name__']
+        return list(self.nsenv.keys())
 
     def __add__(self, other):
         """namespace + namespace = 合并，后者覆盖前者"""
         if isinstance(other, KeiNamespace):
             # 合并两个命名空间的环境
-            new_env = self.env[self.__name__].copy()
+            new_env = self.nsenv.copy()
             new_env.update(other.env[other.__name__] if hasattr(other, 'env') and other.__name__ in other.env else other.env)
             # 生成新名字
-            new_name = f"{self.__name__}+{other.__name__}"
+            new_name = f"{self.__name__}"
             return KeiNamespace(new_name, new_env, isns=False)
         return undefined
 
@@ -2748,31 +2780,66 @@ class KeiNamespace(KeiBase):
             return other.__add__(self)
         return undefined
 
+    def _get(self, key, default=null):
+        """优先从外层环境查找，再查自己的属性"""
+        if key in self.nsenv:
+            return self.nsenv[key]
+
+        return default
+
+    def get(self, key, default=null):
+        return self._get(key, default)
+
+    def keys(self):
+        """返回所有键（自己的属性）"""
+        result = set()
+        if hasattr(self.nsenv, 'keys'):
+            result.update(self.nsenv.keys())
+
+        return result
+
 class NamespaceEnv:
     def __init__(self, outer_env, storage):
         self.outer = outer_env
         self.storage = storage
 
+    def items(self):
+        """返回所有键值对（outer + storage）"""
+        result = {}
+        # 先加 outer
+        if hasattr(self.outer, 'items'):
+            for k, v in self.outer.items():
+                result[k] = v
+        # 再加 storage（覆盖 outer）
+        for k, v in self.storage.items():
+            result[k] = v
+        return result.items()
+
     def __getitem__(self, key):
-        # 从 outer 读
-        return self.outer[key]
+        # 只从外层环境查找，不查自己的属性
+        if key in self.outer:
+            return self.outer[key]
+        return undefined
 
     def __setitem__(self, key, value):
         # 所有赋值都写入 storage
         self.storage[key] = value
 
     def __contains__(self, key):
-        return key in self.storage or key in self.outer
+        return key in self.outer  # 只查外层，不查 storage
 
     def get(self, key, default=None):
-        if key in self.storage:
-            return self.storage[key]
-        return self.outer.get(key, default)
+        return self.outer.get(key, default)  # 只查外层
 
     def copy(self):
-        # 用于函数闭包
-        new = NamespaceEnv(self.outer, self.storage.copy())
-        return new
+        # 深拷贝时正确复制
+        return NamespaceEnv(self.outer, self.storage.copy())
+
+    def keys(self):
+        """返回外层环境的键（用于 dict_diff）"""
+        if hasattr(self.outer, 'keys'):
+            return self.outer.keys()
+        return set()
 
 # ========== 工厂函数 ==========
 
@@ -2832,7 +2899,17 @@ def content(obj, _seen=None, _depth=0, _in_container=False):
         # KeiLang 对象类型
         if isinstance(obj, KeiFunction): return f"<function {obj.__name__}>"
         if isinstance(obj, KeiClass): return f"<class {obj.__name__}>"
-        if isinstance(obj, KeiInstance): return f"<instance {obj._class.__name__}>"
+        if isinstance(obj, KeiInstance):
+            content_method = obj._get_method('__content__')
+            if content_method:
+                # 绑定 self 调用
+                bound_method = content_method.bind(obj)
+                result = bound_method()
+                if isinstance(result, KeiString):
+                    return result.value
+                return str(result)
+            return f"<instance {obj._class.__name__}>"
+
         if isinstance(obj, KeiNamespace): return f"<namespace {obj.__name__}>"
         if isinstance(obj, (KeiMethod, KeiBoundMethod)): return f"<method {obj.__name__}>"
         if isinstance(obj, KeiError): return f"{obj.value}"

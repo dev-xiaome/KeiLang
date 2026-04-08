@@ -973,6 +973,9 @@ def node_call(node, env) -> tuple: # if node['type'] in {'call', 'methodcall'}:
             if isinstance(func_obj, KeiFunction):
                 return func_obj(linecode=call_source, name=get_from_env('__caller__', env, '<global>'), *args, **kwargs), False
 
+            if isinstance(func_obj, KeiNamespace):
+                return func_obj(linecode=call_source, name=get_from_env('__caller__', env, '<global>'), *args, **kwargs), False
+
             if callable(func_obj):
                 try:
                     sig = inspect.signature(func_obj)
@@ -1861,16 +1864,16 @@ def node_use(node, env) -> tuple: # if node['type'] == 'use':
     return None, False
 
 def node_namespace(node, env) -> tuple: # if node['type'] == 'namespace':
-    ns_data = {}
+    ns_data = {}.copy()
     ns_env = NamespaceEnv(env, ns_data)
 
     for stmt in node['body']:
         runtoken(stmt, ns_env)
 
-    ns = env.copy()
-    ns[node['name']] = ns_data
+    ns = env
+    ns[node['name']] = ns_data.copy()
 
-    env[node['name']] = KeiNamespace(node['name'], ns, True)
+    env[node['name']] = KeiNamespace(node['name'], ns, isns=True)
     return None, False
 
 def node_with(node, env) -> tuple: # if node['type'] == 'with':
