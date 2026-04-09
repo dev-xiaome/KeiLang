@@ -931,7 +931,7 @@ func = {
     "static": kei.static,
     "prop": kei.prop,
     "open": kei.open,
-    "any": KeiBase,
+    "any": object,
     "int": KeiInt,
     "float": KeiFloat,
     "string": KeiString,

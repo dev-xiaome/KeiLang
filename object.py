@@ -2497,7 +2497,7 @@ class KeiClass(KeiBase):
             for stmt in init_method['body']:
                 val, is_return = runtoken(stmt, new_env)
                 if is_return and val is not None:
-                    break
+                    return val
 
         return instance
 
