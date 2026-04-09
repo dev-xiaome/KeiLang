@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.7-20"
+__version__ = "1.7-21"
 
 class KeiState:
     stack: List[Any]

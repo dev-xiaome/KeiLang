@@ -1590,7 +1590,7 @@ def node_class(node, env) -> tuple: # if node['type'] == 'class':
 def _get_exported_dict(module_env, module_dict):
     """从模块环境中构建导出字典（统一规则）"""
     # 特殊允许的私有变量
-    ALLOWED_PRIVATE = ('__import__', '__init__', '__all__')
+    ALLOWED_PRIVATE = {'__import__', '__all__'}
 
     # 获取 __all__
     all_names = None
@@ -1605,131 +1605,37 @@ def _get_exported_dict(module_env, module_dict):
         elif isinstance(all_val, str):
             all_names = [all_val]
 
-    # 构建模块字典
+    # 构建模块字典（所有变量，包括私有）
     for k, v in module_env.items():
-        # 普通变量（非 __ 开头）
-        if not k.startswith('__'):
-            module_dict[k] = v
-        # __all__ 特殊处理
-        elif k == '__all__':
-            module_dict['__all__'] = v
-        # 允许的特殊私有变量
-        elif k in ALLOWED_PRIVATE:
-            module_dict[k] = v
-        # 在 __all__ 中的也加入
-        elif all_names is not None and k in all_names:
-            module_dict[k] = v
+        module_dict[k] = v
 
     # 构建导出字典
+    exported_dict = {}
+
     if all_names is not None:
-        # __all__ 最高优先级
-        exported_dict = {}
+        # 有 __all__：导入 __all__ 里的（即使是 _ 开头）
         for name in all_names:
             if name in module_dict:
                 exported_dict[name] = module_dict[name]
             elif name in module_env:
                 exported_dict[name] = module_env[name]
+
+        # 额外导入 ALLOWED_PRIVATE 里的（只要存在）
+        for name in ALLOWED_PRIVATE:
+            if name in module_dict:
+                exported_dict[name] = module_dict[name]
+            elif name in module_env:
+                exported_dict[name] = module_env[name]
     else:
-        # 没有 __all__：导出非 _ 开头的 + 允许的私有变量
-        exported_dict = {k: v for k, v in module_dict.items()
-                        if not k.startswith('_') or k in ALLOWED_PRIVATE}
+        # 没有 __all__：导出非 _ 开头的 + ALLOWED_PRIVATE
+        for k, v in module_dict.items():
+            if not k.startswith('_') or k in ALLOWED_PRIVATE:
+                exported_dict[k] = v
 
     return exported_dict
 
-def node_import(node, env) -> tuple:
-    try:
-        for module_info in node['modules']:
-            full_module_name = module_info['module']
-            alias = module_info.get('alias')
-            is_wildcard = module_info.get('type') == 'wildcard'
-
-            assert isinstance(get_from_env("__path__", env, KeiList([])), KeiList), "__path__需要是一个列表"
-
-            __path__ = get_from_env("__path__", env, KeiList([])).items
-
-            full_module_name = full_module_name.replace('.', '/')
-
-            module_name = full_module_name.split("/")[-1]
-
-            kei_files = [os.path.join(path, f"{full_module_name}.kei") for path in __path__]
-
-            for keifile in kei_files:
-                if os.path.isfile(keifile):
-                    with open(keifile, "r", encoding="utf-8") as f:
-                        code = f.read()
-
-                    module_env = {
-                        "__path__": KeiList(["."] + paths),
-                        "__name__": KeiString(f"__{module_name}__"),
-                        "__env__": KeiDict(env),
-                        "__osname__": KeiString(platform.system().lower()),
-                    }
-
-                    module_env.update({
-                        "__env__": module_env,
-                    })
-
-                    exec(code, module_env)
-
-                    module_dict = {}
-                    exported_dict = _get_exported_dict(module_env, module_dict)
-
-                    if is_wildcard:
-                        for name, value in exported_dict.items():
-                            env[name] = value
-                    else:
-                        name = alias or module_name
-                        env[name] = KeiNamespace(name, exported_dict)
-
-                    if "__import__" in exported_dict:
-                        importfunc = exported_dict.get("__import__")
-                        if callable(importfunc):
-                            importfunc()
-
-                    return None, False
-
-            py_files = [os.path.join(path, f"{full_module_name}.py") for path in __path__]
-
-            for pyfile in py_files:
-                if os.path.isfile(pyfile):
-                    with open(pyfile, "r", encoding="utf-8") as f:
-                        code = f.read()
-
-                    module_env = {}
-                    __py_exec__(code, module_env)
-
-                    module_dict = {}
-                    exported_dict = _get_exported_dict(module_env, module_dict)
-
-                    if is_wildcard:
-                        for name, value in exported_dict.items():
-                            env[name] = value
-                    else:
-                        name = alias or full_module_name
-                        env[name] = KeiNamespace(name, exported_dict)
-
-                    return None, False
-
-            raise KeiError("ImportError", f"找不到模块: {full_module_name}")
-
-        return None, False
-
-    except Exception as e:
-        raise KeiError("ImportError", f"导入模块失败: {e}")
-
-def node_fromimport(node, env) -> tuple:
-    module_name = node['module']
-    imports = node['imports']
-
-    assert isinstance(get_from_env("__path__", env, KeiList([])), KeiList), "__path__需要是一个列表"
-
-    __path__ = get_from_env("__path__", env, KeiList([])).items
-
-    module_path = module_name.replace('.', '/')
-    module_short_name = module_path.split("/")[-1]
-
-    module_env = None
-
+def _load_kei_module(module_path, module_name, env, __path__):
+    """加载 .kei 模块，返回模块字典和是否成功"""
     kei_files = [os.path.join(path, f"{module_path}.kei") for path in __path__]
 
     for keifile in kei_files:
@@ -1739,58 +1645,152 @@ def node_fromimport(node, env) -> tuple:
 
             module_env = {
                 "__path__": KeiList(["."] + paths),
-                "__name__": KeiString(f"__{module_short_name}__"),
+                "__name__": KeiString(f"__{module_name}__"),
                 "__env__": KeiDict(env),
                 "__osname__": KeiString(platform.system().lower()),
             }
-
-            module_env.update({
-                "__env__": module_env,
-            })
+            module_env["__env__"] = module_env
 
             exec(code, module_env)
-            break
 
-    if module_env is None:
-        py_files = [os.path.join(path, f"{module_path}.py") for path in __path__]
+            # 获取导出字典
+            module_dict = {}
+            exported_dict = _get_exported_dict(module_env, module_dict)
 
-        for pyfile in py_files:
-            if os.path.isfile(pyfile):
-                with open(pyfile, "r", encoding="utf-8") as f:
-                    code = f.read()
+            return exported_dict, module_env, True
 
-                module_env = {}
-                __py_exec__(code, module_env)
-                break
+    return None, None, False
 
-    if module_env is None:
-        raise KeiError("ImportError", f"找不到模块: {module_name}")
+def _load_py_module(module_path, __path__):
+    """加载 .py 模块，返回模块环境"""
+    py_files = [os.path.join(path, f"{module_path}.py") for path in __path__]
 
-    module_dict = {}
-    exported_dict = _get_exported_dict(module_env, module_dict)
+    for pyfile in py_files:
+        if os.path.isfile(pyfile):
+            with open(pyfile, "r", encoding="utf-8") as f:
+                code = f.read()
 
-    for imp in imports:
-        if imp['type'] == 'wildcard':
-            for name, value in exported_dict.items():
-                env[name] = value
-        else:
-            name = imp['name']
-            alias = imp['alias'] or name
+            module_env = {}
+            __py_exec__(code, module_env)
+            return module_env, True
 
-            # 显式导入：优先从 module_dict，再从 module_env
-            if name in module_dict:
-                env[alias] = module_dict[name]
-            elif name in module_env:
-                env[alias] = module_env[name]
-            else:
-                raise KeiError("ImportError", f"无法从 {module_name} 导入 {name}")
+    return None, False
 
+def _call_import_hook(exported_dict):
+    """如果模块有 __import__ 函数，执行它"""
     if "__import__" in exported_dict:
         importfunc = exported_dict.get("__import__")
         if callable(importfunc):
             importfunc()
 
-    return None, False
+def node_import(node, env) -> tuple:
+    try:
+        for module_info in node['modules']:
+            full_module_name = module_info['module']
+            alias = module_info.get('alias')
+            is_wildcard = module_info.get('type') == 'wildcard'
+
+            __path__ = get_from_env("__path__", env, KeiList([])).items
+            module_path = full_module_name.replace('.', '/')
+            module_short_name = module_path.split("/")[-1]
+
+            # 1. 尝试加载 .kei 模块
+            exported_dict, module_env, is_kei = _load_kei_module(
+                module_path, module_short_name, env, __path__
+            )
+
+            if is_kei:
+                # 只有 .kei 模块才执行 __import__ 钩子
+                _call_import_hook(exported_dict)
+
+                if is_wildcard:
+                    for name, value in exported_dict.items():
+                        env[name] = value
+                else:
+                    name = alias or module_short_name
+                    env[name] = KeiNamespace(name, exported_dict)
+
+                return None, False
+
+            # 2. 尝试加载 .py 模块
+            module_env, is_py = _load_py_module(module_path, __path__)
+
+            if is_py:
+                module_dict = {}
+                exported_dict = _get_exported_dict(module_env, module_dict)
+                # Python 模块不执行 __import__ 钩子
+
+                if is_wildcard:
+                    for name, value in exported_dict.items():
+                        env[name] = value
+                else:
+                    name = alias or module_short_name
+                    env[name] = KeiNamespace(name, exported_dict)
+
+                return None, False
+
+            raise KeiError("ImportError", f"找不到模块: {full_module_name}")
+
+        return None, False
+
+    except Exception as e:
+        raise KeiError("ImportError", f"导入模块失败: {e}")
+
+def node_fromimport(node, env) -> tuple:
+    try:
+        module_name = node['module']
+        imports = node['imports']
+
+        __path__ = get_from_env("__path__", env, KeiList([])).items
+        module_path = module_name.replace('.', '/')
+        module_short_name = module_path.split("/")[-1]
+
+        exported_dict = None
+        is_kei = False
+
+        # 1. 尝试加载 .kei 模块
+        exported_dict, module_env, is_kei = _load_kei_module(
+            module_path, module_short_name, env, __path__
+        )
+
+        # 2. 如果不是 .kei，尝试加载 .py 模块
+        if not is_kei:
+            module_env, is_py = _load_py_module(module_path, __path__)
+            if is_py:
+                module_dict = {}
+                exported_dict = _get_exported_dict(module_env, module_dict)
+
+        if exported_dict is None:
+            raise KeiError("ImportError", f"找不到模块: {module_name}")
+
+        # 只有 .kei 模块才执行 __import__ 钩子
+        if is_kei:
+            _call_import_hook(exported_dict)
+
+        # 获取模块的完整导出（包括内置变量）
+        module_dict = {}
+        full_exported = _get_exported_dict(module_env, module_dict)
+
+        for imp in imports:
+            if imp['type'] == 'wildcard':
+                for name, value in full_exported.items():
+                    env[name] = value
+            else:
+                name = imp['name']
+                alias = imp.get('alias') or name
+
+                # 优先从 exported_dict（公开导出），再从 module_env（内置）
+                if name in exported_dict:
+                    env[alias] = exported_dict[name]
+                elif name in module_env:
+                    env[alias] = module_env[name]
+                else:
+                    raise KeiError("ImportError", f"无法从 {module_name} 导入 {name}")
+
+        return None, False
+
+    except Exception as e:
+        raise KeiError("ImportError", f"导入模块失败: {e}")
 
 def node_del(node, env) -> tuple: # if node['type'] == 'del':
     for target in node['names']:

@@ -2747,11 +2747,31 @@ class KeiNamespace(KeiBase):
         return undefined
 
     def __getitem__(self, key):
-        result = self.nsenv.get(key, undefined)
-        return result
+        """支持 ns['key'] 访问"""
+        from lib.python import topy
+        key = topy(key)
+        return self.nsenv.get(key, undefined)
 
     def __setitem__(self, key, value):
+        """支持 ns['key'] = value 赋值"""
         self.nsenv[key] = value
+
+    def __delitem__(self, key):
+        """支持 del ns['key'] 删除"""
+        if key in self.nsenv:
+            del self.nsenv[key]
+
+    def __contains__(self, key):
+        """支持 key in ns 判断"""
+        return key in self.nsenv
+
+    def __len__(self):
+        """支持 len(ns)"""
+        return len(self.nsenv)
+
+    def __iter__(self):
+        """支持 for key in ns 迭代"""
+        return iter(self.nsenv.keys())
 
     def __repr__(self):
         return f"<namespace {self.__name__}>"
@@ -2762,41 +2782,35 @@ class KeiNamespace(KeiBase):
     def __add__(self, other):
         """namespace + namespace = 合并，后者覆盖前者"""
         if isinstance(other, KeiNamespace):
-            # 合并两个命名空间的环境
             new_env = self.nsenv.copy()
-            new_env.update(other.env[other.__name__] if hasattr(other, 'env') and other.__name__ in other.env else other.env)
-            # 生成新名字
-            new_name = f"{self.__name__}"
-            return KeiNamespace(new_name, new_env, isns=False)
+            if hasattr(other, 'nsenv'):
+                new_env.update(other.nsenv)
+            elif hasattr(other, 'env') and other.__name__ in other.env:
+                new_env.update(other.env[other.__name__])
+            return KeiNamespace(self.__name__, new_env, isns=False)
         return undefined
 
     def __or__(self, other):
-        """namespace | namespace = 合并，后者覆盖前者（同 __add__）"""
         return self.__add__(other)
 
     def __ror__(self, other):
-        """other | namespace（支持左操作数不是 namespace）"""
         if isinstance(other, KeiNamespace):
             return other.__add__(self)
         return undefined
 
     def _get(self, key, default=null):
-        """优先从外层环境查找，再查自己的属性"""
         if key in self.nsenv:
             return self.nsenv[key]
-
         return default
 
     def get(self, key, default=null):
         return self._get(key, default)
 
-    def keys(self):
-        """返回所有键（自己的属性）"""
-        result = set()
-        if hasattr(self.nsenv, 'keys'):
-            result.update(self.nsenv.keys())
+    def _keys(self):
+        return KeiList(list(self.nsenv.keys()))
 
-        return result
+    def keys(self):
+        return self._keys()
 
 class NamespaceEnv:
     def __init__(self, outer_env, storage):
@@ -2899,10 +2913,11 @@ def content(obj, _seen=None, _depth=0, _in_container=False):
         # KeiLang 对象类型
         if isinstance(obj, KeiFunction): return f"<function {obj.__name__}>"
         if isinstance(obj, KeiClass): return f"<class {obj.__name__}>"
+
+        # KeiLang 实例
         if isinstance(obj, KeiInstance):
             content_method = obj._get_method('__content__')
             if content_method:
-                # 绑定 self 调用
                 bound_method = content_method.bind(obj)
                 result = bound_method()
                 if isinstance(result, KeiString):
@@ -2984,12 +2999,21 @@ def content(obj, _seen=None, _depth=0, _in_container=False):
                 return f"<function {obj.__name__}>"
             return "<function>"
 
-        # ========== 新增：Python 自定义对象 ==========
+        # ========== Python 自定义对象（与 KeiInstance 行为一致）==========
+        # 检查是否有 __content__ 方法
+        if hasattr(obj, '__content__') and callable(obj.__content__):
+            try:
+                result = obj.__content__()
+                if isinstance(result, str):
+                    return result
+                return str(result)
+            except:
+                pass
+
         # 有 __repr__ 方法的 Python 对象
         if hasattr(obj, '__repr__'):
             try:
                 repr_str = obj.__repr__()
-                # 防止递归
                 if repr_str.startswith('<') and repr_str.endswith('>'):
                     return repr_str
                 return f"<object {repr_str}>"
@@ -3007,8 +3031,9 @@ def content(obj, _seen=None, _depth=0, _in_container=False):
         if hasattr(obj, '__name__'):
             return f"<object {obj.__name__}>"
 
-        # 默认
-        return "<object>"
+        # 默认：显示类名（和 KeiInstance 格式一致）
+        class_name = obj.__class__.__name__
+        return f"<instance {class_name}>"
 
     finally:
         _seen.remove(obj_id)
