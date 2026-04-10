@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.8"
+__version__ = "1.8-1"
 
 class KeiState:
     stack: List[Any]
@@ -4180,11 +4180,12 @@ def execmain(code, env=None, step=False):
         return 0
 
 def parse_args():
-    """解析命令行参数，返回 (step, singlecode, compile, filename, rest_args)"""
+    """解析命令行参数"""
     args = sys.argv[1:]
     step = False
     singlecode = None
     compile_flag = False
+    more_recursion = False  # ← 新增 -m 选项
     filename = None
     rest_args = []
 
@@ -4196,23 +4197,23 @@ def parse_args():
             step = True
             i += 1
         elif arg in ("-c", "--code"):
-            # 收集所有后续参数作为代码
             singlecode = args[i+1:]
             break
         elif arg == "--compile":
             compile_flag = True
             i += 1
+        elif arg == "-m":
+            more_recursion = True
+            i += 1
         elif arg in ("-h", "--help"):
             return None  # 触发帮助
         elif arg.startswith("-"):
-            # 未知参数，收集起来备用
+            # 未知参数
             rest_args.append(arg)
             i += 1
         else:
-            # 第一个非选项参数作为文件名
             filename = arg
             i += 1
-            # 剩余参数作为额外参数
             rest_args.extend(args[i:])
             break
 
@@ -4220,6 +4221,7 @@ def parse_args():
         'step': step,
         'singlecode': singlecode,
         'compile': compile_flag,
+        'more_recursion': more_recursion,  # ← 新增
         'filename': filename,
         'rest_args': rest_args
     }
@@ -4229,7 +4231,7 @@ def main():
         parsed = parse_args()
 
         # 处理帮助
-        if parsed is None or "-h" in sys.argv or "--help" in sys.argv:
+        if parsed is None:
             # 原有的帮助显示代码，完全不变
             print("\033[1m" + r""" _  __    _ _
 | |/ /___(_) |    __ _ _ __   __ _
@@ -4247,9 +4249,14 @@ def main():
             print("  \033[33m-h/--help\033[0m  - \033[36m显示此帮助\033[0m")
             print("  \033[33m-d/--debug\033[0m - \033[36mDebug代码\033[0m")
             print("  \033[33m-c/--code\033[0m  - \033[36m执行代码\033[0m")
+            print("  \033[33m-m       \033[0m  - \033[36m更高的Python递归上限(65536->1048576)\033[0m")
             print("  \033[33m--compile\033[0m  - \033[36m打印AST\033[0m")
             print()
             sys.exit(0)
+
+        # 处理 -m 选项
+        if parsed['more_recursion']:
+            sys.setrecursionlimit(1048576)  # 2^20
 
         # 单行代码模式
         if parsed['singlecode'] is not None:
