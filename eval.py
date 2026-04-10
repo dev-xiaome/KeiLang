@@ -21,7 +21,11 @@ def node_literal(node, env) -> tuple: # if node['type'] in {'null', 'int', 'floa
 
         if node['type'] == 'str':
             if node.get('mark') == 'f':
-                result = process_fstring(node['value'], env)
+                try:
+                    result = process_fstring(node['value'], env)
+                except:
+                    raise
+
                 return KeiString(result), False
             else:
                 return KeiString(node['value']), False
@@ -1570,7 +1574,7 @@ def node_for(node, env) -> tuple: # if node['type'] == 'for':
 def node_break(node, env) -> tuple: # if node['type'] in {'break', 'continue'}:
     return (node['type'], None), True
 
-def node_block(node, env) -> tuple: # if node['type'] == 'function':
+def node_function(node, env) -> tuple: # if node['type'] == 'function':
     global_names = []
     for stmt in node['body']:
         if stmt['type'] == 'global':
@@ -1917,12 +1921,11 @@ def node_raise(node, env) -> tuple: # if node['type'] == 'raise':
         else:
             raise KeiError("Runtime", "没有异常可抛出")
 
-def node_use(node, env) -> tuple: # if node['type'] == 'use':
+def node_use(node, env) -> tuple:
     for target in node['names']:
-        # 计算表达式（不再是简单的名字）
         ns, _ = runtoken(target, env)
         if isinstance(ns, KeiNamespace):
-            env.update(ns.env)  # 导入成员
+            env.update(ns.nsenv)
         else:
             raise KeiError("TypeError", f"use 需要 namespace，得到 {type(ns)}")
     return None, False

@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.7-23"
+__version__ = "1.8"
 
 class KeiState:
     stack: List[Any]
@@ -227,8 +227,8 @@ def error(errtype: str | None, info: str, stack: list=[], code:str|None=None, li
 
     print(f"{space} ·")
 
-    import traceback
-    traceback.print_exc()
+    #import traceback
+    #traceback.print_exc()
 
     if not __kei__.repl:
         sys.exit(1)
@@ -262,13 +262,16 @@ def dict_diff(d1, d2, path="", seen=None):
             v1 = d1[key]
             v2 = d2[key]
 
+            # 深度递归比较字典
             if isinstance(v1, dict) and isinstance(v2, dict):
                 sub_added, sub_removed, sub_changed = dict_diff(v1, v2, full_path, seen)
                 added.extend(sub_added)
                 removed.extend(sub_removed)
                 changed.extend(sub_changed)
-            elif v1 != v2:
-                changed.append(f"{full_path}: {content(v2, _in_container=True)} -> {content(v1, _in_container=True)}")
+            else:
+                # ✅ 根据类型选择比较策略
+                if _value_changed(v1, v2):
+                    changed.append(f"{full_path}: {content(v2, _in_container=True)} -> {content(v1, _in_container=True)}")
 
         seen.remove(obj_id)
 
@@ -283,6 +286,54 @@ def dict_diff(d1, d2, path="", seen=None):
             added.append(full_path)
 
     return added, removed, changed
+
+def gethash(obj, depth=0):
+    """递归计算对象的哈希值"""
+    if depth > 10:  # 防止无限递归
+        return hash(id(obj))
+
+    # 基础类型：直接哈希值
+    if isinstance(obj, (KeiInt, KeiFloat, KeiString, KeiBool)):
+        return hash(obj.value)
+
+    # 函数/类/命名空间：哈希名字 + 参数/属性
+    if isinstance(obj, KeiFunction):
+        h = hash(obj.__name__)
+        if hasattr(obj, 'func_obj'):
+            h ^= hash(str(obj.func_obj.get('params', [])))
+            h ^= hash(str(obj.func_obj.get('body', [])))
+        return h
+
+    if isinstance(obj, KeiClass):
+        h = hash(obj.__name__)
+        if hasattr(obj, '_methods_map'):
+            h ^= hash(frozenset(obj._methods_map.keys()))
+        return h
+
+    if isinstance(obj, KeiNamespace):
+        return hash(obj.__name__)
+
+    # 列表：递归哈希每个元素
+    if isinstance(obj, KeiList):
+        return hash(tuple(gethash(item, depth+1) for item in obj.items))
+
+    # 字典：递归哈希键值对
+    if isinstance(obj, KeiDict):
+        return hash(frozenset(
+            (gethash(k, depth+1), gethash(v, depth+1))
+            for k, v in obj.items.items()
+        ))
+
+    # 有 name 属性的对象
+    if hasattr(obj, 'name'):
+        return hash(obj.name)
+
+    # 其他：哈希对象id
+    return hash(id(obj))
+
+def _value_changed(v1, v2):
+    """比较哈希值"""
+    return gethash(v1) != gethash(v2)
 
 def token(original: str) -> list:
     try:
@@ -304,11 +355,252 @@ def token(original: str) -> list:
             length = len(codes)
 
             while pos < length:
-                if pos >= length:
-                    break
-
                 c = codes[pos]
 
+                # ========== 反引号多行字符串 ==========
+                if c == '`':
+                    start_line = i
+                    pos += 1
+
+                    # 检查当前行是否有闭合的 `
+                    end = codes.find('`', pos)
+                    if end != -1:
+                        # 同一行闭合
+                        content = codes[pos:end]
+                        escaped = escape(content)
+                        tokens.append(('string', f'"{escaped}"'))
+                        pos = end + 1
+                        continue
+
+                    # 跨行多行字符串
+                    content_lines = []
+
+                    # 当前行 ` 后面的内容（保留空字符串）
+                    if pos < length:
+                        content_lines.append(codes[pos:])
+                    else:
+                        content_lines.append("")  # 保留开头的换行
+
+                    i += 1
+                    found = False
+                    end_line = i
+                    end_pos = 0
+
+                    while i < len(lines):
+                        line = lines[i]
+                        p = line.find('`')
+                        if p != -1:
+                            found = True
+                            end_line = i
+                            end_pos = p
+                            content_lines.append(line[:p])
+                            break
+                        content_lines.append(line)
+                        i += 1
+
+                    if not found:
+                        raise KeiError("SyntaxError", "未闭合的多行字符串", linenum=start_line)
+
+                    full = '\n'.join(content_lines)
+                    escaped = escape(full)
+                    tokens.append(('string', f'"{escaped}"'))
+
+                    for _ in range(start_line + 1, end_line + 1):
+                        result.append(['#'])
+
+                    rem = lines[end_line][end_pos + 1:].lstrip()
+                    if rem:
+                        lines[end_line] = rem
+                        i = end_line
+                        pos = 0
+                        length = len(rem)
+                        codes = rem
+                        continue
+                    else:
+                        i = end_line + 1
+                        pos = 0
+                        length = 0
+                    continue
+
+                # r-string 多行
+                if c == 'r' and pos + 1 < length and codes[pos+1] == '`':
+                    start_line = i
+                    pos += 2
+
+                    end = codes.find('`', pos)
+                    if end != -1:
+                        content = codes[pos:end]
+                        tokens.append(('rstring', f'"{content}"'))
+                        pos = end + 1
+                        continue
+
+                    content_lines = []
+                    if pos < length:
+                        content_lines.append(codes[pos:])
+                    else:
+                        content_lines.append("")
+
+                    i += 1
+                    found = False
+                    end_line = i
+                    end_pos = 0
+
+                    while i < len(lines):
+                        line = lines[i]
+                        p = line.find('`')
+                        if p != -1:
+                            found = True
+                            end_line = i
+                            end_pos = p
+                            content_lines.append(line[:p])
+                            break
+                        content_lines.append(line)
+                        i += 1
+
+                    if not found:
+                        raise KeiError("SyntaxError", "未闭合的r-string", linenum=start_line)
+
+                    full = '\n'.join(content_lines)
+                    tokens.append(('rstring', f'"{full}"'))
+
+                    for _ in range(start_line + 1, end_line + 1):
+                        result.append(['#'])
+
+                    rem = lines[end_line][end_pos + 1:].lstrip()
+                    if rem:
+                        lines[end_line] = rem
+                        i = end_line
+                        pos = 0
+                        length = len(rem)
+                        codes = rem
+                        continue
+                    else:
+                        i = end_line + 1
+                        pos = 0
+                        length = 0
+                    continue
+
+                # f-string 多行
+                if c == 'f' and pos + 1 < length and codes[pos+1] == '`':
+                    start_line = i
+                    pos += 2
+
+                    end = codes.find('`', pos)
+                    if end != -1:
+                        content = codes[pos:end]
+                        escaped = escape(content)
+                        tokens.append(('fstring', f'"{escaped}"'))
+                        pos = end + 1
+                        continue
+
+                    content_lines = []
+                    if pos < length:
+                        content_lines.append(codes[pos:])
+                    else:
+                        content_lines.append("")
+
+                    i += 1
+                    found = False
+                    end_line = i
+                    end_pos = 0
+
+                    while i < len(lines):
+                        line = lines[i]
+                        p = line.find('`')
+                        if p != -1:
+                            found = True
+                            end_line = i
+                            end_pos = p
+                            content_lines.append(line[:p])
+                            break
+                        content_lines.append(line)
+                        i += 1
+
+                    if not found:
+                        raise KeiError("SyntaxError", "未闭合的f-string", linenum=start_line)
+
+                    full = '\n'.join(content_lines)
+                    escaped = escape(full)
+                    tokens.append(('fstring', f'"{escaped}"'))
+
+                    for _ in range(start_line + 1, end_line + 1):
+                        result.append(['#'])
+
+                    rem = lines[end_line][end_pos + 1:].lstrip()
+                    if rem:
+                        lines[end_line] = rem
+                        i = end_line
+                        pos = 0
+                        length = len(rem)
+                        codes = rem
+                        continue
+                    else:
+                        i = end_line + 1
+                        pos = 0
+                        length = 0
+                    continue
+
+                # rf-string 多行
+                if ((c == 'r' and pos + 1 < length and codes[pos+1] == 'f') or \
+                    (c == 'f' and pos + 1 < length and codes[pos+1] == 'r')) and \
+                    pos + 2 < length and codes[pos+2] == '`':
+                    start_line = i
+                    pos += 3
+
+                    end = codes.find('`', pos)
+                    if end != -1:
+                        content = codes[pos:end]
+                        tokens.append(('rfstring', f'"{content}"'))
+                        pos = end + 1
+                        continue
+
+                    content_lines = []
+                    if pos < length:
+                        content_lines.append(codes[pos:])
+                    else:
+                        content_lines.append("")
+
+                    i += 1
+                    found = False
+                    end_line = i
+                    end_pos = 0
+
+                    while i < len(lines):
+                        line = lines[i]
+                        p = line.find('`')
+                        if p != -1:
+                            found = True
+                            end_line = i
+                            end_pos = p
+                            content_lines.append(line[:p])
+                            break
+                        content_lines.append(line)
+                        i += 1
+
+                    if not found:
+                        raise KeiError("SyntaxError", "未闭合的rf-string", linenum=start_line)
+
+                    full = '\n'.join(content_lines)
+                    tokens.append(('rfstring', f'"{full}"'))
+
+                    for _ in range(start_line + 1, end_line + 1):
+                        result.append(['#'])
+
+                    rem = lines[end_line][end_pos + 1:].lstrip()
+                    if rem:
+                        lines[end_line] = rem
+                        i = end_line
+                        pos = 0
+                        length = len(rem)
+                        codes = rem
+                        continue
+                    else:
+                        i = end_line + 1
+                        pos = 0
+                        length = 0
+                    continue
+
+                # ========== 原有代码 ==========
                 if c == '|' and pos + 1 < length and codes[pos+1] == '>':
                     tokens.append("|>")
                     pos += 2
@@ -329,7 +621,7 @@ def token(original: str) -> list:
                     pos += 1
                     continue
 
-                if c == "?" and pos + 1 < length and codes[pos+1] == '?':
+                if c == '?' and pos + 1 < length and codes[pos+1] == '?':
                     tokens.append("??")
                     pos += 2
                     continue
@@ -401,6 +693,7 @@ def token(original: str) -> list:
                     pos += 1
                     continue
 
+                # 单行字符串
                 if c in '"\'':
                     start = pos
                     quote = c
@@ -410,61 +703,55 @@ def token(original: str) -> list:
                             pos += 2
                         else:
                             pos += 1
-
                     if pos >= length:
                         raise KeiError("SyntaxError", f"未闭合的字符串: {codes[start:]}")
-
                     pos += 1
                     string = codes[start:pos]
                     tokens.append(('string', escape(string)))
                     continue
 
+                # rf-string 单行
                 if (c == 'r' and pos + 1 < length and codes[pos+1] == 'f') or \
                    (c == 'f' and pos + 1 < length and codes[pos+1] == 'r'):
                     temp_pos = pos + 2
                     while temp_pos < length and codes[temp_pos] in ' \n\t':
                         temp_pos += 1
-
                     if temp_pos < length and codes[temp_pos] in '"\'':
                         quote = codes[temp_pos]
                         pos = temp_pos + 1
                         start = pos
                         while pos < length and codes[pos] != quote:
                             pos += 1
-
                         if pos >= length:
                             raise KeiError("SyntaxError", f"未闭合的rf-string: {codes[start-3:]}")
-
                         pos += 1
                         string = codes[start-3:pos]
                         tokens.append(('rfstring', string[2:]))
                         continue
 
+                # r-string 单行
                 if c == 'r':
                     temp_pos = pos + 1
                     while temp_pos < length and codes[temp_pos] in ' \n\t':
                         temp_pos += 1
-
                     if temp_pos < length and codes[temp_pos] in '"\'':
                         quote = codes[temp_pos]
                         pos = temp_pos + 1
                         start = pos
                         while pos < length and codes[pos] != quote:
                             pos += 1
-
                         if pos >= length:
                             raise KeiError("SyntaxError", f"未闭合的r-string: {codes[start-2:]}")
-
                         pos += 1
                         string = codes[start-2:pos]
                         tokens.append(('rstring', string[1:]))
                         continue
 
+                # f-string 单行
                 if c == 'f':
                     temp_pos = pos + 1
                     while temp_pos < length and codes[temp_pos] in ' \n\t':
                         temp_pos += 1
-
                     if temp_pos < length and codes[temp_pos] in '"\'':
                         quote = codes[temp_pos]
                         pos = temp_pos + 1
@@ -474,10 +761,8 @@ def token(original: str) -> list:
                                 pos += 2
                             else:
                                 pos += 1
-
                         if pos >= length:
                             raise KeiError("SyntaxError", f"未闭合的f-string: {codes[start-2:]}")
-
                         pos += 1
                         string = codes[start-2:pos]
                         tokens.append(('fstring', escape(string[1:])))
@@ -507,29 +792,59 @@ def token(original: str) -> list:
                     pos += 2
                     continue
 
-                if "0" <= c <= "9":
+                # 数字
+                if "0" <= c <= "9" or (c == '.' and pos + 1 < length and "0" <= codes[pos+1] <= "9"):
                     start = pos
                     has_dot = False
-                    while pos < length:
-                        if "0" <= codes[pos] <= "9" or codes[pos] == "_" or codes[pos].lower() == "e":
-                            if codes[pos].lower() == "e":
-                                if pos + 1 < length and codes[pos+1] in {"+", "-"}:
-                                    pos += 2
-                                else:
-                                    pos += 1
-                            else:
-                                pos += 1
+                    has_exp = False
+                    is_hex = False
+                    is_bin = False
+                    is_oct = False
 
-                        elif codes[pos] == "." and not has_dot:
-                            if pos + 1 < length and codes[pos+1] == '.':
-                                break
+                    if c == '0' and pos + 1 < length:
+                        if codes[pos+1] in 'xX':
+                            is_hex = True
+                            pos += 2
+                        elif codes[pos+1] in 'bB':
+                            is_bin = True
+                            pos += 2
+                        elif codes[pos+1] in 'oO':
+                            is_oct = True
+                            pos += 2
+
+                    while pos < length:
+                        ch = codes[pos]
+                        if is_hex:
+                            if ch in '0123456789abcdefABCDEF':
+                                pos += 1
+                                continue
+                            break
+                        if is_bin:
+                            if ch in '01':
+                                pos += 1
+                                continue
+                            break
+                        if is_oct:
+                            if ch in '01234567':
+                                pos += 1
+                                continue
+                            break
+                        if "0" <= ch <= "9":
+                            pos += 1
+                        elif ch == '.' and not has_dot and not has_exp:
                             has_dot = True
+                            pos += 1
+                        elif ch in 'eE' and not has_exp and not is_hex and not is_bin and not is_oct:
+                            has_exp = True
+                            pos += 1
+                            if pos < length and codes[pos] in '+-':
+                                pos += 1
+                        elif ch == '_':
                             pos += 1
                         else:
                             break
                     number = codes[start:pos]
                     tokens.append(number)
-
                     continue
 
                 if c in "<>!" and pos + 1 < length and codes[pos+1] == "=":
@@ -584,13 +899,12 @@ def token(original: str) -> list:
 
             if tokens:
                 result.append(tokens)
-
             i += 1
 
         return result
 
     except KeiError as e:
-        error(e.types, e.value, [], __kei__.code[i] if __kei__.code else "未知行", i, __kei__.file)
+        error(e.types, e.value, [], __kei__.code[e.linenum] if hasattr(e, 'linenum') and e.linenum < len(__kei__.code) else "未知行", getattr(e, 'linenum', i)+1, __kei__.file)
         sys.exit(1)
 
 def ast(tokenlines: list) -> list:
@@ -893,48 +1207,91 @@ def process_fstring(template, env):
     result = []
     i = 0
     length = len(template)
-    brack = 0
+    brace_stack = []  # 记录 { 的位置，用于检查对齐
 
     while i < length:
         if template[i] == '{' and i + 1 < length:
             if template[i+1] == '{':
+                # 转义的 { -> 普通字符
                 result.append('{')
                 i += 2
             else:
-                brack += 1
+                # 非转义的 {，开始一个表达式
+                brace_stack.append(i)
+                start = i + 1
+                j = start
+                depth = 1  # 嵌套深度，支持 {} 嵌套
 
-                j = i + 1
-                while j < length and template[j] != '}':
+                # 查找匹配的 }
+                while j < length:
+                    if template[j] == '{' and template[j+1:j+2] != '{':
+                        depth += 1
+                    elif template[j] == '}' and template[j-1:j] != '}':
+                        depth -= 1
+                        if depth == 0:
+                            break
                     j += 1
 
-                if j < length:
-                    brack -= 1
-                    expr = template[i+1:j]
+                if j >= length:
+                    # 没有找到匹配的 }
+                    raise KeiError("SyntaxError",
+                        f"f-string 的大括号不匹配: 缺少 '}}'",
+                        linenum=globals().get("linenum"))
 
-                    expr_tokens = token(expr)
-                    expr_ast = ast(expr_tokens)[0]
-                    try: del expr_ast['source']
-                    except: pass
-                    try: del expr_ast['linenum']
-                    except: pass
+                expr = template[start:j].strip()
 
-                    value, _ = runtoken(expr_ast, env)
-                    result.append(content(value))
+                # 检查空表达式
+                if not expr:
+                    raise KeiError("SyntaxError",
+                        f"f-string 中不能有空大括号 {{}}",
+                        linenum=globals().get("linenum"))
 
-                    i = j + 1
-                else:
-                    result.append(template[i])
-                    i += 1
+                # 保存当前 linenum/source
+                saved_linenum = globals().get("linenum")
+                saved_source = globals().get("source")
+
+                # 解析表达式
+                expr_tokens = token(expr)
+                if not expr_tokens:
+                    raise KeiError("SyntaxError",
+                        f"f-string 表达式无效: {expr}",
+                        linenum=saved_linenum)
+
+                expr_ast = ast(expr_tokens)
+                if not expr_ast or not expr_ast[0]:
+                    raise KeiError("SyntaxError",
+                        f"f-string 表达式解析失败: {expr}",
+                        linenum=saved_linenum)
+
+                # 执行表达式
+                value, _ = runtoken(expr_ast[0], env)
+                result.append(content(value))
+
+                # 恢复 linenum/source
+                globals()['linenum'] = saved_linenum
+                globals()['source'] = saved_source
+
+                i = j + 1
+                brace_stack.pop()
 
         elif template[i] == '}' and i + 1 < length and template[i+1] == '}':
+            # 转义的 } -> 普通字符
             result.append('}')
             i += 2
+        elif template[i] == '}':
+            # 没有匹配 { 的 }
+            raise KeiError("SyntaxError",
+                f"f-string 中多余的 '}}'，没有对应的 '{{'",
+                linenum=globals().get("linenum"))
         else:
             result.append(template[i])
             i += 1
 
-    if brack != 0:
-        raise KeiError("SyntaxError", "f-string的大括号不匹配")
+    # 检查是否还有未匹配的 {
+    if brace_stack:
+        raise KeiError("SyntaxError",
+            f"f-string 的大括号不匹配: 缺少 '}}'，从位置 {brace_stack[0]} 开始",
+            linenum=globals().get("linenum"))
 
     return ''.join(result)
 
@@ -1812,21 +2169,21 @@ def parse_compoundassign(tokens: list, pos: int, all_lines: list, linepos: int,
     left_comma_positions = []
     paren_count = bracket_count = brace_count = 0
 
-    for i, token in enumerate(left_tokens):
-        if token['type'] == 'symbol':
-            if token['value'] == '(':
+    for i, toke in enumerate(left_tokens):
+        if toke[ 'type'] == 'symbol':
+            if toke[ 'value'] == '(':
                 paren_count += 1
-            elif token['value'] == ')':
+            elif toke[ 'value'] == ')':
                 paren_count -= 1
-            elif token['value'] == '[':
+            elif toke[ 'value'] == '[':
                 bracket_count += 1
-            elif token['value'] == ']':
+            elif toke[ 'value'] == ']':
                 bracket_count -= 1
-            elif token['value'] == '{':
+            elif toke[ 'value'] == '{':
                 brace_count += 1
-            elif token['value'] == '}':
+            elif toke[ 'value'] == '}':
                 brace_count -= 1
-        if (token['type'] == 'symbol' and token['value'] == ','
+        if (toke[ 'type'] == 'symbol' and toke[ 'value'] == ','
             and paren_count == 0 and bracket_count == 0 and brace_count == 0):
             left_comma_positions.append(i)
 
@@ -1991,22 +2348,22 @@ def parse_compoundassign(tokens: list, pos: int, all_lines: list, linepos: int,
     right_comma_positions = []
     paren_count = bracket_count = brace_count = 0
 
-    for i, token in enumerate(right_tokens):
-        if token['type'] == 'symbol':
-            if token['value'] == '(':
+    for i, toke in enumerate(right_tokens):
+        if toke[ 'type'] == 'symbol':
+            if toke[ 'value'] == '(':
                 paren_count += 1
-            elif token['value'] == ')':
+            elif toke[ 'value'] == ')':
                 paren_count -= 1
-            elif token['value'] == '[':
+            elif toke[ 'value'] == '[':
                 bracket_count += 1
-            elif token['value'] == ']':
+            elif toke[ 'value'] == ']':
                 bracket_count -= 1
-            elif token['value'] == '{':
+            elif toke[ 'value'] == '{':
                 brace_count += 1
-            elif token['value'] == '}':
+            elif toke[ 'value'] == '}':
                 brace_count -= 1
 
-        if (token['type'] == 'symbol' and token['value'] == ','
+        if (toke[ 'type'] == 'symbol' and toke[ 'value'] == ','
             and paren_count == 0 and bracket_count == 0 and brace_count == 0):
             right_comma_positions.append(i)
 
@@ -2083,21 +2440,21 @@ def parse_assign(tokens: list, pos: int, assign_pos: int, all_lines: list,
     bracket_count = 0
     brace_count = 0
 
-    for i, token in enumerate(left_tokens):
-        if token['type'] == 'symbol':
-            if token['value'] == '(':
+    for i, toke in enumerate(left_tokens):
+        if toke[ 'type'] == 'symbol':
+            if toke[ 'value'] == '(':
                 paren_count += 1
-            elif token['value'] == ')':
+            elif toke[ 'value'] == ')':
                 paren_count -= 1
-            elif token['value'] == '[':
+            elif toke[ 'value'] == '[':
                 bracket_count += 1
-            elif token['value'] == ']':
+            elif toke[ 'value'] == ']':
                 bracket_count -= 1
-            elif token['value'] == '{':
+            elif toke[ 'value'] == '{':
                 brace_count += 1
-            elif token['value'] == '}':
+            elif toke[ 'value'] == '}':
                 brace_count -= 1
-        if token['type'] == 'symbol' and token['value'] == ',' and paren_count == 0 and bracket_count == 0 and brace_count == 0:
+        if toke[ 'type'] == 'symbol' and toke[ 'value'] == ',' and paren_count == 0 and bracket_count == 0 and brace_count == 0:
             left_comma_positions.append(i)
 
     if left_comma_positions:
@@ -2274,22 +2631,22 @@ def parse_assign(tokens: list, pos: int, assign_pos: int, all_lines: list,
     bracket_count = 0
     brace_count = 0
 
-    for i, token in enumerate(right_tokens):
-        if token['type'] == 'symbol':
-            if token['value'] == '(':
+    for i, toke in enumerate(right_tokens):
+        if toke[ 'type'] == 'symbol':
+            if toke[ 'value'] == '(':
                 paren_count += 1
-            elif token['value'] == ')':
+            elif toke[ 'value'] == ')':
                 paren_count -= 1
-            elif token['value'] == '[':
+            elif toke[ 'value'] == '[':
                 bracket_count += 1
-            elif token['value'] == ']':
+            elif toke[ 'value'] == ']':
                 bracket_count -= 1
-            elif token['value'] == '{':
+            elif toke[ 'value'] == '{':
                 brace_count += 1
-            elif token['value'] == '}':
+            elif toke[ 'value'] == '}':
                 brace_count -= 1
 
-        if token['type'] == 'symbol' and token['value'] == ',' and paren_count == 0 and bracket_count == 0 and brace_count == 0:
+        if toke[ 'type'] == 'symbol' and toke[ 'value'] == ',' and paren_count == 0 and bracket_count == 0 and brace_count == 0:
             right_comma_positions.append(i)
 
     if right_comma_positions:
@@ -3454,6 +3811,7 @@ def runtoken(node, env) -> tuple:
 
     if 'source' not in globals():
         globals()['source'] = None
+
     if 'linenum' not in globals():
         globals()['linenum'] = None
 
@@ -3500,7 +3858,7 @@ def runtoken(node, env) -> tuple:
         nodetypes['for'] = eval.node_for
         nodetypes['break'] = eval.node_break
         nodetypes['continue'] = eval.node_break
-        nodetypes['function'] = eval.node_block
+        nodetypes['function'] = eval.node_function
         nodetypes['class'] = eval.node_class
         nodetypes['import'] = eval.node_import
         nodetypes['fromimport'] = eval.node_fromimport
@@ -3821,9 +4179,58 @@ def execmain(code, env=None, step=False):
     else:
         return 0
 
+def parse_args():
+    """解析命令行参数，返回 (step, singlecode, compile, filename, rest_args)"""
+    args = sys.argv[1:]
+    step = False
+    singlecode = None
+    compile_flag = False
+    filename = None
+    rest_args = []
+
+    i = 0
+    while i < len(args):
+        arg = args[i]
+
+        if arg in ("-d", "--debug"):
+            step = True
+            i += 1
+        elif arg in ("-c", "--code"):
+            # 收集所有后续参数作为代码
+            singlecode = args[i+1:]
+            break
+        elif arg == "--compile":
+            compile_flag = True
+            i += 1
+        elif arg in ("-h", "--help"):
+            return None  # 触发帮助
+        elif arg.startswith("-"):
+            # 未知参数，收集起来备用
+            rest_args.append(arg)
+            i += 1
+        else:
+            # 第一个非选项参数作为文件名
+            filename = arg
+            i += 1
+            # 剩余参数作为额外参数
+            rest_args.extend(args[i:])
+            break
+
+    return {
+        'step': step,
+        'singlecode': singlecode,
+        'compile': compile_flag,
+        'filename': filename,
+        'rest_args': rest_args
+    }
+
 def main():
     try:
-        if "-h" in sys.argv or "--help" in sys.argv:
+        parsed = parse_args()
+
+        # 处理帮助
+        if parsed is None or "-h" in sys.argv or "--help" in sys.argv:
+            # 原有的帮助显示代码，完全不变
             print("\033[1m" + r""" _  __    _ _
 | |/ /___(_) |    __ _ _ __   __ _
 | ' // _ \ | |   / _` | '_ \ / _` |
@@ -3839,61 +4246,73 @@ def main():
             print("\033[1m参数:\033[0m")
             print("  \033[33m-h/--help\033[0m  - \033[36m显示此帮助\033[0m")
             print("  \033[33m-d/--debug\033[0m - \033[36mDebug代码\033[0m")
-            print("  \033[33m-c/--code\033[0m  - \033[36m直接执行代码\033[0m")
+            print("  \033[33m-c/--code\033[0m  - \033[36m执行代码\033[0m")
             print("  \033[33m--compile\033[0m  - \033[36m打印AST\033[0m")
             print()
             sys.exit(0)
 
-        if len(sys.argv) >= 2:
-            step       = False
-            singlecode = False
-            compile    = False
-            if sys.argv[1] == "-d" or sys.argv[1] == "--debug":
-                step = True
-                sys.argv = [sys.argv[0]] + sys.argv[2:]
+        # 单行代码模式
+        if parsed['singlecode'] is not None:
+            for code in parsed['singlecode']:
+                exec(code)
+            return
 
-            if sys.argv[1] == "-c" or sys.argv[1] == "--code":
-                singlecode = sys.argv[2:]
+        # 编译模式
+        if parsed['compile']:
+            if not parsed['filename']:
+                raise KeiError("NotFoundError", "--compile 需要指定文件名")
+            with open(parsed['filename'], "r", encoding="utf-8") as f:
+                filecontent = f.read()
+            from pprint import pprint
+            pprint(ast(token(filecontent)))
+            return
 
-            if sys.argv[1] == "--compile":
-                compile = True
-                sys.argv = [sys.argv[0]] + sys.argv[2:]
+        # 运行脚本模式
+        if parsed['filename']:
+            if not os.path.isfile(parsed['filename']):
+                raise KeiError("NotFoundError", f"未找到 {parsed['filename']}")
 
-            __kei__.file = sys.argv[1]
+            # 设置 __kei__.file
+            __kei__.file = parsed['filename']
 
-            if singlecode:
-                for code in singlecode:
-                    exec(code)
-            else:
-                if os.path.isfile(sys.argv[1]):
-                    with open(sys.argv[1], "r", encoding="utf-8") as f:
-                        filecontent = f.read()
+            # 设置 sys.argv 供脚本使用
+            sys.argv = [parsed['filename']] + parsed['rest_args']
 
-                        if compile:
-                            from pprint import pprint
-                            pprint(ast(token(filecontent)))
-                        else:
-                            if step:
-                                print(f"[Kei Debugger] \033[33;1m{os.path.abspath(sys.argv[1])}\033[0m")
+            with open(parsed['filename'], "r", encoding="utf-8") as f:
+                filecontent = f.read()
 
-                            try:
-                                ret = execmain(filecontent, step=step)
-                            except SystemExit as e:
-                                if not step:
-                                    raise
-                                ret = e.code
+            if parsed['step']:
+                print(f"[Kei Debugger] \033[33;1m{os.path.abspath(parsed['filename'])}\033[0m")
 
-                            if step:
-                                print(f"[Kei Debugger] \033[33;1m程序返回: {ret}\033[0m")
+            try:
+                ret = execmain(filecontent, step=parsed['step'])
+            except SystemExit as e:
+                if not parsed['step']:
+                    raise
+                ret = e.code
 
-                            return ret
+            if parsed['step']:
+                print(f"[Kei Debugger] \033[33;1m程序返回: {ret}\033[0m")
 
-                else:
-                    raise KeiError("NotFoundError", f"未找到 {sys.argv[1]}")
+            return ret
 
-        else:
-            import repl
-            repl.main()
+            try:
+                # 将剩余参数传递给脚本
+                sys.argv = [parsed['filename']] + parsed['rest_args']
+                ret = execmain(filecontent, step=parsed['step'])
+            except SystemExit as e:
+                if not parsed['step']:
+                    raise
+                ret = e.code
+
+            if parsed['step']:
+                print(f"[Kei Debugger] \033[33;1m程序返回: {ret}\033[0m")
+
+            return ret
+
+        # 默认进入 REPL
+        import repl
+        repl.main()
 
     except KeyboardInterrupt:
         exit()

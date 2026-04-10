@@ -2569,11 +2569,6 @@ class KeiInstance(KeiBase):
                 return method(self)
             if isinstance(method, KeiMethod):
                 return method.bind(self)
-            return method
-
-            # 如果是方法且需要绑定 self
-            if isinstance(method, KeiMethod):
-                return method.bind(self)  # ← 关键：绑定 self
 
             return method
 
@@ -2604,6 +2599,26 @@ class KeiInstance(KeiBase):
     def __dir__(self):
         return list(self._attrs.keys())
 
+    def __copy__(self):
+        """转发给实例的 __copy__ 方法"""
+        method = self._get_method('__copy__')
+        if method:
+            return method()
+        # 默认浅拷贝
+        new = KeiInstance(self._class)
+        new._attrs = self._attrs.copy()
+        return new
+
+    def __deepcopy__(self, memo):
+        """转发给实例的 __deepcopy__ 方法"""
+        method = self._get_method('__deepcopy__')
+        if method:
+            return method(memo)
+        # 默认深拷贝
+        from copy import deepcopy
+        new = KeiInstance(self._class)
+        new._attrs = deepcopy(self._attrs, memo)
+        return new
 
 # ========== 方法类型 ==========
 

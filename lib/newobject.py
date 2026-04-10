@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env python
 
 def nullobj(name):
     class nullobj_class:

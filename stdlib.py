@@ -681,20 +681,44 @@ class kei:
             return obj
 
     @s
-    def exec(codes, env=None):
+    def copy(obj):
+        import copy
+
+        try:
+            if hasattr(obj, "__deepcopy__"):
+                return obj.__deepcopy__()
+
+            return copy.deepcopy(obj)
+        except:
+            try:
+                if hasattr(obj, "__copy__"):
+                    return obj.__copy__()
+
+                return copy.copy(obj)
+            except:
+                raise KeiError("CopyError", "深复制和浅复制失败")
+
+    @s
+    def exec(codes, env=None, copy=KeiBool(False)):
         from kei import exec as keiexec
 
+        copy = to_bool(copy)
+
         temp_env = kei.getenv() if env is None else env
+        if copy:
+            temp_env = kei.copy(temp_env)
 
         new_env = keiexec(codes, temp_env)[0]
 
         return KeiNamespace("__exec__", new_env)
 
     @s
-    def eval(codes, env=None):
+    def eval(codes, env=None, copy=KeiBool(False)):
         from kei import exec as keiexec
 
         temp_env = kei.getenv() if env is None else env
+        if copy:
+            temp_env = kei.copy(temp_env)
 
         ret = keiexec(codes, temp_env)[1]
 
@@ -793,6 +817,133 @@ class kei:
     def dir(*args, **kwargs):
         return KeiList(dir(*args, **kwargs))
 
+    @s
+    def hash(obj, depth=0, seen=None):
+        """递归计算 KeiLang 对象的哈希值"""
+        if seen is None:
+            seen = set()
+
+        # 防止无限递归
+        if depth > 100:
+            return hash(id(obj))
+
+        obj_id = id(obj)
+        if obj_id in seen:
+            return hash(obj_id)
+        seen.add(obj_id)
+
+        # None/null/undefined
+        if obj is None or obj is null or obj is undefined:
+            return hash("null")
+
+        # 基础类型
+        if isinstance(obj, (KeiInt, KeiFloat)):
+            return hash(obj.value)
+
+        if isinstance(obj, KeiBool):
+            return hash(obj.value)
+
+        if isinstance(obj, KeiString):
+            return hash(obj.value)
+
+        # 列表
+        if isinstance(obj, KeiList):
+            h = hash("list")
+            for item in obj.items:
+                h ^= kei.hash(item, depth + 1, seen)
+            return h
+
+        # 字典
+        if isinstance(obj, KeiDict):
+            h = hash("dict")
+            for k, v in sorted(obj.items.items(), key=lambda x: kei.hash(x[0], depth + 1, seen)):
+                h ^= kei.hash(k, depth + 1, seen)
+                h ^= kei.hash(v, depth + 1, seen)
+            return h
+
+        # 函数
+        if isinstance(obj, KeiFunction):
+            h = hash("function")
+            h ^= hash(obj.__name__)
+            if hasattr(obj, 'func_obj'):
+                # 参数
+                params = obj.func_obj.get('params', [])
+                h ^= hash(tuple(params))
+                # 函数体
+                body = obj.func_obj.get('body', [])
+                for stmt in body:
+                    h ^= kei.hash(stmt, depth + 1, seen)
+            return h
+
+        # 类
+        if isinstance(obj, KeiClass):
+            h = hash("class")
+            h ^= hash(obj.__name__)
+            if hasattr(obj, '_methods_map'):
+                for name, method in obj._methods_map.items():
+                    h ^= hash(name)
+                    h ^= kei.hash(method, depth + 1, seen)
+            if hasattr(obj, '_class_attrs'):
+                for k, v in obj._class_attrs.items():
+                    h ^= hash(k)
+                    h ^= kei.hash(v, depth + 1, seen)
+            return h
+
+        # 实例
+        if isinstance(obj, KeiInstance):
+            h = hash("instance")
+            h ^= kei.hash(obj._class, depth + 1, seen)
+            if hasattr(obj, '_attrs'):
+                for k, v in obj._attrs.items():
+                    h ^= hash(k)
+                    h ^= kei.hash(v, depth + 1, seen)
+            return h
+
+        # 命名空间
+        if isinstance(obj, KeiNamespace):
+            h = hash("namespace")
+            h ^= hash(obj.__name__)
+            if hasattr(obj, 'nsenv'):
+                for k, v in sorted(obj.nsenv.items()):
+                    h ^= hash(k)
+                    h ^= kei.hash(v, depth + 1, seen)
+            return h
+
+        # 方法
+        if isinstance(obj, (KeiMethod, KeiBoundMethod)):
+            h = hash("method")
+            h ^= hash(obj.__name__)
+            if hasattr(obj, 'method_obj'):
+                h ^= kei.hash(obj.method_obj, depth + 1, seen)
+            if hasattr(obj, 'instance') and obj.instance:
+                h ^= kei.hash(obj.instance, depth + 1, seen)
+            return h
+
+        # 错误对象
+        if isinstance(obj, KeiError):
+            h = hash("error")
+            h ^= hash(obj.types)
+            h ^= hash(obj.value)
+            return h
+
+        # 有 __hash__ 方法的
+        if hasattr(obj, '__hash__') and callable(obj.__hash__):
+            try:
+                return hash(obj)
+            except:
+                pass
+
+        # 有 __dict__ 的
+        if hasattr(obj, '__dict__'):
+            h = hash(type(obj).__name__)
+            for k, v in sorted(obj.__dict__.items()):
+                h ^= hash(k)
+                h ^= kei.hash(v, depth + 1, seen)
+            return h
+
+        # 最后手段：用 id
+        return hash(id(obj))
+
     class open(KeiBase):
         """KeiLang open 函数类"""
         def __init__(self, file, mode='r', encoding='utf-8'):
@@ -890,11 +1041,10 @@ class kei:
 func = {
     "type": type,
     "isinstance": isinstance,
-    'hash': hash,
-    'copy': __import__('copy').copy,
-    'deepcopy': __import__('copy').deepcopy,
+    "copy": kei.copy,
+    "hash": kei.hash,
     "hasattr": kei.hasattr,
-    'dir': kei.dir,
+    "dir": kei.dir,
     "factorial": kei.factorial,
     "assert": kei._assert,
     "print": kei.print,
