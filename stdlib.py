@@ -166,20 +166,17 @@ class kei:
         sys.exit(code)
 
     @s
-    def print(*text, end=KeiString('\n'), sep=KeiString(' '), just=KeiInt(0), color=KeiString("null"), flush=KeiBool(True)):
-        kei.check(end, KeiString, name='print')
+    def print(*text, sep=KeiString(' '), just=KeiInt(0), color=KeiString("null"), flush=KeiBool(True)):
         kei.check(sep, KeiString, name='print')
         kei.check(just, KeiInt, name='print')
         kei.check(color, KeiString, name='print')
         kei.check(flush, KeiBool, name='print')
 
-        assert isinstance(end, KeiString)
         assert isinstance(sep, KeiString)
         assert isinstance(just, KeiInt)
         assert isinstance(color, KeiString)
         assert isinstance(flush, KeiBool)
 
-        end     = end.value
         sep     = sep.value
         just    = just.value
         try:
@@ -279,15 +276,14 @@ class kei:
 
         print("\033[0m", end='', flush=flush)
 
-        print(end=end, flush=flush)
-
         return KeiString(text)
 
     @s
-    def println(*text):
+    def println(*args, **kwargs):
         """超级阉割版print"""
-        print(' '.join(content(t) for t in text), end='\n')
-        return KeiString(' '.join(content(t) for t in text))
+        result = kei.print(*args, **kwargs)
+        print()
+        return result
 
     @s
     def sleep(second: KeiFloat):

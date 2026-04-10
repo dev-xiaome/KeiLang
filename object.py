@@ -2718,6 +2718,9 @@ class KeiBoundMethod(KeiBase):
 
 class KeiNamespace(KeiBase):
     def __init__(self, name: str, env: dict, isns=False):
+        if isinstance(env, NamespaceEnv):
+            env = env.storage
+
         super().__init__("namespace")
         self.__name__ = name
         if isns:

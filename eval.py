@@ -230,7 +230,7 @@ def node_attr(node, env) -> tuple: # if node['type'] == 'attr':
         except AttributeError:
             return undefined, False
 
-def node_postfix(node, env) -> tuple: # if node['type'] == 'postfix':
+def node_postfix(node, env) -> tuple:
     val, flag = runtoken(node['expr'], env)
     if flag:
         return val, True
@@ -240,19 +240,43 @@ def node_postfix(node, env) -> tuple: # if node['type'] == 'postfix':
             new_val = val.value + 1
 
             if node['expr']['type'] == 'name':
+                var_name = node['expr']['value']
+
+                # 沿着环境链向上查找变量
+                target_env = env
+                found = False
+                while target_env is not None:
+                    if var_name in target_env:
+                        found = True
+                        break
+                    target_env = target_env.get('__parent__')
+
+                # 如果没找到，就在当前环境创建
+                if not found:
+                    target_env = env
+
+                # 赋值
                 if isinstance(val, KeiInt):
-                    env[node['expr']['value']] = KeiInt(new_val)
+                    target_env[var_name] = KeiInt(new_val)
                 else:
-                    env[node['expr']['value']] = KeiFloat(new_val)
+                    target_env[var_name] = KeiFloat(new_val)
+
             elif node['expr']['type'] == 'attr':
                 obj, _ = runtoken(node['expr']['obj'], env)
                 attr = node['expr']['attr']
-                if isinstance(obj, KeiInstance):
+
+                # 处理属性赋值
+                if isinstance(obj, KeiBase):
                     if isinstance(val, KeiInt):
                         obj[attr] = KeiInt(new_val)
                     else:
                         obj[attr] = KeiFloat(new_val)
+                elif isinstance(obj, dict):
+                    obj[attr] = new_val
+                else:
+                    setattr(obj, attr, new_val)
 
+            # 返回值
             if isinstance(val, KeiInt):
                 return KeiInt(new_val), flag
             else:
@@ -265,19 +289,43 @@ def node_postfix(node, env) -> tuple: # if node['type'] == 'postfix':
             new_val = val.value - 1
 
             if node['expr']['type'] == 'name':
+                var_name = node['expr']['value']
+
+                # 沿着环境链向上查找变量
+                target_env = env
+                found = False
+                while target_env is not None:
+                    if var_name in target_env:
+                        found = True
+                        break
+                    target_env = target_env.get('__parent__')
+
+                # 如果没找到，就在当前环境创建
+                if not found:
+                    target_env = env
+
+                # 赋值
                 if isinstance(val, KeiInt):
-                    env[node['expr']['value']] = KeiInt(new_val)
+                    target_env[var_name] = KeiInt(new_val)
                 else:
-                    env[node['expr']['value']] = KeiFloat(new_val)
+                    target_env[var_name] = KeiFloat(new_val)
+
             elif node['expr']['type'] == 'attr':
                 obj, _ = runtoken(node['expr']['obj'], env)
                 attr = node['expr']['attr']
-                if isinstance(obj, KeiInstance):
+
+                # 处理属性赋值
+                if isinstance(obj, KeiBase):
                     if isinstance(val, KeiInt):
                         obj[attr] = KeiInt(new_val)
                     else:
                         obj[attr] = KeiFloat(new_val)
+                elif isinstance(obj, dict):
+                    obj[attr] = new_val
+                else:
+                    setattr(obj, attr, new_val)
 
+            # 返回值
             if isinstance(val, KeiInt):
                 return KeiInt(new_val), flag
             else:
@@ -296,23 +344,33 @@ def node_compoundassign(node, env) -> tuple:
 
     # ========== 多变量复合赋值 ==========
     if left['type'] == 'multiassign':
-        vars_list = left['vars']  # list of dict: [{'name': 'x', 'hint': node}, ...]
+        vars_list = left['vars']
         rest_var = left.get('rest')
         kwargs_var = left.get('kwargs')
 
         if kwargs_var:
             raise KeiError("TypeError", "**kwargs 不支持复合赋值")
 
-        # 获取左边每个变量的当前值
         current_vals = []
         for var_info in vars_list:
             if isinstance(var_info, dict):
                 var_name = var_info['name']
             else:
                 var_name = var_info
-            current_vals.append(env.get(var_name, undefined))
 
-        # 右边必须是列表或多值
+            # 沿环境链查找
+            target_env = env
+            found = False
+            while target_env is not None:
+                if var_name in target_env:
+                    found = True
+                    break
+                target_env = target_env.get('__parent__')
+            if found:
+                current_vals.append(target_env.get(var_name, undefined))
+            else:
+                current_vals.append(undefined)
+
         if isinstance(right_val, KeiList):
             right_items = right_val.items
         elif isinstance(right_val, (list, tuple)):
@@ -320,7 +378,6 @@ def node_compoundassign(node, env) -> tuple:
         else:
             right_items = [right_val]
 
-        # 执行复合运算
         result_vals = []
         for i, current in enumerate(current_vals):
             if i < len(right_items):
@@ -340,12 +397,10 @@ def node_compoundassign(node, env) -> tuple:
                 raise KeiError("TypeError", f"不支持的复合运算符: {op}")
             result_vals.append(result)
 
-        # 处理 *rest
         if rest_var:
             rest_items = right_items[len(vars_list):]
             env[rest_var] = KeiList(rest_items)
 
-        # 赋值回去并检查类型
         for i, var_info in enumerate(vars_list):
             if isinstance(var_info, dict):
                 var_name = var_info['name']
@@ -359,11 +414,20 @@ def node_compoundassign(node, env) -> tuple:
 
             val = result_vals[i] if i < len(result_vals) else undefined
 
-            # 类型检查
             if var_hint is not None:
                 val, _ = node_typeassert_typecheck(val, var_hint, env)
 
-            env[var_name] = val
+            # 沿环境链查找并赋值
+            target_env = env
+            found = False
+            while target_env is not None:
+                if var_name in target_env:
+                    found = True
+                    break
+                target_env = target_env.get('__parent__')
+            if not found:
+                target_env = env
+            target_env[var_name] = val
 
         return result_vals[0] if result_vals else undefined, False
 
@@ -372,10 +436,19 @@ def node_compoundassign(node, env) -> tuple:
         var_name = left['value']
         var_hint = left.get('hint')
 
-        # 获取当前值
-        current_val = env.get(var_name, undefined)
+        # 沿环境链查找
+        target_env = env
+        found = False
+        while target_env is not None:
+            if var_name in target_env:
+                found = True
+                break
+            target_env = target_env.get('__parent__')
+        if not found:
+            target_env = env
 
-        # 执行运算
+        current_val = target_env.get(var_name, undefined)
+
         if op == '+=':
             result = current_val + right_val
         elif op == '-=':
@@ -387,11 +460,10 @@ def node_compoundassign(node, env) -> tuple:
         else:
             raise KeiError("TypeError", f"不支持的复合运算符: {op}")
 
-        # 类型检查
         if var_hint is not None:
             result, _ = node_typeassert_typecheck(result, var_hint, env)
 
-        env[var_name] = result
+        target_env[var_name] = result
         return result, False
 
     # ========== 索引赋值 ==========
@@ -399,7 +471,6 @@ def node_compoundassign(node, env) -> tuple:
         obj, _ = runtoken(left['obj'], env)
         index, _ = runtoken(left['index'], env)
 
-        # 获取当前值
         if isinstance(obj, KeiList):
             idx = index.value if isinstance(index, KeiInt) else index
             current_val = obj.items[idx]
@@ -408,7 +479,6 @@ def node_compoundassign(node, env) -> tuple:
         else:
             raise KeiError("TypeError", f"不支持对 {type(obj)} 进行索引复合赋值")
 
-        # 执行运算
         if op == '+=':
             result = current_val + right_val
         elif op == '-=':
@@ -420,7 +490,6 @@ def node_compoundassign(node, env) -> tuple:
         else:
             raise KeiError("TypeError", f"不支持的复合运算符: {op}")
 
-        # 赋值回去
         if isinstance(obj, KeiList):
             obj.items[idx] = result
         elif isinstance(obj, KeiDict):
@@ -435,7 +504,6 @@ def node_compoundassign(node, env) -> tuple:
         obj, _ = runtoken(left['obj'], env)
         attr = left['attr']
 
-        # 获取当前值
         if isinstance(obj, KeiBase):
             current_val = obj.get(attr, undefined)
         elif isinstance(obj, dict):
@@ -443,7 +511,6 @@ def node_compoundassign(node, env) -> tuple:
         else:
             current_val = getattr(obj, attr, undefined)
 
-        # 执行运算
         if op == '+=':
             result = current_val + right_val
         elif op == '-=':
@@ -455,7 +522,6 @@ def node_compoundassign(node, env) -> tuple:
         else:
             raise KeiError("TypeError", f"不支持的复合运算符: {op}")
 
-        # 赋值回去
         if isinstance(obj, KeiBase):
             obj[attr] = result
         elif isinstance(obj, dict):
@@ -494,10 +560,8 @@ def node_compoundassign(node, env) -> tuple:
             if end < 0:
                 end = length + end
 
-            # 获取切片当前值
             current_slice = obj.items[start:end:step]
 
-            # 对切片的每个元素进行复合运算
             if isinstance(right_val, KeiList):
                 for i, idx in enumerate(range(start, end, step or 1)):
                     if i < len(right_val.items):
@@ -521,7 +585,6 @@ def node_compoundassign(node, env) -> tuple:
                         obj.items[idx] = obj.items[idx] / right_val
 
             return obj, False
-
         else:
             raise KeiError("TypeError", f"不支持对 {type(obj)} 进行切片复合赋值")
 
@@ -1636,6 +1699,7 @@ def _get_exported_dict(module_env, module_dict):
 
 def _load_kei_module(module_path, module_name, env, __path__):
     """加载 .kei 模块，返回模块字典和是否成功"""
+
     kei_files = [os.path.join(path, f"{module_path}.kei") for path in __path__]
 
     for keifile in kei_files:
@@ -1953,7 +2017,7 @@ def node_try(node, env) -> tuple: # if node['type'] == 'try':
 
                 for stmt in node['catchbody']:
                     val, is_return = runtoken(stmt, env)
-                    if env[node['var']]:
+                    if node['var'] is not None and env[node['var']]:
                         env['__error__'][-1] = env[node['var']]
 
                     if is_return:

@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.7-22"
+__version__ = "1.7-23"
 
 class KeiState:
     stack: List[Any]
@@ -98,7 +98,7 @@ keywords = {
    'continue', 'global', 'raise', 'case', 'match', 'use', 'from'
 }
 
-sys.setrecursionlimit(1024)
+sys.setrecursionlimit(65536)
 getcontext().prec = 28
 
 def check_python_call(func, args, kwargs, func_name):
@@ -227,8 +227,8 @@ def error(errtype: str | None, info: str, stack: list=[], code:str|None=None, li
 
     print(f"{space} ·")
 
-    #import traceback
-    #traceback.print_exc()
+    import traceback
+    traceback.print_exc()
 
     if not __kei__.repl:
         sys.exit(1)
@@ -1008,7 +1008,9 @@ def parse_stmt(tokens: list, pos: int, all_lines: list | None = None, linepos: i
                 return None, pos, linepos
 
             t = tokens[pos]
-            source_line = __kei__.get('code', [''])[t['linenum']] if __kei__.get('code') else ''
+            source_line = (__kei__.get('code', [''])[t['linenum']]
+               if __kei__.get('code') and 0 <= t['linenum'] < len(__kei__['code'])
+               else '未知行')
 
             globals()['source'] = source_line
             globals()['linenum'] = t['linenum']
@@ -1068,7 +1070,10 @@ def parse_stmt(tokens: list, pos: int, all_lines: list | None = None, linepos: i
             return node, new_pos, linepos
 
         node, new_pos, linepos = stmt(tokens, pos, all_lines, linepos)
-        node['source'] = __kei__.get('code', [''])[tokens[pos]['linenum']] if __kei__.get('code') else ''
+        node['source'] = (__kei__.get('code', [''])[tokens[pos]['linenum']]
+               if __kei__.get('code') and 0 <= tokens[pos]['linenum'] < len(__kei__['code'])
+               else '未知行')
+
         node['linenum'] = tokens[pos]['linenum']
         return node, new_pos, linepos
 
