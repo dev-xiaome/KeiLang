@@ -143,7 +143,7 @@ def node_notnullassert(node, env) -> tuple: # if node['type'] == 'notnullassert'
         return val, True
 
     if val is undefined or val is null:
-        raise KeiError("TypeError", f"非空断言失败: {val} 是空的")
+        raise KeiError("TypeError", f"非空断言失败: {node['expr']['value'] if node['expr'].get("value", None) is not None else val} 是空的")
 
     return val, flag
 
