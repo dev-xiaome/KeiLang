@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.8-4"
+__version__ = "1.8-5"
 
 class KeiState:
     stack: List[Any]
@@ -264,8 +264,8 @@ def error(errtype: str | None, info: str, stack: list=[], code:str|None=None, li
 
     print(f"{space} ·")
 
-    #import traceback
-    #traceback.print_exc()
+    import traceback
+    traceback.print_exc()
 
     if not __kei__.repl:
         sys.exit(1)
@@ -1864,13 +1864,12 @@ def parse_if_while_stmt(tokens: list, pos: int, all_lines: list, linepos: int, s
     return node, pos, linepos
 
 def parse_match_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
-    """解析 match 语句"""
     pos += 1
-
     value_expr, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
 
     if pos >= len(tokens) or tokens[pos]['type'] != 'symbol' or tokens[pos]['value'] != '{':
         raise KeiError("SyntaxError", "match 后面需要 {")
+
     pos += 1
 
     arms = []
@@ -3134,7 +3133,8 @@ def parse_logic(tokens, pos, in_call=False, allow_assign=False, in_comp=False, a
         if t["value"] in {"and", "or"}:
             op = t["value"]
             pos += 1
-            right, new_pos, linepos = parse_compare(tokens, pos, in_call, allow_assign, in_comp, all_lines, linepos)
+            # ✅ 修复：改成调用 parse_logic，这样右边可以处理 not
+            right, new_pos, linepos = parse_logic(tokens, pos, in_call, allow_assign, in_comp, all_lines, linepos)
             if right is None:
                 raise KeiError("SyntaxError", f"运算符 '{op}' 后面缺少表达式")
             left = {"type": "binop", "op": op, "left": left, "right": right}
@@ -3190,13 +3190,78 @@ def parse_addsub(tokens, pos, in_call=False, allow_assign=False, in_comp=False, 
             break
     return left, pos, linepos
 
+def match_dict(value, pattern):
+    if not isinstance(value, KeiDict):
+        return False
+    for item in pattern['items']:
+        key = item['key']
+        pattern_val = item['value']
+        if key not in value:
+            return False
+        if pattern_val['type'] == 'capture':
+            # 捕获变量
+            env[pattern_val['name']] = value[key]
+        elif pattern_val['type'] == 'str':
+            if value[key] != pattern_val['value']:
+                return False
+    return True
+
 def parse_match_pattern(tokens: list, pos: int, all_lines=None, linepos=0) -> tuple:
     if pos >= len(tokens):
         raise KeiError("SyntaxError", "case 后面缺少 pattern")
     t = tokens[pos]
+
+    # ========== 通配符 ==========
     if t['type'] == 'name' and t['value'] == '_':
         return {'type': 'wildcard'}, pos + 1, linepos
 
+    # ========== 字典模式 {key: value, ...} ==========
+    if t['type'] == 'symbol' and t['value'] == '{':
+        pos += 1
+        items = []
+        while pos < len(tokens):
+            # 解析 key
+            key_node, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
+            if key_node is None:
+                raise KeiError("SyntaxError", "字典模式需要键")
+
+            # 检查 :
+            if pos >= len(tokens) or tokens[pos]['type'] != 'symbol' or tokens[pos]['value'] != ':':
+                raise KeiError("SyntaxError", "字典模式需要 ':'")
+            pos += 1
+
+            # 解析 value（可以是字面量或捕获变量）
+            if pos < len(tokens) and tokens[pos]['type'] == 'name':
+                # 捕获变量（如 rights）
+                var_name = tokens[pos]['value']
+                items.append({
+                    'type': 'capture',
+                    'key': key_node,
+                    'name': var_name
+                })
+                pos += 1
+            else:
+                # 字面量（如 "admin"）
+                val_node, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
+                items.append({
+                    'type': 'literal',
+                    'key': key_node,
+                    'value': val_node
+                })
+
+            # 处理 , 或 }
+            if pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '}':
+                pos += 1
+                break
+            elif pos < len(tokens) and tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ',':
+                pos += 1
+                continue
+            else:
+                raise KeiError("SyntaxError", "字典模式需要 '}' 或 ','")
+
+        return {'type': 'dict_pattern', 'items': items}, pos, linepos
+
+    # ========== 普通表达式和 | 模式 ==========
     pattern_blocks = []
     current_block = []
     i = pos

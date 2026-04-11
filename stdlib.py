@@ -938,6 +938,111 @@ class kei:
         # 最后手段：用 id
         return hash(id(obj))
 
+    @s
+    def isinstance(obj, cls):
+        """检查 obj 是否是 cls 的实例，支持 KeiList 作为多个类型"""
+        # 如果 cls 是 KeiList，检查是否匹配其中任意一个
+        if isinstance(cls, KeiList):
+            for c in cls.items:
+                if kei.isinstance(obj, c):
+                    return true
+            return false
+
+        # 转换 Python 类型
+        if isinstance(cls, type):
+            # 检查 KeiLang 类型
+            if isinstance(obj, cls):
+                return true
+            # 检查 Python 内置类型
+            if isinstance(obj, (KeiInt, KeiFloat, KeiString, KeiBool, KeiList, KeiDict)):
+                if cls in (int, float, str, bool, list, dict):
+                    return true
+            return false
+
+        # 如果是 KeiClass
+        if isinstance(cls, KeiClass):
+            # 获取 KeiClass 对应的 Python 类型
+            if hasattr(cls, 'py_parent'):
+                return kei.isinstance(obj, cls.py_parent)
+            # 检查是否是 KeiClass 的实例
+            if isinstance(obj, KeiInstance) and obj._class == cls:
+                return true
+            return false
+
+        # 如果是 KeiString（类名）
+        if isinstance(cls, KeiString):
+            cls_name = cls.value
+            # 检查 KeiLang 内置类型
+            builtin_types = {
+                'int': KeiInt,
+                'float': KeiFloat,
+                'string': KeiString,
+                'bool': KeiBool,
+                'list': KeiList,
+                'dict': KeiDict,
+            }
+            if cls_name in builtin_types:
+                return kei.isinstance(obj, builtin_types[cls_name])
+            # 检查环境中的类
+            from kei import __kei__
+            if cls_name in __kei__.env:
+                return kei.isinstance(obj, __kei__.env[cls_name])
+            return false
+
+        return false
+
+    @s
+    def getattr(obj, name, default=undefined):
+        """获取对象的属性"""
+        name = to_str(name)
+
+        # 如果是 Kei 对象
+        if isinstance(obj, KeiBase):
+            try:
+                return obj[name]
+            except:
+                if default is not undefined:
+                    return default
+                raise KeiError("AttributeError", f"'{type(obj).__name__}' 对象没有属性 '{name}'")
+
+        # Python 对象
+        try:
+            return getattr(obj, name)
+        except AttributeError:
+            if default is not undefined:
+                return default
+            raise KeiError("AttributeError", f"'{type(obj).__name__}' 对象没有属性 '{name}'")
+
+    @s
+    def hasattr(obj, name):
+        """检查对象是否有属性"""
+        name = to_str(name)
+
+        # 如果是 Kei 对象
+        if isinstance(obj, KeiBase):
+            try:
+                obj[name]
+                return true
+            except:
+                return false
+
+        # Python 对象
+        try:
+            return true if hasattr(obj, name) else false
+        except:
+            return false
+
+    @s
+    def setattr(obj, name, value):
+        """设置对象属性"""
+        name = to_str(name)
+
+        if isinstance(obj, KeiBase):
+            obj[name] = value
+        else:
+            setattr(obj, name, value)
+        return null
+
     class open(KeiBase):
         """KeiLang open 函数类"""
         def __init__(self, file, mode='r', encoding='utf-8'):
@@ -1034,7 +1139,10 @@ class kei:
 
 func = {
     "type": type,
-    "isinstance": isinstance,
+    "isinstance": kei.isinstance,
+    "getattr": kei.getattr,
+    "hasattr": kei.hasattr,
+    "setattr": kei.setattr,
     "copy": kei.copy,
     "hash": kei.hash,
     "hasattr": kei.hasattr,

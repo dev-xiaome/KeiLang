@@ -63,6 +63,7 @@ def node_match(node, env) -> tuple: # if node['type'] == 'match':
 
     for arm in node['arms']:
         matched = False
+        captured_vars = {}  # 存储捕获的变量
 
         for pattern_node in arm['patterns']:
             if pattern_node['type'] == 'wildcard':
@@ -82,6 +83,40 @@ def node_match(node, env) -> tuple: # if node['type'] == 'match':
                         matched = True
                         break
                 if matched:
+                    break
+
+            # ========== 新增：字典模式 ==========
+            elif pattern_node['type'] == 'dict_pattern':
+                # 检查 value 是否是字典
+                if not isinstance(value, KeiDict):
+                    continue
+
+                matched = True
+                items = pattern_node['items']
+
+                for item in items:
+                    key_node = item['key']
+                    key_val, _ = runtoken(key_node, env)
+
+                    # 检查键是否存在
+                    if key_val not in value.items:
+                        matched = False
+                        break
+
+                    if item['type'] == 'capture':
+                        # 捕获变量：rights -> value["rights"]
+                        captured_vars[item['name']] = value.items[key_val]
+                    else:  # literal
+                        # 字面量匹配：type == "admin"
+                        pattern_val, _ = runtoken(item['value'], env)
+                        if not value.items[key_val].__eq__(pattern_val):
+                            matched = False
+                            break
+
+                if matched:
+                    # 将捕获的变量注入环境
+                    for var_name, var_val in captured_vars.items():
+                        env[var_name] = var_val
                     break
 
         if matched:
@@ -788,9 +823,15 @@ def node_binop(node, env) -> tuple: # if node['type'] == 'binop':
             elif op == '**':
                 result = left.__pow__(right)
             elif op == '==':
-                result = left.__eq__(right)
+                try:
+                    result = left.__eq__(right)
+                except:
+                    result = true if left == right else false
             elif op == '!=':
-                result = left.__ne__(right)
+                try:
+                    result = left.__ne__(right)
+                except:
+                    result = true if left != right else false
             elif op == '<':
                 result = left.__lt__(right)
             elif op == '>':
@@ -877,9 +918,9 @@ def node_binop(node, env) -> tuple: # if node['type'] == 'binop':
             return result, (l_flag or r_flag)
 
         except AttributeError:
-            raise KeiError("TypeError", f"{left} 和 {right} 无法 {op} 运算")
+            raise KeiError("TypeError", f"{content(left)} 和 {content(right)} 无法 {op} 运算")
         except TypeError:
-            raise KeiError("TypeError", f"{left} 和 {right} 无法 {op} 运算")
+            raise KeiError("TypeError", f"{content(left)} 和 {content(right)} 无法 {op} 运算")
 
     return binop()
 
