@@ -432,6 +432,9 @@ class KeiError(Exception, KeiBase):
             "type": self.type
         }
 
+    def __call__(self):
+        raise self
+
     def __repr__(self):
         return f"{self.types}"
 
@@ -475,6 +478,9 @@ class KeiInt(KeiBase):
             "sqrt": self._sqrt,
             "take": self._take
         }
+
+    def __call__(self, *_, **__):
+        raise KeiError("TypeError", f"{self._type} 不可调用")
 
     def _take(self, digits):
         return KeiFloat(self.value).take(digits)
@@ -904,6 +910,9 @@ class KeiFloat(KeiBase):
             "take": self._take,
         }
 
+    def __call__(self, *_, **__):
+        raise KeiError("TypeError", f"{self._type} 不可调用")
+
     def __float__(self):
         return float(self.value)
 
@@ -1222,6 +1231,9 @@ class KeiFloat(KeiBase):
 class KeiBool(KeiBase):
     _instance_true = None
     _instance_false = None
+
+    def __call__(self, *_, **__):
+        raise KeiError("TypeError", f"{self._type} 不可调用")
 
     def __new__(cls, value):
         try:
@@ -1696,6 +1708,9 @@ class KeiString(KeiBase):
             return method()
         return f'{self.value}'
 
+    def __call__(self, *_, **__):
+        raise KeiError("TypeError", f"{self._type} 不可调用")
+
 
 # ========== 列表类型 ==========
 
@@ -1725,6 +1740,9 @@ class KeiList(KeiBase):
             "append": self._append,
             "delete": self._delete,
         }
+
+    def __call__(self, *_, **__):
+        raise KeiError("TypeError", f"{self._type} 不可调用")
 
     def __bool__(self):
         return len(self.items) > 0
@@ -2145,6 +2163,9 @@ class KeiDict(KeiBase):
             "items": self._items,
         }
 
+    def __call__(self, *_, **__):
+        raise KeiError("TypeError", f"{self._type} 不可调用")
+
     def _items(self):
         return KeiList([KeiList([k, v]) for k, v in self.items.items()])
 
@@ -2262,23 +2283,44 @@ class KeiDict(KeiBase):
 # ========== 函数类型 ==========
 
 class KeiFunction(KeiBase):
-    def __init__(self, func_obj: dict, env: dict):
+    def __init__(self, func_obj: dict, env: dict, filename=None):
         super().__init__("function")
         self.func_obj = func_obj
         self.env = env
         self.__name__ = func_obj['name'] if func_obj['name'] else "lambda"
         self.__env__ = func_obj.get('closure', env)
+        self.filename = filename
+        self.is_property = False
+        self.is_static = False
+
+        # 使用传入的 env 而不是 __kei__.env
+        if 'decorators' in func_obj:
+            from kei import runtoken
+            from stdlib import kei
+            for dec_node in func_obj['decorators']:
+                obj, _ = runtoken(dec_node, env)  # 使用传入的 env
+                if obj is kei.prop:
+                    self.is_property = True
+                if obj is kei.static:
+                    self.is_static = True
 
     def __call__(self, *args, linecode=None, name=None, **kwargs):
         from kei import runtoken, get_from_env, __kei__
 
-        pushed = False
-        if linecode is not None:
-            if name is None:
-                name = self.__name__
-            __kei__.stack.append((name, linecode))
+        oldfilename = __kei__.file
+        if self.filename is not None:
+            __kei__.file = self.filename
 
-            pushed = True
+        pushed = False
+
+        if self.__name__ != "main" or name != "<global>" or len(__kei__.stack) != 0:
+            if linecode is not None:
+                if name is None:
+                    name = self.__name__
+
+                __kei__.stack.append((name, linecode))
+
+                pushed = True
 
         __kei__.recursion += 1
         if __kei__.recursion > __kei__.maxrecursion:
@@ -2365,6 +2407,7 @@ class KeiFunction(KeiBase):
                             matched = True
                             break
                     if not matched:
+                        __kei__.stack.pop()
                         raise KeiError("TypeError",
                             f"参数 '{param_name}' 期望 {content(expected)}, 得到 {content(type(val))}")
                 else:
@@ -2372,6 +2415,7 @@ class KeiFunction(KeiBase):
                     if not isinstance(expected, type):
                         expected = type(expected)
                     if not isinstance(val, expected):
+                        __kei__.stack.pop()
                         raise KeiError("TypeError",
                             f"参数 '{param_name}' 期望 {content(expected)}, 得到 {content(type(val))}")
 
@@ -2397,19 +2441,22 @@ class KeiFunction(KeiBase):
                         if (isinstance(result, h) or (isinstance(result, type) and issubclass(result, h))):
                             break
                     else:
-                        raise KeiError("TypeError", f"类型错误: 期望 {content(hint)}, 得到 {content(type(result))}")
+                        raise KeiError("TypeError", f"期望 {content(hint)}, 得到 {content(type(result))}")
                 else:
                     if type(result) is KeiInt and hint is KeiFloat:
                         return result
                     if not isinstance(hint, type):
                         hint = type(hint)
                     if not (isinstance(result, hint) or (isinstance(result, type) and issubclass(result, hint))):
-                        raise KeiError("TypeError", f"类型错误: 期望 {content(hint)}, 得到 {content(type(result))}")
+                        raise KeiError("TypeError", f"期望 {content(hint)}, 得到 {content(type(result))}")
 
             return result
         except:
             raise
         finally:
+            if self.filename is not None:
+                __kei__.file = oldfilename
+
             __kei__.recursion -= 1
 
             if pushed:
@@ -2440,8 +2487,7 @@ class KeiClass(KeiBase):
             return self._class_attrs[name]
         if name in self._methods_map:
             method_obj = self._methods_map[name]
-            if method_obj.get('is_property'):
-                return KeiProperty(method_obj)
+            # ✅ 始终返回 KeiMethod（带原始 decorators）
             return KeiMethod(method_obj, self)
         return None
 
@@ -2449,13 +2495,16 @@ class KeiClass(KeiBase):
         instance = KeiInstance(self)
         instance._class = self
 
+        if hasattr(self, 'py_parent'):
+            parent_instance = self.py_parent(*args, **kwargs)
+            instance._parent_instance = parent_instance
+
         init_method = self._methods_map.get('__init__')
         if init_method:
             new_env = {}
-            new_env.update(init_method['closure'])  # 把 closure 的内容复制进来
+            new_env.update(init_method['closure'])
             new_env['self'] = instance
 
-            new_env['self'] = instance
             params = init_method['params'][1:]
 
             args_list = list(args)
@@ -2467,7 +2516,6 @@ class KeiClass(KeiBase):
 
                 if p.startswith('**'):
                     param_name = p[2:]
-                    # 过滤内部参数
                     internal_keys = {'linecode', 'name'}
                     filtered_kwargs = {k: v for k, v in kwargs.items() if k not in internal_keys}
                     new_env[param_name] = KeiDict(filtered_kwargs)
@@ -2502,16 +2550,32 @@ class KeiClass(KeiBase):
         return instance
 
     def __getitem__(self, key):
-        method = self._get_method('__getitem__')
+        method = self._get_method(key)
         if method:
-            return method(key)
+            # ✅ 如果有装饰后的版本，用它替代
+            if hasattr(self, 'decorated_methods') and key in self.decorated_methods:
+                decorated = self.decorated_methods[key]
+                if hasattr(decorated, 'is_property') and decorated.is_property:
+                    return decorated
+                if isinstance(decorated, KeiFunction):
+                    # 返回包装成 KeiMethod 的版本
+                    return KeiMethod(decorated.func_obj, self)
+            return method
+
+        # ✅ 如果有 Python 父类，从父类找
+        if hasattr(self, 'py_parent'):
+            parent_method = getattr(self.py_parent, key, None)
+            if parent_method is not None:
+                # 如果是 property，需要特殊处理
+                if isinstance(parent_method, property):
+                    return parent_method
+                if callable(parent_method):
+                    # 包装成可调用对象
+                    return parent_method
+                return parent_method
+
         if key in self._class_attrs:
             return self._class_attrs[key]
-        if key in self._methods_map:
-            method_obj = self._methods_map[key]
-            if method_obj.get('is_property'):
-                return KeiProperty(method_obj)
-            return KeiMethod(method_obj, self)
         return undefined
 
     def __setitem__(self, key, value):
@@ -2547,10 +2611,16 @@ class KeiProperty(KeiBase):
 # ========== 实例类型 ==========
 
 class KeiInstance(KeiBase):
-    def __init__(self, klass: KeiClass):
+    def __init__(self, klass: KeiClass, parent_instance=None):
         super().__init__("instance")
         self._class = klass
         self._attrs = {}
+        self._parent_instance = parent_instance
+
+    def __content__(self):
+        if self._parent_instance is not None:
+            return self._parent_instance
+        return f"<instance {self._class.__name__}>"
 
     def _get_method(self, name: str) -> Optional[Callable]:
         """获取方法：先查实例属性，再查类方法"""
@@ -2565,12 +2635,18 @@ class KeiInstance(KeiBase):
         method = self._get_method(key)
         if method:
             if hasattr(method, 'is_property') and method.is_property:
-                # 调用 property 的 getter
                 return method(self)
             if isinstance(method, KeiMethod):
                 return method.bind(self)
-
             return method
+
+        # ✅ 如果有 Python 父类实例，从父类找
+        if hasattr(self, '_py_instance'):
+            parent_attr = getattr(self._py_instance, key, None)
+            if parent_attr is not None:
+                if callable(parent_attr):
+                    return parent_attr
+                return parent_attr
 
         if key in self._attrs:
             return self._attrs[key]
@@ -2631,25 +2707,30 @@ class KeiMethod(KeiBase):
         self.is_static = False
         self.is_property = False
 
-        from kei import runtoken, __kei__
-        from stdlib import kei
-
+        # 检查装饰器
         if 'decorators' in method_obj:
-            for dec in method_obj['decorators']:
-                obj, _ = runtoken(dec, __kei__.env.copy())
+            from stdlib import kei
+            from kei import runtoken, __kei__
+            for dec_node in method_obj['decorators']:
+                obj, _ = runtoken(dec_node, __kei__.env.copy())
                 if obj is kei.prop:
                     self.is_property = True
                 if obj is kei.static:
                     self.is_static = True
 
     def bind(self, instance: KeiInstance) -> 'KeiBoundMethod':
+        # ✅ 修复：优先使用 decorated_methods 中的版本
+        decorated = self.klass.class_obj.get('decorated_methods', {}).get(self.__name__)
+        if decorated:
+            # 使用装饰后的版本创建 BoundMethod
+            return KeiBoundMethod(decorated.func_obj, instance)
         return KeiBoundMethod(self.method_obj, instance)
 
     def __get__(self, obj, objtype=None):
         if obj is None:
             return self
         if self.is_property:
-            bound = KeiBoundMethod(self.method_obj, obj)
+            bound = self.bind(obj)
             return bound()
         return self.bind(obj)
 
@@ -2664,9 +2745,6 @@ class KeiMethod(KeiBase):
             bound = self.bind(instance)
             return bound(*args[1:], **kwargs)
 
-    def __repr__(self):
-        return f"<method {self.__name__}>"
-
 
 class KeiBoundMethod(KeiBase):
     def __init__(self, method_obj: dict, instance: KeiInstance | None):
@@ -2676,45 +2754,11 @@ class KeiBoundMethod(KeiBase):
         self.__name__ = method_obj['name']
 
     def __call__(self, *args, **kwargs):
-        new_env = {}
-        if 'closure' in self.method_obj:
-            for key, value in self.method_obj['closure'].items():
-                if key == '__parent__':
-                    new_env[key] = value
-                elif isinstance(value, (int, float, str, bool, _undefined, _null)):
-                    new_env[key] = value
-                elif value is true or value is false:
-                    new_env[key] = value
-                else:
-                    try:
-                        new_env[key] = copy.copy(value)
-                    except:
-                        new_env[key] = value
-
+        # 把 instance 作为第一个参数
         if self.instance is not None:
-            new_env['self'] = self.instance
+            args = (self.instance,) + args
 
-        params = self.method_obj['params']
-        if self.instance is not None:
-            params_to_use = params[1:]
-        else:
-            params_to_use = params
-
-        # ========== 加这里 ==========
-        defaults = self.method_obj.get('defaults', {})
-        # ============================
-
-        for i, p in enumerate(params_to_use):
-            if i < len(args):
-                new_env[p] = args[i]
-            elif p in kwargs:
-                new_env[p] = kwargs[p]
-            elif p in defaults:  # ← 加这个分支！
-                from kei import runtoken
-                default_val, _ = runtoken(defaults[p], self.method_obj['closure'])
-                new_env[p] = default_val
-            else:
-                new_env[p] = undefined
+        new_env = bind_arguments(self.method_obj, self.instance, args, kwargs)
 
         result = None
         for stmt in self.method_obj['body']:
@@ -2759,16 +2803,26 @@ class KeiNamespace(KeiBase):
             return call_method(*args, **kwargs)
         raise KeiError("TypeError", f"命名空间 {self.__name__} 不可调用")
 
-    def __getattr__(self, key):
-        if key in self.nsenv:
-            return self.nsenv[key]
-        return undefined
+    def _get_by_key(self, key):
+        from lib.python import topy, tokei
 
-    def __getitem__(self, key):
-        """支持 ns['key'] 访问"""
-        from lib.python import topy
+        call_method = self.nsenv.get('__getattr__')
+        if call_method and callable(call_method):
+            return call_method(tokei(key))
+
+        value = self.nsenv.get(key, undefined)
+
+        if callable(value) and getattr(value, 'is_property', False):
+            return value()
+
         key = topy(key)
         return self.nsenv.get(key, undefined)
+
+    def __getattr__(self, key):
+        return self._get_by_key(key)
+
+    def __getitem__(self, key):
+        return self._get_by_key(key)
 
     def __setitem__(self, key, value):
         """支持 ns['key'] = value 赋值"""
@@ -2873,7 +2927,7 @@ class NamespaceEnv:
             return self.outer.keys()
         return set()
 
-# ========== 工厂函数 ==========
+# ========== 工具函数 ==========
 
 def content(obj, _seen=None, _depth=0, _in_container=False):
     if _seen is None:
@@ -2941,7 +2995,7 @@ def content(obj, _seen=None, _depth=0, _in_container=False):
                 if isinstance(result, KeiString):
                     return result.value
                 return str(result)
-            return f"<instance {obj._class.__name__}>"
+            return obj.__content__()
 
         if isinstance(obj, KeiNamespace): return f"<namespace {obj.__name__}>"
         if isinstance(obj, (KeiMethod, KeiBoundMethod)): return f"<method {obj.__name__}>"
@@ -3056,6 +3110,130 @@ def content(obj, _seen=None, _depth=0, _in_container=False):
     finally:
         _seen.remove(obj_id)
 
+def bind_arguments(method_obj: dict, instance: KeiInstance | None, args: tuple, kwargs: dict) -> dict:
+    """统一的参数绑定函数，完全复制 KeiFunction.__call__ 的逻辑"""
+    from kei import runtoken
+
+    new_env = {'__parent__': method_obj.get('closure', {})}
+
+    if instance is not None:
+        new_env['self'] = instance
+
+    params = method_obj['params']
+    defaults = method_obj.get('defaults', {})
+    type_hints = method_obj.get('typehints', {})
+
+    # 处理 self 参数
+    if instance is not None and params and params[0] == 'self':
+        params_to_use = params[1:]
+    else:
+        params_to_use = params
+
+    # 找到 * 和 ** 参数的位置
+    star_pos = -1
+    star_param_name = None
+    starstar_param_name = None
+
+    for i, p in enumerate(params_to_use):
+        if p.startswith('**'):
+            starstar_param_name = p[2:]
+            star_pos = i
+        elif p.startswith('*') and star_pos == -1:
+            star_param_name = p[1:]
+            star_pos = i
+            break
+
+    if star_pos == -1:
+        before_star = params_to_use
+        after_star = []
+    else:
+        before_star = params_to_use[:star_pos]
+        after_star = params_to_use[star_pos + 1:]
+
+    all_args = list(args)
+    remaining_kwargs = kwargs.copy()
+
+    # 处理 before_star 参数
+    for i, param_name in enumerate(before_star):
+        if i < len(all_args):
+            val = all_args[i]
+        elif param_name in remaining_kwargs:
+            val = remaining_kwargs.pop(param_name)
+        elif param_name in defaults:
+            default_val_node = defaults[param_name]
+            default_val, _ = runtoken(default_val_node, method_obj.get('closure', {}))
+            val = default_val
+        else:
+            val = undefined
+
+        # 类型检查
+        if param_name in type_hints:
+            expected, _ = runtoken(type_hints[param_name], method_obj.get('closure', {}))
+            if isinstance(expected, KeiList):
+                matched = False
+                for et in expected.items:
+                    if not isinstance(et, type):
+                        et = type(et)
+                    if isinstance(val, et):
+                        matched = True
+                        break
+                if not matched:
+                    raise KeiError("TypeError", f"参数 '{param_name}' 期望 {content(expected)}, 得到 {content(type(val))}")
+            else:
+                if not isinstance(expected, type):
+                    expected = type(expected)
+                if not isinstance(val, expected):
+                    raise KeiError("TypeError", f"参数 '{param_name}' 期望 {content(expected)}, 得到 {content(type(val))}")
+
+        new_env[param_name] = val
+
+    # 处理 *args
+    if star_param_name:
+        star_args = all_args[len(before_star):]
+        new_env[star_param_name] = KeiList(star_args)
+
+    # 处理 after_star 参数
+    for param_name in after_star:
+        if param_name.startswith('**'):
+            starstar_param_name = param_name[2:]
+            new_env[starstar_param_name] = KeiDict(remaining_kwargs)
+            remaining_kwargs = {}
+        elif param_name in remaining_kwargs:
+            val = remaining_kwargs.pop(param_name)
+
+            # 类型检查
+            if param_name in type_hints:
+                expected, _ = runtoken(type_hints[param_name], method_obj.get('closure', {}))
+                if isinstance(expected, KeiList):
+                    matched = False
+                    for et in expected.items:
+                        if not isinstance(et, type):
+                            et = type(et)
+                        if isinstance(val, et):
+                            matched = True
+                            break
+                    if not matched:
+                        raise KeiError("TypeError", f"参数 '{param_name}' 期望 {content(expected)}, 得到 {content(type(val))}")
+                else:
+                    if not isinstance(expected, type):
+                        expected = type(expected)
+                    if not isinstance(val, expected):
+                        raise KeiError("TypeError", f"参数 '{param_name}' 期望 {content(expected)}, 得到 {content(type(val))}")
+
+            new_env[param_name] = val
+        elif param_name in defaults:
+            default_val_node = defaults[param_name]
+            default_val, _ = runtoken(default_val_node, method_obj.get('closure', {}))
+            new_env[param_name] = default_val
+        else:
+            new_env[param_name] = undefined
+
+    # 检查多余的关键字参数
+    if remaining_kwargs and not starstar_param_name:
+        raise KeiError("TypeError", f"未预料的关键字参数: {list(remaining_kwargs.keys())}")
+
+    return new_env
+
 # ========== 常量 ==========
 
 HASVALUE = (
@@ -3078,7 +3256,7 @@ __all__ = [
     'KeiList', 'KeiDict', 'KeiBool',
     'KeiFunction', 'KeiClass', 'KeiNamespace', 'NamespaceEnv',
     'KeiInstance', 'KeiMethod', 'KeiBoundMethod',
-    'content',
+    'content', 'bind_arguments',
     '_undefined', '_null',
     'KeiException', 'KeiError',
     'HASVALUE', 'HASITMES'

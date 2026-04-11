@@ -94,6 +94,9 @@ def pyimport(module_name):
     # 包装成 Kei 对象
     return module(m)
 
+def builtins():
+    return module(__import__("builtins"))
+
 class module(KeiBase):
     """包装 Python 模块，自动转换 KeiLang ↔ Python 类型"""
 
@@ -161,4 +164,4 @@ def ispy(value):
     # 不是 KeiLang 对象
     return not iskei(value)
 
-__all__ = ['tokei', 'topy', 'pyimport', 'module', 'iskei', 'ispy']
+__all__ = ['tokei', 'topy', 'pyimport', 'module', 'iskei', 'ispy', 'builtins']

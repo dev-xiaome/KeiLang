@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.8-3"
+__version__ = "1.8-4"
 
 class KeiState:
     stack: List[Any]
@@ -26,6 +26,7 @@ class KeiState:
     env: dict
     recursion: int
     maxrecursion: int
+    argv: list
 
     _instance: Optional['KeiState'] = None
 
@@ -43,6 +44,7 @@ class KeiState:
             cls._instance.env = {}
             cls._instance.recursion = 0
             cls._instance.maxrecursion = 1024
+            cls._instance.argv = []
 
         return cls._instance
 
@@ -138,6 +140,8 @@ def getname(node, env):
     result = []
     seen = set()
 
+    skip_vars = {'__env__', '__parent__', '__builtins__', 'static', 'prop'}
+
     block_nodes = {
         'try', 'class', 'for', 'function', 'with', 'namespace',
         'if', 'while', 'unless', 'until', 'match'
@@ -150,6 +154,16 @@ def getname(node, env):
             obj_name = get_full_name(n["obj"])
             attr_name = n["attr"]
             return f"{obj_name}.{attr_name}"
+        elif n.get("type") == "index":
+            obj_name = get_full_name(n["obj"])
+            index_val = runtoken(n["index"], env)[0]
+            return f"{obj_name}[{index_val}]"
+        elif n.get("type") == "slice":
+            obj_name = get_full_name(n["obj"])
+            start = runtoken(n["start"], env)[0] if n["start"] else ""
+            end = runtoken(n["end"], env)[0] if n["end"] else ""
+            step = runtoken(n["step"], env)[0] if n["step"] else ""
+            return f"{obj_name}[{start}:{end}:{step}]"
         return None
 
     def traverse(n, current_depth):
@@ -164,7 +178,7 @@ def getname(node, env):
 
             if n.get("type") == "name":
                 name = n["value"]
-                if name not in seen:
+                if name not in seen and name not in skip_vars:
                     seen.add(name)
                     val = runtoken(n, env)[0]
                     result.append([name, val])
@@ -172,9 +186,32 @@ def getname(node, env):
             if n.get("type") == "attr":
                 full_name = get_full_name(n)
                 if full_name and full_name not in seen:
-                    seen.add(full_name)
-                    val = runtoken(n, env)[0]
-                    result.append([full_name, val])
+                    # 检查是否要跳过
+                    base_name = full_name.split('.')[0]
+                    if base_name not in skip_vars:
+                        seen.add(full_name)
+                        val = runtoken(n, env)[0]
+                        result.append([full_name, val])
+                return result
+
+            if n.get("type") == "index":
+                full_name = get_full_name(n)
+                if full_name and full_name not in seen:
+                    base_name = full_name.split('[')[0]
+                    if base_name not in skip_vars:
+                        seen.add(full_name)
+                        val = runtoken(n, env)[0]
+                        result.append([full_name, val])
+                return result
+
+            if n.get("type") == "slice":
+                full_name = get_full_name(n)
+                if full_name and full_name not in seen:
+                    base_name = full_name.split('[')[0]
+                    if base_name not in skip_vars:
+                        seen.add(full_name)
+                        val = runtoken(n, env)[0]
+                        result.append([full_name, val])
                 return result
 
             for v in n.values():
@@ -337,8 +374,7 @@ def _value_changed(v1, v2):
 
 def token(original: str) -> list:
     try:
-        if __kei__.code is None:
-            __kei__.code = original.splitlines()
+        __kei__.code = original.splitlines()
 
         result = []
         lines = original.splitlines()
@@ -837,6 +873,9 @@ def token(original: str) -> list:
                             break
                         if "0" <= ch <= "9":
                             pos += 1
+                        elif ch == '.' and pos + 1 < length and codes[pos+1] == '.':
+                            # 回退，不把这个点作为浮点数的一部分
+                            break
                         elif ch == '.' and not has_dot and not has_exp:
                             has_dot = True
                             pos += 1
@@ -1271,7 +1310,7 @@ def process_fstring(template, env):
 
                 # 执行表达式
                 value, _ = runtoken(expr_ast[0], env)
-                result.append(content(value))
+                result.append(str(content(value)))
 
                 # 恢复 linenum/source
                 globals()['linenum'] = saved_linenum
@@ -1441,6 +1480,9 @@ def parse_stmt(tokens: list, pos: int, all_lines: list | None = None, linepos: i
         return node, new_pos, linepos
 
     except Exception as e:
+        if __kei__.catch or not __kei__.error:
+            raise
+
         # 错误处理保持不变
         error_config = {
             ZeroDivisionError: ("ZeroDivisionError", "无法对 0 进行除法"),
@@ -3790,10 +3832,26 @@ def escape(s):
     return ''.join(result)
 
 def find_method(class_obj, method_name, env):
-    while class_obj:
-        if method_name in class_obj.get('methods_map', {}):
-            return class_obj['methods_map'][method_name]
-        class_obj = env.get(class_obj.get('parent')) if class_obj.get('parent') else None
+    # 如果是 KeiClass
+    if isinstance(class_obj, KeiClass):
+        while class_obj:
+            if method_name in class_obj.class_obj.get('methods_map', {}):
+                return class_obj.class_obj['methods_map'][method_name]
+            class_obj = env.get(class_obj.class_obj.get('parent')) if class_obj.class_obj.get('parent') else None
+        return None
+
+    # ✅ 如果是 Python 类型（如 KeiString, KeiInt 等）
+    if isinstance(class_obj, type):
+        # 检查是否有对应的方法
+        if hasattr(class_obj, method_name):
+            return getattr(class_obj, method_name)
+        # 检查父类
+        for base in class_obj.__bases__:
+            result = find_method(base, method_name, env)
+            if result:
+                return result
+        return None
+
     return None
 
 def get_from_env(name, env, default=undefined):
@@ -4122,8 +4180,8 @@ def runtoken(node, env) -> tuple:
                     err_name if err_name is not err_msg else None,
                     err_msg,
                     __kei__.stack.copy(),
-                    globals()['source'] if globals()['source'] is not None else node.get('source', None),
-                    globals()['linenum']+1 if globals()['linenum'] is not None else node.get('linenum', -1)+1,
+                    node.get('source', None) if node.get('source', None) is not None else globals()['source'],
+                    node.get('linenum', -1)+1 if node.get('linenum', -1)+1 is not None else globals()['linenum']+1,
                     __kei__.get('file', '未知文件')
                 )
                 if not __kei__.repl:
@@ -4135,8 +4193,8 @@ def runtoken(node, env) -> tuple:
                 type(e).__name__,
                 str(e),
                 __kei__.stack.copy(),
-                globals()['source'] if globals()['source'] is not None else node.get('source', None),
-                globals()['linenum']+1 if globals()['linenum'] is not None else node.get('linenum', -1)+1,
+                node.get('source', None) if node.get('source', None) is not None else globals()['source'],
+                node.get('linenum', -1)+1 if node.get('linenum', -1)+1 is not None else globals()['linenum']+1,
                 __kei__.get('file', '未知文件')
             )
             if not __kei__.repl:
@@ -4173,6 +4231,8 @@ def execmain(code, env=None, step=False):
     cmd_args = []
     for arg in sys.argv[1:]:
         cmd_args.append(f"{arg}")
+
+    __kei__.argv = sys.argv[1:]
 
     code += f"\nmain({content(cmd_args)});"
 

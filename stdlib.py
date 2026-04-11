@@ -10,17 +10,6 @@ class kei:
     s = staticmethod
 
     @s
-    def timer(f):
-        def wrapper(*args, **kwargs):
-            import time
-            start = time.time()
-            result = f(*args, **kwargs)
-            end = time.time()
-            # 返回普通 Python 元组
-            return (result, f"{end - start:.3f}")
-        return wrapper
-
-    @s
     def setenv(envs):
         global env
         env = envs
@@ -294,7 +283,8 @@ class kei:
     @s
     def gettime():
         import time
-        return KeiFloat(time.time()) if isinstance(time.time(), float) else KeiInt(time.time())
+        t = time.time()  # 只调用一次
+        return KeiFloat(t) if isinstance(t, float) else KeiInt(t)
 
     @s
     def clear():
@@ -818,6 +808,10 @@ class kei:
         return KeiList(dir(*args, **kwargs))
 
     @s
+    def importlib(modulename):
+        return kei.exec(KeiString(f"import {modulename};"), env={}.copy(), copy=KeiBool(True))[modulename]
+
+    @s
     def hash(obj, depth=0, seen=None):
         """递归计算 KeiLang 对象的哈希值"""
         if seen is None:
@@ -1060,7 +1054,6 @@ func = {
     "range": kei.range,
     "system": kei.system,
     "random": kei.random,
-    "timer": kei.timer,
     "cnlen": kei.cnlen,
     "exit": kei.exit,
     "loop": kei.loop,
@@ -1072,6 +1065,7 @@ func = {
     "write": kei.write,
     "breakpoint": kei.breakpoint,
     "step": kei.step,
+    "importlib": kei.importlib,
     "precision": kei.precision,
     "recursion": kei.recursion,
     "static": kei.static,

@@ -963,30 +963,10 @@ def node_call(node, env) -> tuple: # if node['type'] in {'call', 'methodcall'}:
             if not isinstance(instance, KeiInstance):
                 raise KeiError("NameError", "super 需要 self 实例")
 
-            current_class = instance._class
-            parent_name = current_class.class_obj.get('parent')
-            if not parent_name:
-                raise KeiError("NameError", "当前类没有父类")
+            if hasattr(instance, '_parent_instance') and instance._parent_instance is not None:
+                return instance._parent_instance, False
 
-            parent_class = env.get(parent_name)
-            if not parent_class:
-                raise KeiError("NameError", f"父类 {parent_name} 未找到")
-
-            init_method = parent_class.class_obj['methods_map'].get('__init__')
-            if init_method:
-                new_env = {k: v for k, v in init_method.get('closure', {}).items()
-                            if k not in ['__builtins__', '__env__']}
-                new_env['self'] = instance
-                for i, p in enumerate(init_method['params'][1:]):
-                    if i < len(args):
-                        new_env[p] = args[i]
-                    elif p in kwargs:
-                        new_env[p] = kwargs[p]
-                for stmt in init_method['body']:
-                    val, is_return = runtoken(stmt, new_env)
-                    if is_return:
-                        break
-            return null, False
+            raise KeiError("TypeError", "此类没有父类")
 
         if '.' in name:
             parts = name.split('.')
@@ -1574,13 +1554,11 @@ def node_for(node, env) -> tuple: # if node['type'] == 'for':
 def node_break(node, env) -> tuple: # if node['type'] in {'break', 'continue'}:
     return (node['type'], None), True
 
-def node_function(node, env) -> tuple: # if node['type'] == 'function':
+def node_function(node, env) -> tuple:
     global_names = []
     for stmt in node['body']:
         if stmt['type'] == 'global':
             global_names.extend(stmt['names'])
-
-    node.get('hint', None)
 
     func_obj = {
         'type': 'user_function',
@@ -1591,16 +1569,27 @@ def node_function(node, env) -> tuple: # if node['type'] == 'function':
         'globals': global_names,
         'closure': env,
         'typeassert': node.get('hint', None),
-        'typehints': node.get('typehints', {})
+        'typehints': node.get('typehints', {}),
+        'decorators': node.get('decorators', [])
     }
 
-    kei_func = KeiFunction(func_obj, env)
+    kei_func = KeiFunction(func_obj, env, filename=__kei__.file)
 
+    # 应用装饰器
     if node.get('decorators'):
         for decorator_node in reversed(node['decorators']):
             decorator, _ = runtoken(decorator_node, env)
             if callable(decorator):
-                kei_func = decorator(kei_func)
+                new_func = decorator(kei_func)
+                # ✅ 自动保留原始函数信息
+                if hasattr(kei_func, 'func_obj'):
+                    if not hasattr(new_func, 'func_obj'):
+                        new_func.func_obj = kei_func.func_obj
+                    if not hasattr(new_func, 'is_property'):
+                        new_func.is_property = getattr(kei_func, 'is_property', False)
+                    if not hasattr(new_func, 'is_static'):
+                        new_func.is_static = getattr(kei_func, 'is_static', False)
+                kei_func = new_func
 
     if node['name']:
         env[node['name']] = kei_func
@@ -1609,7 +1598,7 @@ def node_function(node, env) -> tuple: # if node['type'] == 'function':
 
     return None, False
 
-def node_class(node, env) -> tuple: # if node['type'] == 'class':
+def node_class(node, env) -> tuple:
     class_obj = {
         'type': 'class',
         'name': node['name'],
@@ -1617,21 +1606,30 @@ def node_class(node, env) -> tuple: # if node['type'] == 'class':
         'body': node['body'],
         'methods': [],
         'attrs': {},
-        'methods_map': {}
+        'methods_map': {},
+        'decorated_methods': {}
     }
+
+    py_parent = None
 
     if class_obj['parent']:
         parent = env.get(class_obj['parent'])
         if parent is None or parent is undefined:
             raise KeiError("NameError", f"父类 '{class_obj['parent']}' 未定义")
-        if not isinstance(parent, KeiClass):
+
+        if not isinstance(parent, (KeiClass, type)):
             raise KeiError("TypeError", f"'{class_obj['parent']}' 不是类")
-        class_obj['attrs'] = parent._class_attrs.copy()
-        class_obj['methods_map'] = parent.class_obj['methods_map'].copy()
+
+        if isinstance(parent, KeiClass):
+            class_obj['attrs'] = parent._class_attrs.copy()
+            class_obj['methods_map'] = parent.class_obj['methods_map'].copy()
+            class_obj['decorated_methods'] = parent.class_obj.get('decorated_methods', {}).copy()
+        else:
+            py_parent = parent
 
     for stmt in node['body']:
         if stmt['type'] == 'function':
-            method_obj = {
+            original_method_obj = {
                 'type': 'user_function',
                 'name': stmt['name'],
                 'params': stmt['params'],
@@ -1641,8 +1639,27 @@ def node_class(node, env) -> tuple: # if node['type'] == 'class':
                 'closure': env
             }
 
-            class_obj['methods'].append(method_obj)
-            class_obj['methods_map'][stmt['name']] = method_obj
+            exec_method_obj = {
+                'type': 'user_function',
+                'name': stmt['name'],
+                'params': stmt['params'],
+                'body': stmt['body'],
+                'defaults': stmt.get('defaults', {}),
+                'decorators': stmt.get('decorators', []),
+                'closure': env
+            }
+
+            from object import KeiFunction
+            kei_func = KeiFunction(exec_method_obj, env, filename=__kei__.file)
+
+            if stmt.get('decorators'):
+                for decorator_node in reversed(stmt['decorators']):
+                    decorator, _ = runtoken(decorator_node, env)
+                    if callable(decorator):
+                        kei_func = decorator(kei_func)
+
+            class_obj['methods_map'][stmt['name']] = original_method_obj
+            class_obj['decorated_methods'][stmt['name']] = kei_func
 
         elif stmt['type'] == 'assign':
             if stmt['left']['type'] == 'name':
@@ -1651,6 +1668,9 @@ def node_class(node, env) -> tuple: # if node['type'] == 'class':
                 class_obj['attrs'][attr_name] = attr_val
 
     kei_class = KeiClass(class_obj, env)
+    if py_parent:
+        kei_class.py_parent = py_parent
+
     env[node['name']] = kei_class
     return None, False
 
@@ -1704,28 +1724,35 @@ def _get_exported_dict(module_env, module_dict):
 def _load_kei_module(module_path, module_name, env, __path__):
     """加载 .kei 模块，返回模块字典和是否成功"""
 
-    kei_files = [os.path.join(path, f"{module_path}.kei") for path in __path__]
+    try:
+        oldfilename = __kei__.file
 
-    for keifile in kei_files:
-        if os.path.isfile(keifile):
-            with open(keifile, "r", encoding="utf-8") as f:
-                code = f.read()
+        kei_files = [os.path.join(path, f"{module_path}.kei") for path in __path__]
 
-            module_env = {
-                "__path__": KeiList(["."] + paths),
-                "__name__": KeiString(f"__{module_name}__"),
-                "__env__": KeiDict(env),
-                "__osname__": KeiString(platform.system().lower()),
-            }
-            module_env["__env__"] = module_env
+        for keifile in kei_files:
+            if os.path.isfile(keifile):
+                __kei__.file = os.path.abspath(keifile)
 
-            exec(code, module_env)
+                with open(keifile, "r", encoding="utf-8") as f:
+                    code = f.read()
 
-            # 获取导出字典
-            module_dict = {}
-            exported_dict = _get_exported_dict(module_env, module_dict)
+                module_env = {
+                    "__path__": KeiList(["."] + paths),
+                    "__name__": KeiString(f"__{module_name}__"),
+                    "__env__": KeiDict(env),
+                    "__osname__": KeiString(platform.system().lower()),
+                }
+                module_env["__env__"] = module_env
 
-            return exported_dict, module_env, True
+                exec(code, module_env)
+
+                # 获取导出字典
+                module_dict = {}
+                exported_dict = _get_exported_dict(module_env, module_dict)
+
+                return exported_dict, module_env, True
+    finally:
+        __kei__.file = oldfilename
 
     return None, None, False
 
@@ -1738,7 +1765,7 @@ def _load_py_module(module_path, __path__):
             with open(pyfile, "r", encoding="utf-8") as f:
                 code = f.read()
 
-            module_env = {}
+            module_env = {}.copy()
             __py_exec__(code, module_env)
             return module_env, True
 
@@ -1930,16 +1957,47 @@ def node_use(node, env) -> tuple:
             raise KeiError("TypeError", f"use 需要 namespace，得到 {type(ns)}")
     return None, False
 
-def node_namespace(node, env) -> tuple: # if node['type'] == 'namespace':
+def node_namespace(node, env) -> tuple:
     ns_data = {}.copy()
     ns_env = NamespaceEnv(env, ns_data)
 
     for stmt in node['body']:
-        runtoken(stmt, ns_env)
+        if stmt['type'] == 'function':
+            from object import KeiFunction
+            from kei import runtoken, __kei__
+
+            # 创建 KeiFunction
+            func_obj = {
+                'type': 'user_function',
+                'name': stmt['name'],
+                'params': stmt['params'],
+                'body': stmt['body'],
+                'defaults': stmt.get('defaults', {}),
+                'decorators': stmt.get('decorators', []),
+                'closure': env
+            }
+
+            kei_func = KeiFunction(func_obj, env, filename=__kei__.file)
+
+            # 应用装饰器
+            if stmt.get('decorators'):
+                for decorator_node in reversed(stmt['decorators']):
+                    decorator, _ = runtoken(decorator_node, env)
+                    if callable(decorator):
+                        kei_func = decorator(kei_func)
+
+                # 重新检查是否被 prop 装饰
+                for decorator_node in stmt['decorators']:
+                    if decorator_node.get('value') == 'prop':
+                        kei_func.is_property = True
+
+            # 直接存储装饰后的版本
+            ns_data[stmt['name']] = kei_func
+        else:
+            runtoken(stmt, ns_env)
 
     ns = env
     ns[node['name']] = ns_data.copy()
-
     env[node['name']] = KeiNamespace(node['name'], ns, isns=True)
     return None, False
 
