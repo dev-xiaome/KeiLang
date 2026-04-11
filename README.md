@@ -53,26 +53,3 @@ fn main() {
 #### set -gx PATH $PATH /path/to/kei/ # fish
 ## **使用**
 ### $ kei.py --help # 不需要python kei.py!
-
----
-
-# Updata Logs
-
-> 此部分采用英语 | This part is in English
-
-## 1.8 - Backtick Multiline Strings
-
-### Added
-> _Oh, no. Markdown can't create complex mixed effects._
-- Multiline strings using \` (backtick)
-  - Same-line: \`text\`
-  - Cross-line: \`line1\nline2\`
-  - Prefixes: f\`, r\`, fr\`, rf\`
-
-### Fixed
-- F-string empty `{}` now shows correct line number
-- KDB no longer spams `static`/`prop` changes
-- Recursion depth properly tracked
-
-### Changed
-- Tokenizer now handles `0xFF`, `0b1010`, `1e-5` numbers

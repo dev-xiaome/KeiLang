@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.8-2"
+__version__ = "1.8-3"
 
 class KeiState:
     stack: List[Any]
@@ -357,25 +357,27 @@ def token(original: str) -> list:
             while pos < length:
                 c = codes[pos]
 
-                # ========== 反引号多行字符串 ==========
-                if c == '`':
+                # ========== 三引号多行字符串 ==========
+                if (c == '"' and pos + 2 < length and codes[pos:pos+3] == '"""') or \
+                   (c == "'" and pos + 2 < length and codes[pos:pos+3] == "'''"):
                     start_line = i
-                    pos += 1
+                    quote_type = codes[pos:pos+3]  # """ 或 '''
+                    pos += 3
 
-                    # 检查当前行是否有闭合的 `
-                    end = codes.find('`', pos)
+                    # 检查当前行是否有闭合的三引号
+                    end = codes.find(quote_type, pos)
                     if end != -1:
                         # 同一行闭合
                         content = codes[pos:end]
                         escaped = escape(content)
                         tokens.append(('string', f'"{escaped}"'))
-                        pos = end + 1
+                        pos = end + 3
                         continue
 
                     # 跨行多行字符串
                     content_lines = []
 
-                    # 当前行 ` 后面的内容（保留空字符串）
+                    # 当前行三引号后面的内容（保留空字符串）
                     if pos < length:
                         content_lines.append(codes[pos:])
                     else:
@@ -388,7 +390,7 @@ def token(original: str) -> list:
 
                     while i < len(lines):
                         line = lines[i]
-                        p = line.find('`')
+                        p = line.find(quote_type)
                         if p != -1:
                             found = True
                             end_line = i
@@ -399,7 +401,7 @@ def token(original: str) -> list:
                         i += 1
 
                     if not found:
-                        raise KeiError("SyntaxError", "未闭合的多行字符串", linenum=start_line)
+                        raise KeiError("SyntaxError", f"未闭合的多行字符串 ({quote_type})", linenum=start_line)
 
                     full = '\n'.join(content_lines)
                     escaped = escape(full)
@@ -408,7 +410,7 @@ def token(original: str) -> list:
                     for _ in range(start_line + 1, end_line + 1):
                         result.append(['#'])
 
-                    rem = lines[end_line][end_pos + 1:].lstrip()
+                    rem = lines[end_line][end_pos + 3:].lstrip()
                     if rem:
                         lines[end_line] = rem
                         i = end_line
@@ -423,15 +425,17 @@ def token(original: str) -> list:
                     continue
 
                 # r-string 多行
-                if c == 'r' and pos + 1 < length and codes[pos+1] == '`':
+                if ((c == 'r' and pos + 3 < length and codes[pos:pos+4] == 'r"""') or \
+                    (c == 'r' and pos + 3 < length and codes[pos:pos+4] == "r'''")):
                     start_line = i
-                    pos += 2
+                    quote_type = codes[pos+1:pos+4]  # """ 或 '''
+                    pos += 4
 
-                    end = codes.find('`', pos)
+                    end = codes.find(quote_type, pos)
                     if end != -1:
                         content = codes[pos:end]
                         tokens.append(('rstring', f'"{content}"'))
-                        pos = end + 1
+                        pos = end + 3
                         continue
 
                     content_lines = []
@@ -447,7 +451,7 @@ def token(original: str) -> list:
 
                     while i < len(lines):
                         line = lines[i]
-                        p = line.find('`')
+                        p = line.find(quote_type)
                         if p != -1:
                             found = True
                             end_line = i
@@ -458,7 +462,7 @@ def token(original: str) -> list:
                         i += 1
 
                     if not found:
-                        raise KeiError("SyntaxError", "未闭合的r-string", linenum=start_line)
+                        raise KeiError("SyntaxError", f"未闭合的r-string ({quote_type})", linenum=start_line)
 
                     full = '\n'.join(content_lines)
                     tokens.append(('rstring', f'"{full}"'))
@@ -466,7 +470,7 @@ def token(original: str) -> list:
                     for _ in range(start_line + 1, end_line + 1):
                         result.append(['#'])
 
-                    rem = lines[end_line][end_pos + 1:].lstrip()
+                    rem = lines[end_line][end_pos + 3:].lstrip()
                     if rem:
                         lines[end_line] = rem
                         i = end_line
@@ -481,16 +485,18 @@ def token(original: str) -> list:
                     continue
 
                 # f-string 多行
-                if c == 'f' and pos + 1 < length and codes[pos+1] == '`':
+                if ((c == 'f' and pos + 3 < length and codes[pos:pos+4] == 'f"""') or \
+                    (c == 'f' and pos + 3 < length and codes[pos:pos+4] == "f'''")):
                     start_line = i
-                    pos += 2
+                    quote_type = codes[pos+1:pos+4]  # """ 或 '''
+                    pos += 4
 
-                    end = codes.find('`', pos)
+                    end = codes.find(quote_type, pos)
                     if end != -1:
                         content = codes[pos:end]
                         escaped = escape(content)
                         tokens.append(('fstring', f'"{escaped}"'))
-                        pos = end + 1
+                        pos = end + 3
                         continue
 
                     content_lines = []
@@ -506,7 +512,7 @@ def token(original: str) -> list:
 
                     while i < len(lines):
                         line = lines[i]
-                        p = line.find('`')
+                        p = line.find(quote_type)
                         if p != -1:
                             found = True
                             end_line = i
@@ -517,7 +523,7 @@ def token(original: str) -> list:
                         i += 1
 
                     if not found:
-                        raise KeiError("SyntaxError", "未闭合的f-string", linenum=start_line)
+                        raise KeiError("SyntaxError", f"未闭合的f-string ({quote_type})", linenum=start_line)
 
                     full = '\n'.join(content_lines)
                     escaped = escape(full)
@@ -526,7 +532,7 @@ def token(original: str) -> list:
                     for _ in range(start_line + 1, end_line + 1):
                         result.append(['#'])
 
-                    rem = lines[end_line][end_pos + 1:].lstrip()
+                    rem = lines[end_line][end_pos + 3:].lstrip()
                     if rem:
                         lines[end_line] = rem
                         i = end_line
@@ -541,17 +547,17 @@ def token(original: str) -> list:
                     continue
 
                 # rf-string 多行
-                if ((c == 'r' and pos + 1 < length and codes[pos+1] == 'f') or \
-                    (c == 'f' and pos + 1 < length and codes[pos+1] == 'r')) and \
-                    pos + 2 < length and codes[pos+2] == '`':
+                if pos + 4 < length and (codes[pos:pos+5] == 'rf"""' or codes[pos:pos+5] == 'fr"""' or
+                                          codes[pos:pos+5] == "rf'''" or codes[pos:pos+5] == "fr'''"):
                     start_line = i
-                    pos += 3
+                    quote_type = codes[pos+2:pos+5]  # """ 或 '''
+                    pos += 5
 
-                    end = codes.find('`', pos)
+                    end = codes.find(quote_type, pos)
                     if end != -1:
                         content = codes[pos:end]
                         tokens.append(('rfstring', f'"{content}"'))
-                        pos = end + 1
+                        pos = end + 3
                         continue
 
                     content_lines = []
@@ -567,7 +573,7 @@ def token(original: str) -> list:
 
                     while i < len(lines):
                         line = lines[i]
-                        p = line.find('`')
+                        p = line.find(quote_type)
                         if p != -1:
                             found = True
                             end_line = i
@@ -578,7 +584,7 @@ def token(original: str) -> list:
                         i += 1
 
                     if not found:
-                        raise KeiError("SyntaxError", "未闭合的rf-string", linenum=start_line)
+                        raise KeiError("SyntaxError", f"未闭合的rf-string ({quote_type})", linenum=start_line)
 
                     full = '\n'.join(content_lines)
                     tokens.append(('rfstring', f'"{full}"'))
@@ -586,7 +592,7 @@ def token(original: str) -> list:
                     for _ in range(start_line + 1, end_line + 1):
                         result.append(['#'])
 
-                    rem = lines[end_line][end_pos + 1:].lstrip()
+                    rem = lines[end_line][end_pos + 3:].lstrip()
                     if rem:
                         lines[end_line] = rem
                         i = end_line
