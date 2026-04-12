@@ -1358,6 +1358,7 @@ class KeiString(KeiBase):
             raise KeiError("TypeError", f"无法把 {content(_value)} 转为 string")
 
         self._methods = {
+            "__init__": self.__init__,
             "upper": self._upper,
             "lower": self._lower,
             "split": self._split,
@@ -1372,7 +1373,7 @@ class KeiString(KeiBase):
             "index_of": self._index_of,
             "center": self._center,
             "append": self._append,
-            "push": self._push
+            "push": self._push,
         }
 
     def _append(self, *values):
@@ -2494,28 +2495,26 @@ class KeiInstance(KeiBase):
         return None
 
     def __getitem__(self, key):
-        # 检查是否有 property
+        # 先查自己的方法
         method = self._get_method(key)
         if method:
             if hasattr(method, 'is_property') and method.is_property:
                 return method(self)
             if isinstance(method, KeiMethod):
                 return method.bind(self)
+            # ✅ 对于普通函数（包括从父类继承的），也绑定 self
+            if callable(method):
+                return lambda *args, **kwargs: method(self, *args, **kwargs)
             return method
 
-        # ✅ 如果有 Python 父类实例，从父类找
-        if hasattr(self, '_py_instance'):
-            parent_attr = getattr(self._py_instance, key, None)
-            if parent_attr is not None:
-                if callable(parent_attr):
-                    return parent_attr
-                return parent_attr
+        # 如果自己没有，尝试从父类实例找
+        if hasattr(self, '_parent_instance') and self._parent_instance:
+            parent_method = getattr(self._parent_instance, key, None)
+            if parent_method and callable(parent_method):
+                # 绑定到父类实例
+                return lambda *args, **kwargs: parent_method(*args, **kwargs)
 
-        if key in self._attrs:
-            return self._attrs[key]
-        if self._class is not None:
-            return self._class[key]
-        return undefined
+        raise AttributeError(key)
 
     def __setitem__(self, key, _value):
         method = self._get_method('__setitem__')
@@ -2582,6 +2581,15 @@ class KeiInstance(KeiBase):
             except:
                 pass
         return default
+
+    def __getattr__(self, name):
+        # 从 _attrs 里取任何属性
+        if name in self._attrs:
+            return self._attrs[name]
+        # 如果 _attrs 里没有，尝试从父类实例取
+        if hasattr(self, '_parent_instance') and self._parent_instance:
+            return getattr(self._parent_instance, name)
+        raise AttributeError(name)
 
 # ========== 方法类型 ==========
 
@@ -2812,7 +2820,7 @@ class NamespaceEnv:
 
 # ========== 工具函数 ==========
 
-def content(obj, _seen=None, _depth=0, _in_container=False):
+def content(obj, _seen=None, _depth=0, _in_container=False) -> str:
     if _seen is None:
         _seen = set()
 
@@ -2878,7 +2886,7 @@ def content(obj, _seen=None, _depth=0, _in_container=False):
                 if isinstance(result, KeiString):
                     return result.value
                 return str(result)
-            return obj.__content__()
+            return str(obj.__content__())
 
         if isinstance(obj, KeiNamespace): return f"<namespace {obj.__name__}>"
         if isinstance(obj, (KeiMethod, KeiBoundMethod)): return f"<method {obj.__name__}>"

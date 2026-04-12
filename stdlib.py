@@ -205,7 +205,7 @@ class kei:
         else:
             rainbow = "+" if colors[color] == "rainbow+" else "-"
 
-        text = sep.join(content(t) for t in text)
+        text = sep.join([content(t) for t in text])
 
         # 定义渐变颜色范围 (0-255 RGB)
         # 这里用 ANSI 256色
@@ -809,7 +809,22 @@ class kei:
 
     @s
     def importlib(modulename):
-        return kei.exec(KeiString(f"import {modulename};"), env={}.copy(), copy=KeiBool(True))[modulename]
+        import kei as _kei
+
+        source = _kei.__dict__.get('source', None)
+        linenum = _kei.__dict__.get('linenum', None)
+
+        _kei.__kei__.error = False
+
+        try:
+            return kei.exec(KeiString(f"import {modulename};"), copy=KeiBool(True))[modulename]
+        finally:
+            _kei.__kei__.error = True
+
+            if source is not None:
+                _kei.__dict__['source'] = source
+            if linenum is not None:
+                _kei.__dict__['linenum'] = linenum
 
     @s
     def hash(obj, depth=0, seen=None):
@@ -1140,6 +1155,7 @@ class kei:
 
     static = decorator("static")
     prop = decorator("prop")
+    super = decorator("super")
 
 keistdlib = """
 class gen {
@@ -1190,6 +1206,7 @@ func = {
     "max": kei.max,
     "min": kei.min,
     "zip": kei.zip,
+    "super": kei.super,
     "range": kei.range,
     "system": kei.system,
     "random": kei.random,

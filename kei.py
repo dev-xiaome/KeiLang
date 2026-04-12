@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.8-7"
+__version__ = "1.8-8"
 
 class Yieldable:
     def __bool__(self):
@@ -4286,6 +4286,7 @@ def exec(code, env=None):
             "__name__": KeiString("__main__"),
             "__env__": KeiDict(env),
             "__osname__": KeiString(platform.system().lower()),
+            "__file__": __kei__.file
         })
 
         for name, func in stdlib.func.items():
