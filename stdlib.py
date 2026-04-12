@@ -1043,6 +1043,10 @@ class kei:
             setattr(obj, name, value)
         return null
 
+    @s
+    def isclass(obj):
+        return true if isinstance(obj, KeiClass) else false
+
     class open(KeiBase):
         """KeiLang open 函数类"""
         def __init__(self, file, mode='r', encoding='utf-8'):
@@ -1137,6 +1141,33 @@ class kei:
     static = decorator("static")
     prop = decorator("prop")
 
+keistdlib = """
+class gen {
+    fn __init__(self, func) {
+        self.func  = func;
+        self.value = -1;
+    };
+
+    fn __call__(self, *args, **kwargs) {
+        return self.func(yield=self.value++, *args, **kwargs);
+    };
+
+    @static
+    fn yield(num, values) {
+        return (values[num] ?? null);
+    };
+};
+
+class funcattr {
+    fn __init__(self, func) {
+        self.func = func;
+    };
+    fn __call__(self, *args, **kwargs) {
+        return self.func(*args, **kwargs);
+    };
+};
+"""
+
 func = {
     "type": type,
     "isinstance": kei.isinstance,
@@ -1163,6 +1194,7 @@ func = {
     "system": kei.system,
     "random": kei.random,
     "cnlen": kei.cnlen,
+    "isclass": kei.isclass,
     "exit": kei.exit,
     "loop": kei.loop,
     "sort": kei.sort,
@@ -1186,6 +1218,7 @@ func = {
     "bool": KeiBool,
     "list": KeiList,
     "dict": KeiDict,
+    "instance": KeiInstance,
     "true": true,
     "false": false,
     "null": null,

@@ -12,7 +12,13 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.8-6"
+__version__ = "1.8-7"
+
+class Yieldable:
+    def __bool__(self):
+        return True
+
+yieldable = Yieldable
 
 class KeiState:
     stack: List[Any]
@@ -264,8 +270,8 @@ def error(errtype: str | None, info: str, stack: list=[], code:str|None=None, li
 
     print(f"{space} ·")
 
-    #import traceback
-    #traceback.print_exc()
+    import traceback
+    traceback.print_exc()
 
     if not __kei__.repl:
         sys.exit(1)
@@ -1926,9 +1932,10 @@ def parse_match_stmt(tokens: list, pos: int, all_lines: list, linepos: int, sour
 
 def parse_return_stmt(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
     """解析 return 语句"""
+    returnyield = tokens[pos]['value']
     pos += 1
     if pos >= len(tokens) or (tokens[pos]['type'] == 'op' and tokens[pos]['value'] == ';'):
-        node = {'type': 'return', 'value': None}
+        node = {'type': returnyield, 'value': None}
         return node, pos, linepos
 
     first, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
@@ -1939,9 +1946,9 @@ def parse_return_stmt(tokens: list, pos: int, all_lines: list, linepos: int, sou
         values.append(next_val)
 
     if len(values) == 1:
-        node = {'type': 'return', 'value': values[0]}
+        node = {'type': returnyield, 'value': values[0]}
     else:
-        node = {'type': 'return', 'value': {'type': 'list', 'elements': values}}
+        node = {'type': returnyield, 'value': {'type': 'list', 'elements': values}}
 
     return node, pos, linepos
 
@@ -4246,7 +4253,7 @@ def runtoken(node, env) -> tuple:
                     err_msg,
                     __kei__.stack.copy(),
                     node.get('source', None) if node.get('source', None) is not None else globals()['source'],
-                    node.get('linenum', -1)+1 if node.get('linenum', -1)+1 is not None else globals()['linenum']+1,
+                    node.get('linenum', -1)+1 if node.get('linenum', -1)+1 != 0 else globals()['linenum']+1,
                     __kei__.get('file', '未知文件')
                 )
                 if not __kei__.repl:
@@ -4259,7 +4266,7 @@ def runtoken(node, env) -> tuple:
                 str(e),
                 __kei__.stack.copy(),
                 node.get('source', None) if node.get('source', None) is not None else globals()['source'],
-                node.get('linenum', -1)+1 if node.get('linenum', -1)+1 is not None else globals()['linenum']+1,
+                node.get('linenum', -1)+1 if node.get('linenum', -1)+1 != 0 else globals()['linenum']+1,
                 __kei__.get('file', '未知文件')
             )
             if not __kei__.repl:
@@ -4274,15 +4281,16 @@ def exec(code, env=None):
     if env is None:
         env = {}
 
-    env.update({
-        "__path__": KeiList(["."] + paths),
-        "__name__": KeiString("__main__"),
-        "__env__": KeiDict(env),
-        "__osname__": KeiString(platform.system().lower()),
-    })
+        env.update({
+            "__path__": KeiList(["."] + paths),
+            "__name__": KeiString("__main__"),
+            "__env__": KeiDict(env),
+            "__osname__": KeiString(platform.system().lower()),
+        })
 
-    for name, func in stdlib.func.items():
-        env[name] = func
+        for name, func in stdlib.func.items():
+            env[name] = func
+            exec(stdlib.keistdlib, env)
 
     tokens = token(code)
     tokens = ast(tokens)

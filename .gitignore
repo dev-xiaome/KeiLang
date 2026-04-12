@@ -4,5 +4,6 @@
 !README.md
 !LICENSE
 !lib/
+!lib/*.kei
 !**/*.py
 !kei

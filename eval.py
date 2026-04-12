@@ -6,7 +6,7 @@ import os
 
 import stdlib
 from object import *
-from kei import __kei__, runtoken, get_from_env, process_fstring, find_method, paths, __py_exec__, exec
+from kei import __kei__, runtoken, get_from_env, process_fstring, find_method, paths, __py_exec__, exec, yieldable
 
 def node_literal(node, env) -> tuple: # if node['type'] in {'null', 'int', 'float', 'str', 'bool', 'list', 'dict'}:
     def temp() -> tuple:
@@ -1691,13 +1691,24 @@ def node_class(node, env) -> tuple:
             }
 
             from object import KeiFunction
+            from stdlib import kei
+
             kei_func = KeiFunction(exec_method_obj, env, filename=__kei__.file)
 
             if stmt.get('decorators'):
-                for decorator_node in reversed(stmt['decorators']):
+                is_prop = False
+                for decorator_node in stmt['decorators']:
                     decorator, _ = runtoken(decorator_node, env)
+
+                    if decorator is kei.prop:
+                        is_prop = True
+                        continue
+
                     if callable(decorator):
                         kei_func = decorator(kei_func)
+
+                if is_prop:
+                    kei_func.is_property = True
 
             class_obj['methods_map'][stmt['name']] = original_method_obj
             class_obj['decorated_methods'][stmt['name']] = kei_func
