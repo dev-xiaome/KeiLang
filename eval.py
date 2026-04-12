@@ -1523,7 +1523,7 @@ def node_while(node, env) -> tuple: # if node['type'] in {'while', 'until'}:
 
     return None, False
 
-def node_for(node, env) -> tuple: # if node['type'] == 'for':
+def node_for(node, env) -> tuple:
     vars_list = node['vars']
     iterable_val, _ = runtoken(node['iterable'], env)
 
@@ -1535,16 +1535,14 @@ def node_for(node, env) -> tuple: # if node['type'] == 'for':
     elif isinstance(iterable_val, KeiString):
         items = [KeiString(c) for c in iterable_val.value]
     elif isinstance(iterable_val, KeiDict):
-        items = []
-        for k, v in iterable_val.items.items():
-            items.append(KeiList([KeiString(k), v]))
-    elif isinstance(iterable_val, (list, tuple)):
-        items = iterable_val
-    else:
+        items = [(k, v) for k, v in iterable_val.items.items()]
+    elif hasattr(iterable_val, '__iter__'):
         try:
             items = list(iterable_val)
         except:
             items = [iterable_val]
+    else:
+        items = [iterable_val]
 
     if len(vars_list) == 1:
         for item in items:
@@ -1560,35 +1558,48 @@ def node_for(node, env) -> tuple: # if node['type'] == 'for':
                             break
                     return val, True
     else:
-        for i, item in enumerate(items):
-            if len(vars_list) >= 1:
-                env[vars_list[0]] = KeiInt(i)
-
-            if len(vars_list) >= 2:
-                env[vars_list[1]] = item
-
-            if len(vars_list) > 2:
-                if isinstance(item, (list, tuple, KeiList)):
-                    item_list = item.items if isinstance(item, KeiList) else item
-                    for j in range(2, len(vars_list)):
-                        if j-2 < len(item_list):
-                            env[vars_list[j]] = item_list[j-2]
-                        else:
+        # ✅ 对于 KeiDict，直接遍历键值对
+        if isinstance(iterable_val, KeiDict):
+            for k, v in items:
+                env[vars_list[0]] = k
+                env[vars_list[1]] = v
+                for stmt in node['body']:
+                    val, is_return = runtoken(stmt, env)
+                    if is_return:
+                        if isinstance(val, tuple) and len(val) == 2:
+                            signal, _ = val
+                            if signal == 'break':
+                                return None, False
+                            elif signal == 'continue':
+                                break
+                        return val, True
+        else:
+            for i, item in enumerate(items):
+                if len(vars_list) >= 1:
+                    env[vars_list[0]] = KeiInt(i)
+                if len(vars_list) >= 2:
+                    env[vars_list[1]] = item
+                if len(vars_list) > 2:
+                    if isinstance(item, (list, tuple, KeiList)):
+                        item_list = item.items if isinstance(item, KeiList) else item
+                        for j in range(2, len(vars_list)):
+                            if j-2 < len(item_list):
+                                env[vars_list[j]] = item_list[j-2]
+                            else:
+                                env[vars_list[j]] = undefined
+                    else:
+                        for j in range(2, len(vars_list)):
                             env[vars_list[j]] = undefined
-                else:
-                    for j in range(2, len(vars_list)):
-                        env[vars_list[j]] = undefined
-
-            for stmt in node['body']:
-                val, is_return = runtoken(stmt, env)
-                if is_return:
-                    if isinstance(val, tuple) and len(val) == 2:
-                        signal, _ = val
-                        if signal == 'break':
-                            return None, False
-                        elif signal == 'continue':
-                            break
-                    return val, True
+                for stmt in node['body']:
+                    val, is_return = runtoken(stmt, env)
+                    if is_return:
+                        if isinstance(val, tuple) and len(val) == 2:
+                            signal, _ = val
+                            if signal == 'break':
+                                return None, False
+                            elif signal == 'continue':
+                                break
+                        return val, True
 
     return None, False
 
@@ -1938,19 +1949,38 @@ def node_del(node, env) -> tuple: # if node['type'] == 'del':
             name = target['value']
             if name in env:
                 del env[name]
+
         elif target['type'] == 'index':
             obj, _ = runtoken(target['obj'], env)
             index, _ = runtoken(target['index'], env)
+
             if isinstance(obj, KeiList):
                 idx = index.value if isinstance(index, KeiInt) else int(index)
                 if 0 <= idx < len(obj.items):
                     del obj.items[idx]
+
+            elif isinstance(obj, KeiDict):
+                # ✅ 直接用 index 对象作为键，不要取 .value
+                key = index
+                if key in obj.items:
+                    del obj.items[key]
+
+            else:
+                raise KeiError("TypeError", f"不支持对 {type(obj)} 使用 del 索引删除")
+
         elif target['type'] == 'attr':
             obj, _ = runtoken(target['obj'], env)
             attr = target['attr']
+
             if isinstance(obj, KeiBase):
                 if attr in obj._props:
                     del obj._props[attr]
+            elif isinstance(obj, KeiDict):
+                # ✅ 字典属性删除（虽然字典属性不常见）
+                if attr in obj.items:
+                    del obj.items[attr]
+            else:
+                raise KeiError("TypeError", f"不支持对 {type(obj)} 使用 del 属性删除")
 
     return None, False
 

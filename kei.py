@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.8-8"
+__version__ = "1.8-9"
 
 class Yieldable:
     def __bool__(self):

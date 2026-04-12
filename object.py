@@ -1448,11 +1448,28 @@ class KeiString(KeiBase):
         return self._split(separator)
 
     def _join(self, iterable):
+        # 尝试遍历
+        items = []
+
         if isinstance(iterable, KeiList):
             items = [str(item) for item in iterable.items]
+        elif isinstance(iterable, KeiDict):
+            # ✅ 默认遍历值（和 Python 的 join 行为一致）
+            items = [str(v) for v in iterable.items.values()]
+        elif isinstance(iterable, KeiString):
+            # ✅ 字符串：遍历每个字符
+            items = list(iterable.value)
+        elif hasattr(iterable, '__iter__'):
+            # ✅ 任何可迭代对象
+            try:
+                items = [str(item) for item in iterable]
+            except:
+                items = [str(iterable)]
         else:
             items = [str(iterable)]
+
         return KeiString(self.value.join(items))
+
     def join(self, iterable):
         return self._join(iterable)
 
@@ -2280,6 +2297,10 @@ class KeiDict(KeiBase):
 
     def __dir__(self):
         return list(self._methods.keys())
+
+    def __delitem__(self, key):
+        if key in self.items:
+            del self.items[key]
 
 # ========== 函数类型 ==========
 
