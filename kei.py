@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.8-9"
+__version__ = "1.8-10"
 
 class Yieldable:
     def __bool__(self):
@@ -29,7 +29,7 @@ class KeiState:
     step: object
     error: bool
     var: list
-    env: dict
+    env: dict | None
     recursion: int
     maxrecursion: int
     argv: list
@@ -47,7 +47,7 @@ class KeiState:
             cls._instance.step = False
             cls._instance.error = True
             cls._instance.var = []
-            cls._instance.env = {}
+            cls._instance.env = None
             cls._instance.recursion = 0
             cls._instance.maxrecursion = 1024
             cls._instance.argv = []
@@ -146,8 +146,6 @@ def getname(node, env):
     result = []
     seen = set()
 
-    skip_vars = {'__env__', '__parent__', '__builtins__', 'static', 'prop'}
-
     block_nodes = {
         'try', 'class', 'for', 'function', 'with', 'namespace',
         'if', 'while', 'unless', 'until', 'match'
@@ -182,9 +180,12 @@ def getname(node, env):
                     traverse(n["iterable"], current_depth)
                 return
 
+            if type(n.get("value")) is str and n.get("value").startswith("_"):
+                return
+
             if n.get("type") == "name":
                 name = n["value"]
-                if name not in seen and name not in skip_vars:
+                if name not in seen:
                     seen.add(name)
                     val = runtoken(n, env)[0]
                     result.append([name, val])
@@ -270,8 +271,8 @@ def error(errtype: str | None, info: str, stack: list=[], code:str|None=None, li
 
     print(f"{space} ·")
 
-    import traceback
-    traceback.print_exc()
+    #import traceback
+    #traceback.print_exc()
 
     if not __kei__.repl:
         sys.exit(1)
@@ -1301,21 +1302,44 @@ def process_fstring(template, env):
                 saved_linenum = globals().get("linenum")
                 saved_source = globals().get("source")
 
+                codes = __kei__.code
+
                 # 解析表达式
                 expr_tokens = token(expr)
+                globals()['linenum'] = saved_linenum
+                globals()['source'] = saved_source
+
+                __kei__.code = codes
                 if not expr_tokens:
                     raise KeiError("SyntaxError",
                         f"f-string 表达式无效: {expr}",
                         linenum=saved_linenum)
 
                 expr_ast = ast(expr_tokens)
+                globals()['linenum'] = saved_linenum
+                globals()['source'] = saved_source
+
+                __kei__.code = codes
                 if not expr_ast or not expr_ast[0]:
                     raise KeiError("SyntaxError",
                         f"f-string 表达式解析失败: {expr}",
                         linenum=saved_linenum)
 
                 # 执行表达式
+                if expr_ast[0].get("linenum", None) is not None:
+                    del expr_ast[0]['linenum']
+                if expr_ast[0].get("source", None) is not None:
+                    del expr_ast[0]['source']
+
+                globals()['linenum'] = saved_linenum
+                globals()['source'] = saved_source
+
+                __kei__.code = codes
+
+                step = __kei__.step
+                __kei__.step = False
                 value, _ = runtoken(expr_ast[0], env)
+                __kei__.step = step
                 result.append(str(content(value)))
 
                 # 恢复 linenum/source
@@ -4286,12 +4310,15 @@ def exec(code, env=None):
             "__name__": KeiString("__main__"),
             "__env__": KeiDict(env),
             "__osname__": KeiString(platform.system().lower()),
-            "__file__": __kei__.file
+            "__file__": KeiString(os.path.abspath(__kei__.file))
         })
 
         for name, func in stdlib.func.items():
             env[name] = func
+            step = __kei__.step
+            __kei__.step = False
             exec(stdlib.keistdlib, env)
+            __kei__.step = step
 
     tokens = token(code)
     tokens = ast(tokens)

@@ -155,30 +155,42 @@ class kei:
         sys.exit(code)
 
     @s
-    def print(*text, sep=KeiString(' '), just=KeiInt(0), color=KeiString("null"), flush=KeiBool(True)):
+    def print(*text, sep=KeiString(' '), just=KeiInt(0), color=null, flush=KeiBool(True)):
         kei.check(sep, KeiString, name='print')
         kei.check(just, KeiInt, name='print')
-        kei.check(color, KeiString, name='print')
         kei.check(flush, KeiBool, name='print')
 
         assert isinstance(sep, KeiString)
         assert isinstance(just, KeiInt)
-        assert isinstance(color, KeiString)
         assert isinstance(flush, KeiBool)
 
-        sep     = sep.value
-        just    = just.value
+        sep_str = sep.value
+        just_val = just.value
+        flush_val = flush.value
+
+        # 构建文本
+        text_str = sep_str.join(content(t) for t in text)
+
+        # 处理对齐
         try:
-            spaces = abs(just) - kei.cnlen(sep.join(content(t) for t in text))
+            spaces = abs(just_val) - kei.cnlen(text_str)
         except:
             spaces = 0
-        color   = color.value
-        flush   = flush.value
 
-        rainbow = False
+        if just_val > 0:
+            text_str = " " * spaces + text_str
+        elif just_val < 0:
+            text_str = text_str + " " * spaces
 
-        colors  = {
-            'null': '0',
+        # 处理颜色
+        color_str = "null"
+        if isinstance(color, KeiString):
+            color_str = color.value
+        elif color is not null:
+            color_str = str(color)
+
+        colors = {
+            'null': '',
             'black': '30',
             'red': '31',
             'green': '32',
@@ -187,8 +199,6 @@ class kei:
             'purple': '35',
             'cyan': '36',
             'white': '37',
-            'rainbow': 'rainbow',
-
             'black+': '90',
             'red+': '91',
             'green+': '92',
@@ -197,75 +207,65 @@ class kei:
             'purple+': '95',
             'cyan+': '96',
             'white+': '97',
-            'rainbow+': 'rainbow+',
         }
 
-        if colors[color] not in {"rainbow", "rainbow+"}:
-            print(f"\033[{colors[color] if color in colors else '0'}m", end='')
+        # 彩虹模式
+        if color_str in ('rainbow', 'rainbow+'):
+            # 生成彩虹渐变
+            gradient = []
+            for i in range(len(text_str)):
+                pos = (i / max(1, len(text_str) - 1)) * 5
+                segment = int(pos)
+                frac = pos - segment
+
+                if color_str == 'rainbow':
+                    colors_rgb = [
+                        (255, 0, 0),
+                        (255, 255, 0),
+                        (0, 255, 0),
+                        (0, 255, 255),
+                        (0, 0, 255),
+                        (255, 0, 255)
+                    ]
+
+                elif color_str == 'rainbow+':
+                    colors_rgb = [
+                        (255, 128, 128),
+                        (255, 255, 128),
+                        (128, 255, 128),
+                        (128, 255, 255),
+                        (128, 128, 255),
+                        (255, 128, 255),
+                    ]
+
+                if segment >= 5:
+                    r, g, b = colors_rgb[5]
+                else:
+                    r1, g1, b1 = colors_rgb[segment]
+                    r2, g2, b2 = colors_rgb[segment + 1]
+                    r = int(r1 * (1 - frac) + r2 * frac)
+                    g = int(g1 * (1 - frac) + g2 * frac)
+                    b = int(b1 * (1 - frac) + b2 * frac)
+
+                ansi = 16 + (36 * (r // 51)) + (6 * (g // 51)) + (b // 51)
+                gradient.append(f"\033[38;5;{ansi}m")
+
+            # 输出彩虹文本
+            result = []
+            for i, ch in enumerate(text_str):
+                result.append(f"{gradient[i]}{ch}\033[0m")
+            output = ''.join(result)
         else:
-            rainbow = "+" if colors[color] == "rainbow+" else "-"
-
-        text = sep.join([content(t) for t in text])
-
-        # 定义渐变颜色范围 (0-255 RGB)
-        # 这里用 ANSI 256色
-        def rgb_to_ansi(r, g, b):
-            # 简单的 RGB 到 256色转换
-            return 16 + (36 * (r // 51)) + (6 * (g // 51)) + (b // 51)
-
-        # 生成彩虹渐变 (红->黄->绿->青->蓝->紫)
-        gradient = []
-        for i in range(len(text)):
-            # 计算颜色位置 (0-5 循环，但平滑过渡)
-            pos = (i / max(1, len(text) - 1)) * 5
-            segment = int(pos)
-            frac = pos - segment
-
-            # 相邻两个颜色的混合
-            colors_rgb = ([
-                (255, 0, 0),      # 红
-                (255, 255, 0),    # 黄
-                (0, 255, 0),      # 绿
-                (0, 255, 255),    # 青
-                (0, 0, 255),      # 蓝
-                (255, 0, 255),    # 紫
-            ] if rainbow != "+" else [
-                (255, 128, 128),  # 亮红
-                (255, 255, 128),  # 亮黄
-                (128, 255, 128),  # 亮绿
-                (128, 255, 255),  # 亮青
-                (128, 128, 255),  # 亮蓝
-                (255, 128, 255),  # 亮紫
-            ])
-
-            if segment >= 5:
-                r, g, b = colors_rgb[5]
+            # 普通颜色
+            color_code = colors.get(color_str, '')
+            if color_code:
+                output = f"\033[{color_code}m{text_str}\033[0m"
             else:
-                r1, g1, b1 = colors_rgb[segment]
-                r2, g2, b2 = colors_rgb[segment + 1]
+                output = text_str
 
-                r = int(r1 * (1 - frac) + r2 * frac)
-                g = int(g1 * (1 - frac) + g2 * frac)
-                b = int(b1 * (1 - frac) + b2 * frac)
-
-            gradient.append(rgb_to_ansi(r, g, b))
-
-        # 打印渐变文本
-        if just > 0:
-            print(" " * spaces, end='', flush=flush)
-
-        for i, ch in enumerate(text):
-            if rainbow:
-                print(f"\033[38;5;{gradient[i]}m{ch}\033[0m", end='', flush=flush)
-            else:
-                print(f"{ch}", end='', flush=flush)
-
-        if just < 0:
-            print(" " * spaces, end='', flush=flush)
-
-        print("\033[0m", end='', flush=flush)
-
-        return KeiString(text)
+        # 输出
+        print(output, end='', flush=flush_val)
+        return KeiString(text_str)
 
     @s
     def println(*args, **kwargs):

@@ -1804,7 +1804,7 @@ def _load_kei_module(module_path, module_name, env, __path__):
                     "__name__": KeiString(f"__{module_name}__"),
                     "__env__": KeiDict(env),
                     "__osname__": KeiString(platform.system().lower()),
-                    "__file__": __kei__.file
+                    "__file__": KeiString(os.path.abspath(__kei__.file))
                 }
                 module_env["__env__"] = module_env
 

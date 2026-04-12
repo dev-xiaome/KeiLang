@@ -138,9 +138,6 @@ class KeiREPL:
         if not line:
             return True
         try:
-            if self.env is None:
-                self.env = None
-
             from kei import __kei__
 
             try:
@@ -155,7 +152,6 @@ class KeiREPL:
 
     def run(self):
         self.print_banner()
-        self.env = {}
 
         # 单行模式：只读取一次
         if self.single:
