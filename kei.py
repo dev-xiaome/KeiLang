@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.8-10"
+__version__ = "1.8-11"
 
 class Yieldable:
     def __bool__(self):
@@ -143,6 +143,9 @@ def debug_print(*args, **kwargs):
         print("[DEBUG]", *args, **kwargs)
 
 def getname(node, env):
+    error = __kei__.error
+    __kei__.error = False
+
     result = []
     seen = set()
 
@@ -174,60 +177,63 @@ def getname(node, env):
         if current_depth > 0:
             return
 
-        if isinstance(n, dict):
-            if n.get("type") in block_nodes:
-                if n.get("type") == "for" and "iterable" in n:
-                    traverse(n["iterable"], current_depth)
-                return
+        try:
+            if isinstance(n, dict):
+                if n.get("type") in block_nodes:
+                    if n.get("type") == "for" and "iterable" in n:
+                        traverse(n["iterable"], current_depth)
+                    return
 
-            if type(n.get("value")) is str and n.get("value").startswith("_"):
-                return
+                if type(n.get("value")) is str and n.get("value").startswith("_"):
+                    return
 
-            if n.get("type") == "name":
-                name = n["value"]
-                if name not in seen:
-                    seen.add(name)
-                    val = runtoken(n, env)[0]
-                    result.append([name, val])
+                if n.get("type") == "name":
+                    name = n["value"]
+                    if name not in seen:
+                        seen.add(name)
+                        val = runtoken(n, env)[0]
+                        result.append([name, val])
 
-            if n.get("type") == "attr":
-                full_name = get_full_name(n)
-                if full_name and full_name not in seen:
-                    # 检查是否要跳过
-                    base_name = full_name.split('.')[0]
-                    if base_name not in skip_vars:
+                if n.get("type") == "attr":
+                    full_name = get_full_name(n)
+                    if full_name and full_name not in seen:
+                        # 检查是否要跳过
+                        base_name = full_name.split('.')[0]
                         seen.add(full_name)
                         val = runtoken(n, env)[0]
                         result.append([full_name, val])
-                return result
+                    return result
 
-            if n.get("type") == "index":
-                full_name = get_full_name(n)
-                if full_name and full_name not in seen:
-                    base_name = full_name.split('[')[0]
-                    if base_name not in skip_vars:
+                if n.get("type") == "index":
+                    full_name = get_full_name(n)
+                    if full_name and full_name not in seen:
+                        base_name = full_name.split('[')[0]
                         seen.add(full_name)
                         val = runtoken(n, env)[0]
                         result.append([full_name, val])
-                return result
+                    return result
 
-            if n.get("type") == "slice":
-                full_name = get_full_name(n)
-                if full_name and full_name not in seen:
-                    base_name = full_name.split('[')[0]
-                    if base_name not in skip_vars:
+                if n.get("type") == "slice":
+                    full_name = get_full_name(n)
+                    if full_name and full_name not in seen:
+                        base_name = full_name.split('[')[0]
                         seen.add(full_name)
                         val = runtoken(n, env)[0]
                         result.append([full_name, val])
-                return result
+                    return result
 
-            for v in n.values():
-                traverse(v, current_depth)
-        elif isinstance(n, list):
-            for item in n:
-                traverse(item, current_depth)
+                for v in n.values():
+                    traverse(v, current_depth)
+            elif isinstance(n, list):
+                for item in n:
+                    traverse(item, current_depth)
+        except:
+            return undefined
 
     traverse(node, 0)
+
+    __kei__.error = error
+
     return result
 
 def error(errtype: str | None, info: str, stack: list=[], code:str|None=None, linenum=None, filename='未知文件') -> None:
@@ -271,8 +277,8 @@ def error(errtype: str | None, info: str, stack: list=[], code:str|None=None, li
 
     print(f"{space} ·")
 
-    #import traceback
-    #traceback.print_exc()
+    import traceback
+    traceback.print_exc()
 
     if not __kei__.repl:
         sys.exit(1)
@@ -329,7 +335,7 @@ def dict_diff(d1, d2, path="", seen=None):
         if key not in d1:
             added.append(full_path)
 
-    return added, removed, changed
+    return added, removed, None
 
 def gethash(obj, depth=0):
     """递归计算对象的哈希值"""
@@ -4084,7 +4090,7 @@ def runtoken(node, env) -> tuple:
 
                 elif cmd == "c":
                     import repl
-                    __kei__.step = False
+                    step = __kei__.step
 
                     try:
                         __kei__.error = False
@@ -4097,7 +4103,7 @@ def runtoken(node, env) -> tuple:
                     finally:
                         __kei__.error = True
                         __kei__.repl = False
-                        __kei__.step = True
+                        __kei__.step = step
 
                 elif cmd.startswith("q"):
                     sys.exit(0)

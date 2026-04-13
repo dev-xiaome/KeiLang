@@ -1062,20 +1062,31 @@ class kei:
     def isclass(obj):
         return true if isinstance(obj, KeiClass) else false
 
-    class open(KeiBase):
-        """KeiLang open 函数类"""
-        def __init__(self, file, mode='r', encoding='utf-8'):
+    class file(KeiBase):
+        """KeiLang 文件对象类"""
+
+        def __init__(self, path, mode=KeiString('r'), encoding=KeiString('utf-8')):
             super().__init__("file")
 
+            kei.check(path, KeiString, name="file")
+            kei.check(mode, KeiString, name="file")
+            kei.check(encoding, KeiString, name="file")
+
             # 转换参数
-            if isinstance(file, KeiString):
-                file = file.value
+            if isinstance(path, KeiString):
+                path = path.value
             if isinstance(mode, KeiString):
                 mode = mode.value
             if isinstance(encoding, KeiString):
                 encoding = encoding.value
 
-            self._file = open(file, mode, encoding=encoding)
+            # 底层文件句柄（开发者可读，但约定为内部）
+            self._handle = open(path, mode, encoding=encoding)
+
+            # 公开属性（开发者可直接访问）
+            self.path = path
+            self.mode = mode
+            self.encoding = encoding
 
             self._methods = {
                 "read": self.read,
@@ -1090,6 +1101,7 @@ class kei:
                 "remove": self.remove,
             }
 
+        # ========== 上下文管理器 ==========
         def __enter__(self):
             return self
 
@@ -1097,43 +1109,45 @@ class kei:
             self.close()
             return False
 
+        # ========== 文件操作 ==========
         def remove(self):
+            """删除文件"""
             import os
-            os.remove(self._file.name)
+            os.remove(self.path)
 
         def read(self, size=-1):
             if isinstance(size, KeiInt):
                 size = size.value
-            return KeiString(self._file.read(size))
+            return KeiString(self._handle.read(size))
 
         def readline(self, size=-1):
             if isinstance(size, KeiInt):
                 size = size.value
-            return KeiString(self._file.readline(size))
+            return KeiString(self._handle.readline(size))
 
         def readlines(self, hint=-1):
             if isinstance(hint, KeiInt):
                 hint = hint.value
-            lines = self._file.readlines(hint)
-            return KeiList([KeiString(line) for line in lines])
+            lines = self._handle.readlines(hint)
+            return KeiList([KeiString(line.rstrip('\n')) for line in lines])
 
         def write(self, text):
             if isinstance(text, KeiString):
                 text = text.value
-            return KeiInt(self._file.write(text))
+            return KeiInt(self._handle.write(text))
 
         def writelines(self, lines):
             if isinstance(lines, KeiList):
                 lines = [line.value if isinstance(line, KeiString) else str(line) for line in lines.items]
-            self._file.writelines(lines)
+            self._handle.writelines(lines)
             return null
 
         def close(self):
-            self._file.close()
+            self._handle.close()
             return null
 
         def flush(self):
-            self._file.flush()
+            self._handle.flush()
             return null
 
         def seek(self, offset, whence=0):
@@ -1141,10 +1155,21 @@ class kei:
                 offset = offset.value
             if isinstance(whence, KeiInt):
                 whence = whence.value
-            return KeiInt(self._file.seek(offset, whence))
+            return KeiInt(self._handle.seek(offset, whence))
 
         def tell(self):
-            return KeiInt(self._file.tell())
+            return KeiInt(self._handle.tell())
+
+        # ========== 属性访问 ==========
+        @property
+        def closed(self):
+            """文件是否已关闭"""
+            return self._handle.closed
+
+        @property
+        def name(self):
+            """文件名（别名）"""
+            return self.path
 
     class decorator:
         def __init__(self, name):
@@ -1227,7 +1252,7 @@ func = {
     "recursion": kei.recursion,
     "static": kei.static,
     "prop": kei.prop,
-    "open": kei.open,
+    "file": kei.file,
     "any": object,
     "int": KeiInt,
     "float": KeiFloat,

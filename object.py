@@ -1374,6 +1374,7 @@ class KeiString(KeiBase):
             "center": self._center,
             "append": self._append,
             "push": self._push,
+            "splitlines": self._splitlines,
         }
 
     def _append(self, *values):
@@ -1385,6 +1386,11 @@ class KeiString(KeiBase):
         return KeiString(self.value)
     def append(self, *values):
         return self._append(*values)
+
+    def _splitlines(self):
+        return KeiList(self.value.splitlines())
+    def splitlines(self):
+        return self._splitlines()
 
     def _push(self, *values):
         for value in values:
@@ -2517,6 +2523,9 @@ class KeiInstance(KeiBase):
 
     def __getitem__(self, key):
         # 先查自己的方法
+        if key in self._attrs:
+            return self._attrs[key]
+
         method = self._get_method(key)
         if method:
             if hasattr(method, 'is_property') and method.is_property:
@@ -2565,6 +2574,31 @@ class KeiInstance(KeiBase):
                 return method.bind(self)(*args, **kwargs)
             return method(*args, **kwargs)
         raise KeiError("TypeError", f"{self} 实例不可调用")
+
+    # ========== 上下文管理器支持 ==========
+    def __enter__(self):
+        """进入 with 语句时调用"""
+        method = self._get_method('__enter__')
+        if method:
+            if isinstance(method, KeiMethod):
+                return method.bind(self)()
+            if callable(method):
+                return method(self)
+            return method()
+        # 如果没有 __enter__，返回 self（像普通对象一样）
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """退出 with 语句时调用"""
+        method = self._get_method('__exit__')
+        if method:
+            if isinstance(method, KeiMethod):
+                return method.bind(self)(exc_type, exc_val, exc_tb)
+            if callable(method):
+                return method(self, exc_type, exc_val, exc_tb)
+            return method(exc_type, exc_val, exc_tb)
+        # 如果没有 __exit__，默认不处理异常
+        return False
 
     def __dir__(self):
         return list(self._attrs.keys())
