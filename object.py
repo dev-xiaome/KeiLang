@@ -2321,17 +2321,6 @@ class KeiFunction(KeiBase):
         self.is_property = False
         self.is_static = False
 
-        # 使用传入的 env 而不是 __kei__.env
-        if 'decorators' in func_obj:
-            from kei import runtoken
-            from stdlib import kei
-            for dec_node in func_obj['decorators']:
-                obj, _ = runtoken(dec_node, env)
-                if obj is kei.prop:
-                    self.is_property = True
-                if obj is kei.static:
-                    self.is_static = True
-
     def __call__(self, *args, linecode=None, name=None, **kwargs):
         from kei import runtoken, __kei__, yieldable
 
@@ -2656,17 +2645,6 @@ class KeiMethod(KeiBase):
         self.__name__ = method_obj['name']
         self.is_static = False
         self.is_property = False
-
-        # 检查装饰器
-        if 'decorators' in method_obj:
-            from stdlib import kei
-            from kei import runtoken, __kei__
-            for dec_node in method_obj['decorators']:
-                obj, _ = runtoken(dec_node, __kei__.env.copy())
-                if obj is kei.prop:
-                    self.is_property = True
-                if obj is kei.static:
-                    self.is_static = True
 
     def bind(self, instance: KeiInstance) -> 'KeiBoundMethod':
         # ✅ 修复：优先使用 decorated_methods 中的版本

@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.8-11"
+__version__ = "1.8-12"
 
 class Yieldable:
     def __bool__(self):
@@ -277,8 +277,8 @@ def error(errtype: str | None, info: str, stack: list=[], code:str|None=None, li
 
     print(f"{space} ·")
 
-    import traceback
-    traceback.print_exc()
+    #import traceback
+    #traceback.print_exc()
 
     if not __kei__.repl:
         sys.exit(1)
@@ -1101,6 +1101,11 @@ def ast(tokenlines: list) -> list:
 
         if thetoken == "is":
             result.append({"type":"op","value":"is", 'linenum':linetokens[pos][1]})
+            pos += 1
+            continue
+
+        if thetoken == "isa":
+            result.append({"type":"op","value":"isa", 'linenum':linetokens[pos][1]})
             pos += 1
             continue
 
@@ -2859,14 +2864,12 @@ def parse_atom(tokens: list, pos: int, in_call=False, all_lines=None, linepos=0)
         return None, pos, linepos
     t = tokens[pos]
 
-    if t["type"] == "symbol" and t["value"] == "}":
-        return None, pos, linepos
-
-    if t['type'] == 'name' and t['value'] == 'fn':
+    if t['type'] == 'name' and t['value'] == 'lambda':
         pos += 1
         params = []
+        # 解析参数列表，直到遇到 ':'
         while pos < len(tokens):
-            if tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == '=>':
+            if tokens[pos]['type'] == 'symbol' and tokens[pos]['value'] == ':':
                 pos += 1
                 break
             elif tokens[pos]['type'] == 'name':
@@ -2876,9 +2879,20 @@ def parse_atom(tokens: list, pos: int, in_call=False, all_lines=None, linepos=0)
                     pos += 1
             else:
                 break
+        # 解析表达式体
         expr, pos, linepos = parse_expr(tokens, pos, all_lines=all_lines, linepos=linepos)
-        node = {'type': 'lambda', 'params': params, 'body': expr}
+
+        # 构建 lambda 函数对象
+        node = {
+            'type': 'lambda',
+            'params': params,
+            'body': expr
+        }
+
         return node, pos, linepos
+
+    if t["type"] == "symbol" and t["value"] == "}":
+        return None, pos, linepos
 
     if t["type"] == "name" and t["value"] in keywords:
         return None, pos, linepos
@@ -2930,10 +2944,14 @@ def parse_atom(tokens: list, pos: int, in_call=False, all_lines=None, linepos=0)
         return node, pos, linepos
 
     if t["type"] == "symbol" and t["value"] == "(":
+
         pos += 1
         expr, pos, linepos = parse_expr(tokens, pos, in_call, all_lines=all_lines, linepos=linepos)
+
         if pos >= len(tokens) or tokens[pos]["type"] != "symbol" or tokens[pos]["value"] != ")":
+
             raise KeiError("SyntaxError", "缺少右括号")
+
         pos += 1
         node = expr
         while pos < len(tokens):
@@ -3088,7 +3106,8 @@ def parse_expr(tokens: list, pos: int, in_call=False, allow_assign=False, in_com
 
     while pos < len(tokens):
         t = tokens[pos]
-        if t['value'] == 'if' and not in_comp:
+
+        if t['type'] == 'name' and t['value'] == 'if' and not in_comp:
             if left is None:
                 raise KeiError("SyntaxError", "三目运算符缺少真值")
 
@@ -3111,7 +3130,7 @@ def parse_expr(tokens: list, pos: int, in_call=False, allow_assign=False, in_com
             node = {'type': 'ternary', 'cond': cond, 'true_val': true_val, 'false_val': false_val}
             return node, pos, linepos
 
-        if t['value'] == 'unless' and not in_comp:
+        if t['type'] == 'name' and t['value'] == 'unless' and not in_comp:
             if left is None:
                 raise KeiError("SyntaxError", "三目运算符缺少真值")
 
@@ -3187,7 +3206,7 @@ def parse_compare(tokens, pos, in_call=False, allow_assign=False, in_comp=False,
         t = tokens[pos]
         if t["type"] != "op":
             break
-        if t["value"] in {"==", "!=", "<", ">", "<=", ">=", "in", "is"}:
+        if t["value"] in {"==", "!=", "<", ">", "<=", ">=", "in", "is", "isa"}:
             op = t["value"]
             pos += 1
             right, new_pos, linepos = parse_addsub(tokens, pos, in_call, allow_assign, in_comp, all_lines, linepos)
@@ -4328,6 +4347,8 @@ def exec(code, env=None):
 
     tokens = token(code)
     tokens = ast(tokens)
+
+    ret = null
 
     for node in tokens:
         ret = runtoken(node, env)[0]

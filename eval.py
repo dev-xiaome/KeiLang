@@ -8,6 +8,117 @@ import stdlib
 from object import *
 from kei import __kei__, runtoken, get_from_env, process_fstring, find_method, paths, __py_exec__, exec, yieldable
 
+def _get_exported_dict(module_env, module_dict):
+    """从模块环境中构建导出字典（统一规则）"""
+    # 特殊允许的私有变量
+    ALLOWED_PRIVATE = {'__import__', '__all__'}
+
+    # 获取 __all__
+    all_names = None
+    if '__all__' in module_env:
+        all_val = module_env['__all__']
+        if isinstance(all_val, KeiList):
+            all_names = [item.value if isinstance(item, KeiString) else str(item) for item in all_val.items]
+        elif isinstance(all_val, list):
+            all_names = [str(item) for item in all_val]
+        elif isinstance(all_val, KeiString):
+            all_names = [all_val.value]
+        elif isinstance(all_val, str):
+            all_names = [all_val]
+
+    # 构建模块字典（所有变量，包括私有）
+    for k, v in module_env.items():
+        module_dict[k] = v
+
+    # 构建导出字典
+    exported_dict = {}
+
+    if all_names is not None:
+        # 有 __all__：导入 __all__ 里的（即使是 _ 开头）
+        for name in all_names:
+            if name in module_dict:
+                exported_dict[name] = module_dict[name]
+            elif name in module_env:
+                exported_dict[name] = module_env[name]
+
+        # 额外导入 ALLOWED_PRIVATE 里的（只要存在）
+        for name in ALLOWED_PRIVATE:
+            if name in module_dict:
+                exported_dict[name] = module_dict[name]
+            elif name in module_env:
+                exported_dict[name] = module_env[name]
+    else:
+        # 没有 __all__：导出非 _ 开头的 + ALLOWED_PRIVATE
+        for k, v in module_dict.items():
+            if not k.startswith('_') or k in ALLOWED_PRIVATE:
+                exported_dict[k] = v
+
+    return exported_dict
+
+def _load_kei_module(module_path, module_name, env, __path__):
+    """加载 .kei 模块，返回模块字典和是否成功"""
+
+    try:
+        oldfilename = __kei__.file
+
+        kei_files = [os.path.join(path, f"{module_path}.kei") for path in __path__]
+
+        for keifile in kei_files:
+            if os.path.isfile(keifile):
+                __kei__.file = os.path.abspath(keifile)
+
+                with open(keifile, "r", encoding="utf-8") as f:
+                    code = f.read()
+
+                module_env = {
+                    "__path__": KeiList(["."] + paths),
+                    "__name__": KeiString(f"__{module_name}__"),
+                    "__env__": KeiDict(env),
+                    "__osname__": KeiString(platform.system().lower()),
+                    "__file__": KeiString(os.path.abspath(__kei__.file))
+                }
+                module_env["__env__"] = module_env
+
+                exec(code, module_env)
+
+                # 获取导出字典
+                module_dict = {}
+                exported_dict = _get_exported_dict(module_env, module_dict)
+
+                return exported_dict, module_env, True
+    finally:
+        __kei__.file = oldfilename
+
+    return None, None, False
+
+def _load_py_module(module_path, __path__):
+    """加载 .py 模块，返回模块环境"""
+    py_files = [os.path.join(path, f"{module_path}.py") for path in __path__]
+
+    for pyfile in py_files:
+        if os.path.isfile(pyfile):
+            with open(pyfile, "r", encoding="utf-8") as f:
+                code = f.read()
+
+            module_env = {}.copy()
+            __py_exec__(code, module_env)
+            return module_env, True
+
+    return None, False
+
+def _call_import_hook(exported_dict):
+    """如果模块有 __import__ 函数，执行它"""
+    if "__import__" in exported_dict:
+        importfunc = exported_dict.get("__import__")
+        if callable(importfunc):
+            importfunc()
+
+def unwrap_prop(obj):
+    """递归展开 prop，直到不是 prop 为止"""
+    while hasattr(obj, 'is_property') and obj.is_property and callable(obj):
+        obj = obj()
+    return obj
+
 def node_literal(node, env) -> tuple: # if node['type'] in {'null', 'int', 'float', 'str', 'bool', 'list', 'dict'}:
     def temp() -> tuple:
         if node['type'] == 'null':
@@ -130,32 +241,13 @@ def node_match(node, env) -> tuple: # if node['type'] == 'match':
 
 def node_name(node, env) -> tuple: # if node['type'] == 'name':
     name_value = node['value']
+
     while isinstance(name_value, dict) and 'value' in name_value:
         name_value = name_value['value']
 
-    if name_value == "..." and "..." in env:
-        return env["..."], False
-
-    parts = name_value.split('.') if '.' in name_value else [name_value]
-
     # 关键：统一向上查找
-    obj = get_from_env(parts[0], env)
-
-    if obj is undefined:
-        return undefined, False
-
-    for part in parts[1:]:
-        if isinstance(obj, KeiBase):
-            obj = obj[part]
-        elif isinstance(obj, dict):
-            obj = obj.get(part, undefined)
-        else:
-            try:
-                obj = getattr(obj, part)
-            except AttributeError:
-                return undefined, False
-        if obj is undefined:
-            return undefined, False
+    obj = get_from_env(name_value, env)
+    obj = unwrap_prop(obj)
 
     return obj, False
 
@@ -844,6 +936,14 @@ def node_binop(node, env) -> tuple: # if node['type'] == 'binop':
                 left, l_flag = runtoken(node['left'], env)
                 right, r_flag = runtoken(node['right'], env)
 
+                result = true if left is right else false
+
+                return result, (l_flag or r_flag)
+
+            elif op == 'isa':
+                left, l_flag = runtoken(node['left'], env)
+                right, r_flag = runtoken(node['right'], env)
+
                 if isinstance(right, KeiClass):
                     if isinstance(left, KeiInstance):
                         result = true if left._class == right else false
@@ -997,37 +1097,11 @@ def node_call(node, env) -> tuple: # if node['type'] in {'call', 'methodcall'}:
         name = node['name']
         stdlib.kei.setenv(env)
 
-        if '.' in name:
-            parts = name.split('.')
-            current = env.get(parts[0])
-            if current is None:
-                return undefined, False
-
-            for part in parts[1:-1]:
-                if isinstance(current, KeiBase):
-                    current = current[part]
-                elif isinstance(current, dict):
-                    current = current.get(part, undefined)
-                else:
-                    current = getattr(current, part, undefined)
-                if current is undefined:
-                    raise KeiError("NameError", f"属性 {part} 未定义")
-
-            method_name = parts[-1]
-            method = current[method_name] if isinstance(current, KeiBase) else getattr(current, method_name, None)
-
-            if method is not None and callable(method):
-                if isinstance(method, KeiFunction):
-                    result = method(linecode=call_source, name=get_from_env('__caller__', env, '<global>'), *args, **kwargs)
-                else:
-                    result = method(*args, **kwargs)
-
-                return result, False
-            raise KeiError("NameError", f"对象没有方法 {method_name}")
-
         func_obj = get_from_env(name, env)
 
         if func_obj is not undefined:
+            func_obj = unwrap_prop(func_obj)
+
             if func_obj is stdlib.kei.super:
                 if 'self' not in env:
                     raise KeiError("NameError", "super 只能在类方法中使用")
@@ -1109,6 +1183,7 @@ def node_call(node, env) -> tuple: # if node['type'] in {'call', 'methodcall'}:
                 raise KeiError("TypeError", f"{obj} 不可调用")
 
         method = obj[method_name] if isinstance(obj, KeiBase) else getattr(obj, method_name, None)
+        method = unwrap_prop(method)
 
         if method is undefined or not callable(method):
             raise KeiError("SyntaxError", f"方法 {method_name} 调用失败")
@@ -1629,19 +1704,28 @@ def node_function(node, env) -> tuple:
 
     # 应用装饰器
     if node.get('decorators'):
-        for decorator_node in reversed(node['decorators']):
-            decorator, _ = runtoken(decorator_node, env)
+        # 1. 先找所有装饰器，记录是否有 prop/static
+        has_prop = False
+        has_static = False
+        decorators = []
+        for dec_node in node['decorators']:
+            decorator, _ = runtoken(dec_node, env)
+            decorators.append(decorator)
+            if decorator is stdlib.kei.prop:
+                has_prop = True
+            elif decorator is stdlib.kei.static:
+                has_static = True
+
+        # 2. 执行所有装饰器
+        for decorator in decorators:
             if callable(decorator):
-                new_func = decorator(kei_func)
-                # ✅ 自动保留原始函数信息
-                if hasattr(kei_func, 'func_obj'):
-                    if not hasattr(new_func, 'func_obj'):
-                        new_func.func_obj = kei_func.func_obj
-                    if not hasattr(new_func, 'is_property'):
-                        new_func.is_property = getattr(kei_func, 'is_property', False)
-                    if not hasattr(new_func, 'is_static'):
-                        new_func.is_static = getattr(kei_func, 'is_static', False)
-                kei_func = new_func
+                kei_func = decorator(kei_func)
+
+        # 3. 最后设置标志
+        if has_prop:
+            kei_func.is_property = True
+        if has_static:
+            kei_func.is_static = True
 
     if node['name']:
         env[node['name']] = kei_func
@@ -1701,25 +1785,30 @@ def node_class(node, env) -> tuple:
                 'closure': env
             }
 
-            from object import KeiFunction
-            from stdlib import kei
-
             kei_func = KeiFunction(exec_method_obj, env, filename=__kei__.file)
 
             if stmt.get('decorators'):
-                is_prop = False
+                has_prop = False
+                has_static = False
+                decorators = []
                 for decorator_node in stmt['decorators']:
                     decorator, _ = runtoken(decorator_node, env)
+                    decorators.append(decorator)
+                    if decorator is stdlib.kei.prop:
+                        has_prop = True
+                    elif decorator is stdlib.kei.static:
+                        has_static = True
 
-                    if decorator is kei.prop:
-                        is_prop = True
-                        continue
-
+                # 执行所有装饰器（prop 和 static 也会执行，但它们的 __call__ 返回原函数）
+                for decorator in decorators:
                     if callable(decorator):
                         kei_func = decorator(kei_func)
 
-                if is_prop:
+                # 最后设置标志
+                if has_prop:
                     kei_func.is_property = True
+                if has_static:
+                    kei_func.is_static = True
 
             class_obj['methods_map'][stmt['name']] = original_method_obj
             class_obj['decorated_methods'][stmt['name']] = kei_func
@@ -1736,111 +1825,6 @@ def node_class(node, env) -> tuple:
 
     env[node['name']] = kei_class
     return None, False
-
-def _get_exported_dict(module_env, module_dict):
-    """从模块环境中构建导出字典（统一规则）"""
-    # 特殊允许的私有变量
-    ALLOWED_PRIVATE = {'__import__', '__all__'}
-
-    # 获取 __all__
-    all_names = None
-    if '__all__' in module_env:
-        all_val = module_env['__all__']
-        if isinstance(all_val, KeiList):
-            all_names = [item.value if isinstance(item, KeiString) else str(item) for item in all_val.items]
-        elif isinstance(all_val, list):
-            all_names = [str(item) for item in all_val]
-        elif isinstance(all_val, KeiString):
-            all_names = [all_val.value]
-        elif isinstance(all_val, str):
-            all_names = [all_val]
-
-    # 构建模块字典（所有变量，包括私有）
-    for k, v in module_env.items():
-        module_dict[k] = v
-
-    # 构建导出字典
-    exported_dict = {}
-
-    if all_names is not None:
-        # 有 __all__：导入 __all__ 里的（即使是 _ 开头）
-        for name in all_names:
-            if name in module_dict:
-                exported_dict[name] = module_dict[name]
-            elif name in module_env:
-                exported_dict[name] = module_env[name]
-
-        # 额外导入 ALLOWED_PRIVATE 里的（只要存在）
-        for name in ALLOWED_PRIVATE:
-            if name in module_dict:
-                exported_dict[name] = module_dict[name]
-            elif name in module_env:
-                exported_dict[name] = module_env[name]
-    else:
-        # 没有 __all__：导出非 _ 开头的 + ALLOWED_PRIVATE
-        for k, v in module_dict.items():
-            if not k.startswith('_') or k in ALLOWED_PRIVATE:
-                exported_dict[k] = v
-
-    return exported_dict
-
-def _load_kei_module(module_path, module_name, env, __path__):
-    """加载 .kei 模块，返回模块字典和是否成功"""
-
-    try:
-        oldfilename = __kei__.file
-
-        kei_files = [os.path.join(path, f"{module_path}.kei") for path in __path__]
-
-        for keifile in kei_files:
-            if os.path.isfile(keifile):
-                __kei__.file = os.path.abspath(keifile)
-
-                with open(keifile, "r", encoding="utf-8") as f:
-                    code = f.read()
-
-                module_env = {
-                    "__path__": KeiList(["."] + paths),
-                    "__name__": KeiString(f"__{module_name}__"),
-                    "__env__": KeiDict(env),
-                    "__osname__": KeiString(platform.system().lower()),
-                    "__file__": KeiString(os.path.abspath(__kei__.file))
-                }
-                module_env["__env__"] = module_env
-
-                exec(code, module_env)
-
-                # 获取导出字典
-                module_dict = {}
-                exported_dict = _get_exported_dict(module_env, module_dict)
-
-                return exported_dict, module_env, True
-    finally:
-        __kei__.file = oldfilename
-
-    return None, None, False
-
-def _load_py_module(module_path, __path__):
-    """加载 .py 模块，返回模块环境"""
-    py_files = [os.path.join(path, f"{module_path}.py") for path in __path__]
-
-    for pyfile in py_files:
-        if os.path.isfile(pyfile):
-            with open(pyfile, "r", encoding="utf-8") as f:
-                code = f.read()
-
-            module_env = {}.copy()
-            __py_exec__(code, module_env)
-            return module_env, True
-
-    return None, False
-
-def _call_import_hook(exported_dict):
-    """如果模块有 __import__ 函数，执行它"""
-    if "__import__" in exported_dict:
-        importfunc = exported_dict.get("__import__")
-        if callable(importfunc):
-            importfunc()
 
 def node_import(node, env) -> tuple:
     for module_info in node['modules']:
@@ -2038,9 +2022,6 @@ def node_namespace(node, env) -> tuple:
 
     for stmt in node['body']:
         if stmt['type'] == 'function':
-            from object import KeiFunction
-            from kei import runtoken, __kei__
-
             # 创建 KeiFunction
             func_obj = {
                 'type': 'user_function',

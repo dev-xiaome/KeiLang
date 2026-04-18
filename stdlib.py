@@ -1183,30 +1183,30 @@ class kei:
     super = decorator("super")
 
 keistdlib = """
-class gen {
-    fn __init__(self, func) {
-        self.func  = func;
-        self.value = -1;
-    };
-
-    fn __call__(self, *args, **kwargs) {
-        return self.func(yield=self.value++, *args, **kwargs);
-    };
-
-    @static
-    fn yield(num, values) {
-        return (values[num] ?? null);
-    };
-};
-
-class funcattr {
-    fn __init__(self, func) {
-        self.func = func;
-    };
-    fn __call__(self, *args, **kwargs) {
-        return self.func(*args, **kwargs);
-    };
-};
+#class gen {
+#    fn __init__(self, func) {
+#        self.func  = func;
+#        self.value = -1;
+#    };
+#
+#    fn __call__(self, *args, **kwargs) {
+#        return self.func(yield=self.value++, *args, **kwargs);
+#    };
+#
+#    @static
+#    fn yield(num, values) {
+#        return (values[num] ?? null);
+#    };
+#};
+#
+#class funcattr {
+#    fn __init__(self, func) {
+#        self.func = func;
+#    };
+#    fn __call__(self, *args, **kwargs) {
+#        return self.func(*args, **kwargs);
+#    };
+#};
 """
 
 func = {

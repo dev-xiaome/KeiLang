@@ -1,5 +1,7 @@
 from object import *
 
+__py_exec__ = exec
+
 def topy(value):
     """KeiLang → Python 递归转换"""
     if value is None:
@@ -163,5 +165,18 @@ def ispy(value):
         return true
     # 不是 KeiLang 对象
     return not iskei(value)
+
+def exec(code: str, *, convert=KeiBool(True)):
+    if isinstance(code, KeiString):
+        code = code.value
+    elif not isinstance(code, str):
+        raise KeiError("TypeError", "exec的第一个参数应是字符串")
+
+    if isinstance(convert, KeiBool):
+        convert = convert.value
+    elif not isinstance(convert, bool):
+        raise KeiError("TypeError", "exec的convert参数应是字符串")
+
+    return to_kei(__py_exec__(code)) if convert else __py_exec__(code)
 
 __all__ = ['tokei', 'topy', 'pyimport', 'module', 'iskei', 'ispy', 'builtins']
