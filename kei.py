@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.8-13"
+__version__ = "1.9"
 
 class KeiState:
     stack: List[Any]
@@ -97,7 +97,8 @@ mapping = {}
 keywords = {
    'class', 'namespace', 'if', 'while', 'fn', 'return', 'for',
    'else', 'elif', 'try', 'catch', 'with', 'import', 'break',
-   'continue', 'global', 'raise', 'case', 'match', 'use', 'from'
+   'continue', 'global', 'raise', 'case', 'match', 'use', 'from',
+   'nonlocal'
 }
 
 sys.setrecursionlimit(65536)
@@ -272,8 +273,8 @@ def error(errtype: str | None, info: str, stack: list=[], code:str|None=None, li
 
     print(f"{space} ·")
 
-    #import traceback
-    #traceback.print_exc()
+    import traceback
+    traceback.print_exc()
 
     if not __kei__.repl:
         sys.exit(1)
@@ -1488,6 +1489,7 @@ def parse_stmt(tokens: list, pos: int, all_lines: list | None = None, linepos: i
                 'with': parse_with_stmt,
                 'namespace': parse_namespace_stmt,
                 'global': parse_global_del_raise_use,
+                'nonlocal': parse_global_del_raise_use,
                 'del': parse_global_del_raise_use,
                 'raise': parse_global_del_raise_use,
                 'use': parse_global_del_raise_use,
@@ -1546,7 +1548,7 @@ def parse_stmt(tokens: list, pos: int, all_lines: list | None = None, linepos: i
             AttributeError: ("AttributeError", f"属性不存在: {e}"),
             UnboundLocalError: ("UnboundLocalError", f"局部变量未绑定: {e}"),
             NameError: ("NameError", f"名称未定义: {e}"),
-            FileNotFoundError: ("NotFoundError", f"文件未找到: {e}"),
+            FileNotFoundError: ("FileNotFoundError", f"文件未找到: {e}"),
             PermissionError: ("PermissionError", f"权限不足无法访问文件: {e}"),
             IsADirectoryError: ("IsDirError", f"预期文件但得到目录: {e}"),
             NotADirectoryError: ("NotDirError", f"预期目录但得到文件: {e}"),
@@ -2039,7 +2041,7 @@ def parse_namespace_stmt(tokens: list, pos: int, all_lines: list, linepos: int, 
     return node, pos, linepos
 
 def parse_global_del_raise_use(tokens: list, pos: int, all_lines: list, linepos: int, source_line: str) -> tuple:
-    """解析 global/del/raise/use 语句"""
+    """解析 global/del/raise/use/nonlocal 语句"""
     stmt_type = tokens[pos]['value']
     pos += 1
     targets = []
@@ -4053,6 +4055,7 @@ def runtoken(node, env) -> tuple:
         nodetypes['try'] = eval.node_try
         nodetypes['global'] = eval.node_global
         nodetypes['typeassert'] = eval.node_typeassert
+        nodetypes['nonlocal'] = eval.node_nonlocal
 
         if node['type'] in nodetypes:
             return nodetypes[node['type']](node, env)
@@ -4089,7 +4092,8 @@ def runtoken(node, env) -> tuple:
                           (f"[{node.get('linenum', -1)+1}]"
                           if type(__kei__.step) is not str and __kei__.step is not stdlib.kei.breakpoint else
                           f"{{{node.get('linenum', -1)+1}}}") +
-                          (" \033[95m" + (' / '.join(__kei__.stack if type(first) is not tuple else [s[0] for s in __kei__.stack]) or '<global>') + "\033[0m") +
+                          (" \033[95m" + (" \033[95m" + (' / '.join(str(item) if type(first) is not tuple
+                           else str(s[0]) for s in __kei__.stack) or '<global>') + "\033[0m") + "\033[0m") +
                           ' \033[34;2m' +
                           ('; '.join([f"{n} = {content(v, _in_container=True)}" for n, v in names])) +
                           '\033[0m' +
@@ -4281,7 +4285,7 @@ def runtoken(node, env) -> tuple:
             AttributeError: ("AttributeError", f"属性不存在: {e}"),
             UnboundLocalError: ("UnboundLocalError", f"局部变量未绑定: {e}"),
             NameError: ("NameError", f"名称未定义: {e}"),
-            FileNotFoundError: ("NotFoundError", f"文件未找到: {e}"),
+            FileNotFoundError: ("FileNotFoundError", f"文件未找到: {e}"),
             PermissionError: ("PermissionError", f"权限不足无法访问文件: {e}"),
             IsADirectoryError: ("IsDirError", f"预期文件但得到目录: {e}"),
             NotADirectoryError: ("NotDirError", f"预期目录但得到文件: {e}"),
@@ -4455,7 +4459,7 @@ def main():
         # 编译模式
         if parsed['compile']:
             if not parsed['filename']:
-                raise KeiError("NotFoundError", "--compile 需要指定文件名")
+                raise KeiError("FileNotFoundError", "--compile 需要指定文件名")
             with open(parsed['filename'], "r", encoding="utf-8") as f:
                 filecontent = f.read()
             from pprint import pprint
@@ -4465,7 +4469,8 @@ def main():
         # 运行脚本模式
         if parsed['filename']:
             if not os.path.isfile(parsed['filename']):
-                raise KeiError("NotFoundError", f"未找到 {parsed['filename']}")
+                print(f"\033[31m[Error] 未找到文件 \033[1;4;31m{parsed['filename']}\033[0m")
+                sys.exit(1)
 
             # 设置 __kei__.file
             __kei__.file = parsed['filename']

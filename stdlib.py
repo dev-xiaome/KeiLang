@@ -725,7 +725,7 @@ class kei:
                 return KeiString(f.read())
 
         except FileNotFoundError:
-            raise KeiError("NotFoundError", f"未找到文件{filename}")
+            raise KeiError("FileNotFoundError", f"未找到文件{filename}")
         except IsADirectoryError:
             raise KeiError("IsDirError", f"{filename}期望文件但得到文件夹")
 
@@ -755,7 +755,7 @@ class kei:
                     f.write(str(content))
 
         except FileNotFoundError:
-            raise KeiError("NotFoundError", f"未找到文件{filename}")
+            raise KeiError("FileNotFoundError", f"未找到文件{filename}")
         except IsADirectoryError:
             raise KeiError("IsDirError", f"{filename}期望文件但得到文件夹")
 
@@ -1063,7 +1063,182 @@ class kei:
     def isclass(obj):
         return true if isinstance(obj, KeiClass) else false
 
-    class file(KeiBase):
+    @s
+    def delattr(obj, name):
+        name = to_str(name)
+
+        if hasattr(obj, "_method") and name in obj._method:
+            del obj._method[name]
+        elif hasattr(obj, "_prop") and name in obj._prop:
+            del obj._prop[name]
+        elif hasattr(obj, "_attrs") and name in obj._attrs:
+            del obj._attrs[name]
+
+    @s
+    def delitem(obj, name):
+        name = to_str(name)
+
+        if hasattr(obj, "items"):
+            if isinstance(obj.items, (dict, KeiDict)):
+                del obj.items[name]
+
+    @s
+    def delete(obj):
+        obj = undefined
+
+    @s
+    def bin(obj, bits=None):
+        """将任何 KeiLang 对象转换为二进制字符串"""
+
+        # 转换 bits 参数
+        if bits is not None:
+            if isinstance(bits, KeiInt):
+                bits = bits.value
+            else:
+                bits = int(bits)
+
+        # None / null / undefined
+        if obj is None or obj is null or obj is undefined:
+            return "0"
+
+        # 整数
+        if isinstance(obj, KeiInt):
+            val = obj.value
+            if val >= 0:
+                s = bin(val)[2:]
+            else:
+                s = bin(val & 0xFFFFFFFFFFFFFFFF)[2:]
+            if bits is not None:
+                s = s.zfill(bits)
+            return s
+
+        # 浮点数
+        if isinstance(obj, KeiFloat):
+            import struct
+            val = float(obj.value)
+            packed = struct.pack('>d', val)
+            i = struct.unpack('>Q', packed)[0]
+            s = bin(i)[2:].zfill(64)
+            if bits is not None:
+                s = s[-bits:] if bits < 64 else s.zfill(bits)
+            return s
+
+        # 布尔值
+        if isinstance(obj, KeiBool):
+            return "1" if obj.value else "0"
+
+        # 字符串
+        if isinstance(obj, KeiString):
+            result = []
+            for ch in obj.value:
+                code = ord(ch)
+                result.append(bin(code)[2:].zfill(16))
+            if bits is not None:
+                full = ''.join(result)
+                return full[-bits:] if bits < len(full) else full.zfill(bits)
+            return ' '.join(result)
+
+        # 列表
+        if isinstance(obj, KeiList):
+            result = [kei.bin(item, bits) for item in obj.items]
+            return '[' + ', '.join(result) + ']'
+
+        # 字典
+        if isinstance(obj, KeiDict):
+            result = []
+            for k, v in obj.items.items():
+                k_bin = kei.bin(k, bits)
+                v_bin = kei.bin(v, bits)
+                result.append(f"{k_bin}: {v_bin}")
+            return '{' + ', '.join(result) + '}'
+
+        # 其他类型
+        s = str(obj)
+        result = []
+        for ch in s:
+            result.append(bin(ord(ch))[2:].zfill(16))
+        return ' '.join(result)
+
+    @s
+    def hex(obj, bits=None):
+        """将任何 KeiLang 对象转换为十六进制字符串"""
+
+        # 转换 bits 参数
+        if bits is not None:
+            if isinstance(bits, KeiInt):
+                bits = bits.value
+            else:
+                bits = int(bits)
+
+        # None / null / undefined
+        if obj is None or obj is null or obj is undefined:
+            return "0"
+
+        # 整数
+        if isinstance(obj, KeiInt):
+            val = obj.value
+            if val >= 0:
+                s = hex(val)[2:]
+            else:
+                # 负数用补码表示
+                s = hex(val & 0xFFFFFFFFFFFFFFFF)[2:]
+            if bits is not None:
+                # bits 是二进制位数，转成十六进制需要 (bits + 3) // 4 个字符
+                hex_len = (bits + 3) // 4
+                s = s.zfill(hex_len)
+            return s
+
+        # 浮点数（转 IEEE 754 双精度 64 位 → 十六进制）
+        if isinstance(obj, KeiFloat):
+            import struct
+            val = float(obj.value)
+            packed = struct.pack('>d', val)
+            i = struct.unpack('>Q', packed)[0]
+            s = hex(i)[2:].zfill(16)
+            if bits is not None:
+                hex_len = (bits + 3) // 4
+                s = s[-hex_len:] if hex_len < 16 else s.zfill(hex_len)
+            return s
+
+        # 布尔值
+        if isinstance(obj, KeiBool):
+            return "1" if obj.value else "0"
+
+        # 字符串（转每个字符的 Unicode 十六进制）
+        if isinstance(obj, KeiString):
+            result = []
+            for ch in obj.value:
+                code = ord(ch)
+                result.append(hex(code)[2:].zfill(4))
+            if bits is not None:
+                # 如果指定位数，拼接后截断或填充
+                full = ''.join(result)
+                hex_len = (bits + 3) // 4
+                return full[-hex_len:] if hex_len < len(full) else full.zfill(hex_len)
+            return ' '.join(result)
+
+        # 列表
+        if isinstance(obj, KeiList):
+            result = [kei.hex(item, bits) for item in obj.items]
+            return '[' + ', '.join(result) + ']'
+
+        # 字典
+        if isinstance(obj, KeiDict):
+            result = []
+            for k, v in obj.items.items():
+                k_hex = kei.hex(k, bits)
+                v_hex = kei.hex(v, bits)
+                result.append(f"{k_hex}: {v_hex}")
+            return '{' + ', '.join(result) + '}'
+
+        # 其他类型：先转字符串再转十六进制
+        s = str(obj)
+        result = []
+        for ch in s:
+            result.append(hex(ord(ch))[2:].zfill(4))
+        return ' '.join(result)
+
+    class File(KeiBase):
         """KeiLang 文件对象类"""
 
         def __init__(self, path, mode=KeiString('r'), encoding=KeiString('utf-8')):
@@ -1102,11 +1277,20 @@ class kei:
                 "remove": self.remove,
             }
 
+            self._props['path']     = path
+            self._props['mode']     = mode
+            self._props['encoding'] = encoding
+            self._props['closed']   = false
+
         # ========== 上下文管理器 ==========
         def __enter__(self):
             return self
 
         def __exit__(self, exc_type, exc_val, exc_tb):
+            self.close()
+            return False
+
+        def __del__(self):
             self.close()
             return False
 
@@ -1145,6 +1329,7 @@ class kei:
 
         def close(self):
             self._handle.close()
+            self._props['closed'] = true
             return null
 
         def flush(self):
@@ -1161,17 +1346,6 @@ class kei:
         def tell(self):
             return KeiInt(self._handle.tell())
 
-        # ========== 属性访问 ==========
-        @property
-        def closed(self):
-            """文件是否已关闭"""
-            return self._handle.closed
-
-        @property
-        def name(self):
-            """文件名（别名）"""
-            return self.path
-
     class decorator:
         def __init__(self, name):
             self.name = name
@@ -1184,30 +1358,30 @@ class kei:
     super = decorator("super")
 
 keistdlib = """
-#class gen {
-#    fn __init__(self, func) {
-#        self.func  = func;
-#        self.value = -1;
-#    };
-#
-#    fn __call__(self, *args, **kwargs) {
-#        return self.func(yield=self.value++, *args, **kwargs);
-#    };
-#
-#    @static
-#    fn yield(num, values) {
-#        return (values[num] ?? null);
-#    };
-#};
-#
-#class funcattr {
-#    fn __init__(self, func) {
-#        self.func = func;
-#    };
-#    fn __call__(self, *args, **kwargs) {
-#        return self.func(*args, **kwargs);
-#    };
-#};
+class gen {
+    fn __init__(self, func) {
+        self.func  = func;
+        self.value = -1;
+    };
+
+    fn __call__(self, *args, **kwargs) {
+        return self.func(yield=self.value++, *args, **kwargs);
+    };
+
+    @static
+    fn yield(num, values) {
+        return (values[num] ?? null);
+    };
+};
+
+class funcattr {
+    fn __init__(self, func) {
+        self.func = func;
+    };
+    fn __call__(self, *args, **kwargs) {
+        return self.func(*args, **kwargs);
+    };
+};
 """
 
 func = {
@@ -1232,7 +1406,7 @@ func = {
     "max": kei.max,
     "min": kei.min,
     "zip": kei.zip,
-    "super": kei.super,
+    "delattr": kei.delattr,
     "range": kei.range,
     "system": kei.system,
     "random": kei.random,
@@ -1241,20 +1415,24 @@ func = {
     "exit": kei.exit,
     "loop": kei.loop,
     "sort": kei.sort,
+    "bin": kei.bin,
+    "hex": kei.hex,
     "exec": kei.exec,
     "clear": kei.clear,
     "eval": kei.eval,
     "read": kei.read,
+    "delitem": kei.delitem,
     "write": kei.write,
     "breakpoint": kei.breakpoint,
     "step": kei.step,
+    "delete": kei.delete,
     "importlib": kei.importlib,
     "precision": kei.precision,
     "recursion": kei.recursion,
+    "super": kei.super,
     "static": kei.static,
     "prop": kei.prop,
-    "file": kei.file,
-    "any": object,
+    "File": kei.File,
     "int": KeiInt,
     "float": KeiFloat,
     "string": KeiString,

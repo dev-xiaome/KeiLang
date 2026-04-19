@@ -1,8 +1,7 @@
 #!/usr/bin/env python
-from object import true, false
+from object import true
 
 __log__ = true
-__color__ = false
 
 def enable(e=None):
     global __log__

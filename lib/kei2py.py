@@ -6,6 +6,8 @@ def to_float(x):
 
     if isinstance(x, (KeiFloat, KeiInt)):
         return float(x.value)
+    elif isinstance(x, (float, int)):
+        return x
     else:
         raise KeiError("TypeError", "需要float")
 
@@ -13,8 +15,10 @@ def to_int(x):
     """将 Kei 类型转换为 Python int"""
     from object import KeiInt, KeiError
 
-    if isinstance(x, (KeiInt)):
+    if isinstance(x, KeiInt):
         return int(x.value)
+    elif isinstance(x, int):
+        return x
     else:
         raise KeiError("TypeError", "需要int")
 
@@ -24,6 +28,8 @@ def to_str(x):
 
     if isinstance(x, KeiString):
         return str(x.value)
+    elif isinstance(x, str):
+        return x
     else:
         raise KeiError("TypeError", "需要string")
 
@@ -33,6 +39,8 @@ def to_bool(x):
 
     if isinstance(x, KeiBool):
         return bool(x.value)
+    elif isinstance(x, bool):
+        return x
     else:
         raise KeiError("TypeError", "需要bool")
 
@@ -42,6 +50,8 @@ def to_list(x):
 
     if isinstance(x, KeiList):
         return [to_python(item) for item in x.items]
+    elif isinstance(x, list):
+        return x
     else:
         raise KeiError("TypeError", "需要list")
 
@@ -51,6 +61,8 @@ def to_dict(x):
 
     if isinstance(x, KeiDict):
         return {k: to_python(v) for k, v in x.items.items()}
+    elif isinstance(x, dict):
+        return x
     else:
         raise KeiError("TypeError", "需要dict")
 

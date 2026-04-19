@@ -62,12 +62,10 @@ class KeiBase(metaclass=KeiMeta):
         self._class = None
 
     def _get_method(self, name: str) -> Optional[Callable]:
-        """获取方法（优先实例属性，再类方法）"""
         if name in self._props:
             val = self._props[name]
             if callable(val):
                 return val
-            return None
         if name in self._methods:
             return self._methods[name]
         if self._class is not None:
@@ -83,14 +81,22 @@ class KeiBase(metaclass=KeiMeta):
         method = self._get_method('__getitem__')
         if method:
             return method(key)
-        return self._default_getitem(key)
+        if isinstance(key, str):
+            if key in self._methods:
+                return self._wrap_method(self._methods[key])
+            if key in self._props:
+                return self._props[key]
+        return undefined
 
     def __setitem__(self, key: Any, value: Any) -> None:
         method = self._get_method('__setitem__')
         if method:
             method(key, value)
             return
-        self._default_setitem(key, value)
+        if isinstance(key, str):
+            self._props[key] = value
+        else:
+            raise KeiError("TypeError", f"不支持的类型作为键: {type(key)}")
 
     def __delitem__(self, key: Any) -> None:
         method = self._get_method('__delitem__')
@@ -118,235 +124,143 @@ class KeiBase(metaclass=KeiMeta):
             return method()
         return iter(self._props.keys())
 
-    def _default_getitem(self, key):
-        """默认的 __getitem__ 实现，子类可以覆盖"""
-        if isinstance(key, str):
-            if key in self._methods:
-                method = self._methods[key]
-                if hasattr(method, '__self__'):
-                    return method
-                return self._wrap_method(method)
-            if key in self._props:
-                return self._props[key]
-            return undefined
-        return undefined
-
-    def _default_setitem(self, key, value):
-        """默认的 __setitem__ 实现，子类可以覆盖"""
-        if isinstance(key, str):
-            self._props[key] = value
-        else:
-            raise KeiError("TypeError", f"不支持的类型作为键: {type(key)}")
-
     # ========== 算术运算符 ==========
     def __add__(self, other):
         method = self._get_method('__add__')
-        if method:
-            return method(other)
-        return undefined
+        return method(other) if method else undefined
 
     def __radd__(self, other):
         method = self._get_method('__radd__')
-        if method:
-            return method(other)
-        return self.__add__(other)
+        return method(other) if method else self.__add__(other)
 
     def __sub__(self, other):
         method = self._get_method('__sub__')
-        if method:
-            return method(other)
-        return undefined
+        return method(other) if method else undefined
 
     def __rsub__(self, other):
         method = self._get_method('__rsub__')
-        if method:
-            return method(other)
-        return undefined
+        return method(other) if method else undefined
 
     def __mul__(self, other):
         method = self._get_method('__mul__')
-        if method:
-            return method(other)
-        return undefined
+        return method(other) if method else undefined
 
     def __rmul__(self, other):
         method = self._get_method('__rmul__')
-        if method:
-            return method(other)
-        return self.__mul__(other)
+        return method(other) if method else self.__mul__(other)
 
     def __truediv__(self, other):
         method = self._get_method('__truediv__')
-        if method:
-            return method(other)
-        return undefined
+        return method(other) if method else undefined
 
     def __rtruediv__(self, other):
         method = self._get_method('__rtruediv__')
-        if method:
-            return method(other)
-        return undefined
+        return method(other) if method else undefined
 
     def __floordiv__(self, other):
         method = self._get_method('__floordiv__')
-        if method:
-            return method(other)
-        return undefined
+        return method(other) if method else undefined
 
     def __rfloordiv__(self, other):
         method = self._get_method('__rfloordiv__')
-        if method:
-            return method(other)
-        return undefined
+        return method(other) if method else undefined
 
     def __mod__(self, other):
         method = self._get_method('__mod__')
-        if method:
-            return method(other)
-        return undefined
+        return method(other) if method else undefined
 
     def __rmod__(self, other):
         method = self._get_method('__rmod__')
-        if method:
-            return method(other)
-        return undefined
+        return method(other) if method else undefined
 
     def __pow__(self, other):
         method = self._get_method('__pow__')
-        if method:
-            return method(other)
-        return undefined
+        return method(other) if method else undefined
 
     def __rpow__(self, other):
         method = self._get_method('__rpow__')
-        if method:
-            return method(other)
-        return undefined
+        return method(other) if method else undefined
 
-    # ========== 位运算符 ==========
     def __and__(self, other):
         method = self._get_method('__and__')
-        if method:
-            return method(other)
-        return undefined
+        return method(other) if method else undefined
 
     def __rand__(self, other):
         method = self._get_method('__rand__')
-        if method:
-            return method(other)
-        return self.__and__(other)
+        return method(other) if method else self.__and__(other)
 
     def __or__(self, other):
         method = self._get_method('__or__')
-        if method:
-            return method(other)
-        return undefined
+        return method(other) if method else undefined
 
     def __ror__(self, other):
         method = self._get_method('__ror__')
-        if method:
-            return method(other)
-        return self.__or__(other)
+        return method(other) if method else self.__or__(other)
 
     def __xor__(self, other):
         method = self._get_method('__xor__')
-        if method:
-            return method(other)
-        return undefined
+        return method(other) if method else undefined
 
     def __rxor__(self, other):
         method = self._get_method('__rxor__')
-        if method:
-            return method(other)
-        return self.__xor__(other)
+        return method(other) if method else self.__xor__(other)
 
     def __lshift__(self, other):
         method = self._get_method('__lshift__')
-        if method:
-            return method(other)
-        return undefined
+        return method(other) if method else undefined
 
     def __rlshift__(self, other):
         method = self._get_method('__rlshift__')
-        if method:
-            return method(other)
-        return undefined
+        return method(other) if method else undefined
 
     def __rshift__(self, other):
         method = self._get_method('__rshift__')
-        if method:
-            return method(other)
-        return undefined
+        return method(other) if method else undefined
 
     def __rrshift__(self, other):
         method = self._get_method('__rrshift__')
-        if method:
-            return method(other)
-        return undefined
+        return method(other) if method else undefined
 
     def __invert__(self):
         method = self._get_method('__invert__')
-        if method:
-            return method()
-        return undefined
+        return method() if method else undefined
 
-    # ========== 一元运算符 ==========
     def __neg__(self):
         method = self._get_method('__neg__')
-        if method:
-            return method()
-        return undefined
+        return method() if method else undefined
 
     def __pos__(self):
         method = self._get_method('__pos__')
-        if method:
-            return method()
-        return undefined
+        return method() if method else undefined
 
     def __abs__(self):
         method = self._get_method('__abs__')
-        if method:
-            return method()
-        return undefined
+        return method() if method else undefined
 
-    # ========== 比较运算符 ==========
     def __eq__(self, other):
         method = self._get_method('__eq__')
-        if method:
-            return method(other)
-        return true if self is other else false
+        return method(other) if method else (true if self is other else false)
 
     def __ne__(self, other):
         method = self._get_method('__ne__')
-        if method:
-            return method(other)
-        return true if self is not other else false
+        return method(other) if method else (true if self is not other else false)
 
     def __lt__(self, other):
         method = self._get_method('__lt__')
-        if method:
-            return method(other)
-        return undefined
+        return method(other) if method else undefined
 
     def __gt__(self, other):
         method = self._get_method('__gt__')
-        if method:
-            return method(other)
-        return undefined
+        return method(other) if method else undefined
 
     def __le__(self, other):
         method = self._get_method('__le__')
-        if method:
-            return method(other)
-        return undefined
+        return method(other) if method else undefined
 
     def __ge__(self, other):
         method = self._get_method('__ge__')
-        if method:
-            return method(other)
-        return undefined
+        return method(other) if method else undefined
 
-    # ========== 类型转换 ==========
     def __int__(self):
         method = self._get_method('__int__')
         if method:
@@ -361,35 +275,67 @@ class KeiBase(metaclass=KeiMeta):
 
     def __str__(self):
         method = self._get_method('__str__')
-        if method:
-            return method()
-        return repr(self)
+        return method() if method else repr(self)
 
     def __repr__(self):
         method = self._get_method('__repr__')
-        if method:
-            return method()
-        return f"<{self._type} object>"
+        return method() if method else f"<{self._type} object>"
 
     def __bool__(self):
         method = self._get_method('__bool__')
-        if method:
-            return method()
-        return True
+        return method() if method else True
 
     def __call__(self, *args, **kwargs):
         method = self._get_method('__call__')
-        if method:
-            return method(*args, **kwargs)
-        return undefined
+        return method(*args, **kwargs) if method else undefined
 
     def __dir__(self):
-        """默认返回用户可见的属性和方法"""
-        # 收集公开方法
-        public_methods = [m for m in self._methods.keys()]
-        # 收集公开属性
-        public_props = [p for p in self._props.keys()]
-        return public_methods + public_props
+        return list(self._methods.keys()) + list(self._props.keys())
+
+    def __delattr__(self, name: str) -> None:
+        if name in ('_type', '_methods', '_props', 'value', '_class'):
+            super().__delattr__(name)
+            return
+        method = self._get_method('__delattr__')
+        if method:
+            method(self, name)
+        elif name in self._props:
+            del self._props[name]
+
+    def __missing__(self, key: Any) -> Any:
+        method = self._get_method('__missing__')
+        if method:
+            return method(self, key)
+        return undefined
+
+    def __enter__(self):
+        method = self._get_method('__enter__')
+        if method:
+            return method(self)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        method = self._get_method('__exit__')
+        if method:
+            return method(self, exc_type, exc_val, exc_tb)
+        return False
+
+    def __hash__(self):
+        method = self._get_method('__hash__')
+        if method:
+            return method(self)
+        return id(self)
+
+    def __format__(self, format_spec):
+        method = self._get_method('__format__')
+        if method:
+            return method(self, format_spec)
+        return format(str(self), format_spec)
+
+    def __delete__(self, instance):
+        method = self._get_method('__delete__')
+        if method:
+            method(self, instance)
 
 # ========== 错误对象 ==========
 
@@ -1766,6 +1712,9 @@ class KeiList(KeiBase):
             "copy": self._copy,
         }
 
+    def __contains__(self, item):
+        return item in self.items
+
     def __call__(self, *_, **__):
         raise KeiError("TypeError", f"{self._type} 不可调用")
 
@@ -2557,7 +2506,7 @@ class KeiInstance(KeiBase):
                 # 绑定到父类实例
                 return lambda *args, **kwargs: parent_method(*args, **kwargs)
 
-        raise AttributeError(key)
+        return undefined
 
     def __setitem__(self, key, _value):
         method = self._get_method('__setitem__')
@@ -2565,14 +2514,6 @@ class KeiInstance(KeiBase):
             method(key, _value)
             return
         self._attrs[key] = _value
-
-    def __delitem__(self, key):
-        method = self._get_method('__delitem__')
-        if method:
-            method(key)
-            return
-        if key in self._attrs:
-            del self._attrs[key]
 
     def __repr__(self):
         return f"<instance {self._class.__name__}>"
@@ -2587,6 +2528,51 @@ class KeiInstance(KeiBase):
                 return method.bind(self)(*args, **kwargs)
             return method(*args, **kwargs)
         raise KeiError("TypeError", f"{self} 实例不可调用")
+
+    def __delitem__(self, key):
+        """del obj[key] 时转发到 KeiLang 的 __delitem__ 方法"""
+        method = self._get_method('__delitem__')
+        if method:
+            if isinstance(method, KeiMethod):
+                method.bind(self)(key)
+            elif callable(method):
+                method(self, key)
+            else:
+                method(key)
+        else:
+            # 默认行为：从 _attrs 删除（如果 key 是字符串）
+            if isinstance(key, str) and key in self._attrs:
+                del self._attrs[key]
+            else:
+                raise KeyError(f"键 '{key}' 不存在")
+
+    def __delattr__(self, name):
+        """del obj.attr 时转发到 KeiLang 的 __delattr__ 方法"""
+        method = self._get_method('__delattr__')
+        if method:
+            if isinstance(method, KeiMethod):
+                method.bind(self)(name)
+            elif callable(method):
+                method(self, name)
+            else:
+                method(name)
+        else:
+            # 默认行为：从 _attrs 删除
+            if name in self._attrs:
+                del self._attrs[name]
+            else:
+                raise AttributeError(f"属性 '{name}' 不存在")
+
+    def __delete__(self):
+        """Python 的 __delete__ 转发到 KeiLang 的 __delete__ 方法"""
+        method = self._get_method('__delete__')
+        if method:
+            if isinstance(method, KeiMethod):
+                method.bind(self)()
+            elif callable(method):
+                method(self)
+            else:
+                method()
 
     # ========== 上下文管理器支持 ==========
     def __enter__(self):

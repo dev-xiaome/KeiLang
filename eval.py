@@ -7,6 +7,7 @@ import os
 import stdlib
 from object import *
 from kei import __kei__, runtoken, get_from_env, process_fstring, find_method, paths, __py_exec__, exec
+from lib.python import tokei, topy
 
 def _get_exported_dict(module_env, module_dict):
     """从模块环境中构建导出字典（统一规则）"""
@@ -1390,40 +1391,26 @@ def node_assign(node, env) -> tuple: # if node['type'] == 'assign':
         return val, flag
 
     elif left['type'] == 'name':
-        parts = left['value'].split('.')
+        var_name = left['value']
+        nonlocal_list = get_from_env('__nonlocal__', env, [])
 
-        if len(parts) == 2 and parts[0] == 'self':
-            if 'self' not in env:
-                raise KeiError("NameError", "self 只能在类方法中使用")
-            instance = env['self']
-            instance[parts[1]] = val
+        # global 检查
+        if var_name in get_from_env('__globals__', env, []):
+            target = env
+            while target.get('__parent__') is not None:
+                target = target['__parent__']
+            target[var_name] = val
 
-        elif len(parts) > 1:
-            obj = env
-            for part in parts[:-1]:
-                if isinstance(obj, KeiBase):
-                    obj = obj[part]
-                elif isinstance(obj, dict):
-                    obj = obj.get(part)
-                else:
-                    obj = getattr(obj, part)
-
-            if isinstance(obj, KeiBase):
-                obj[parts[-1]] = val
-            elif isinstance(obj, dict):
-                obj[parts[-1]] = val
-            else:
-                setattr(obj, parts[-1], val)
-
+        # nonlocal 检查
+        elif var_name in get_from_env('__nonlocal__', env, []):
+            current = env.get('__parent__', None)
+            while current is not None:
+                if var_name in current:
+                    current[var_name] = val
+                    break
+                current = current.get('__parent__', None)
         else:
-            name = parts[0]
-            if name in get_from_env('__globals__', env, []):
-                target = env
-                while target.get('__parent__') is not None:
-                    target = target['__parent__']
-                target[name] = val
-            else:
-                env[name] = val
+            env[var_name] = val
 
     elif left['type'] == 'index':
         obj, _ = runtoken(left['obj'], env)
@@ -1952,44 +1939,70 @@ def node_fromimport(node, env) -> tuple:
 
     return None, False
 
-def node_del(node, env) -> tuple: # if node['type'] == 'del':
+def node_del(node, env) -> tuple:
     for target in node['names']:
         if target['type'] == 'name':
             name = target['value']
-            if name in env:
-                del env[name]
+            # 向上查找变量
+            current = env
+            found = False
+            while current is not None:
+                if name in current:
+                    obj = current[name]
+                    # 删除对象本身，调用 __delete__
+                    if hasattr(obj, '__delete__') and callable(obj.__delete__):
+                        obj.__delete__()
+                    del current[name]
+                    found = True
+                    break
+                current = current.get('__parent__', None)
+            if not found:
+                raise KeiError("NameError", f"名称 '{name}' 未定义")
+
+        elif target['type'] == 'attr':
+            obj, _ = runtoken(target['obj'], env)
+            attr = target['attr']          # Python str
+
+            # 转成 KeiString 传给 __delattr__
+            if hasattr(obj, '__delattr__') and callable(obj.__delattr__):
+                obj.__delattr__(KeiString(attr))
+            elif isinstance(obj, KeiBase):
+                if attr in obj._props:
+                    del obj._props[attr]
+                else:
+                    raise KeiError("AttributeError", f"对象没有属性 '{attr}'")
+            elif isinstance(obj, dict):
+                if attr in obj:
+                    del obj[attr]
+                else:
+                    raise KeiError("AttributeError", f"字典没有键 '{attr}'")
+            elif hasattr(obj, attr):
+                delattr(obj, attr)
+            else:
+                raise KeiError("AttributeError", f"对象没有属性 '{attr}'")
 
         elif target['type'] == 'index':
             obj, _ = runtoken(target['obj'], env)
             index, _ = runtoken(target['index'], env)
 
-            if isinstance(obj, KeiList):
+            if hasattr(obj, '__delitem__') and callable(obj.__delitem__):
+                obj.__delitem__(index)   # index 已经是 KeiInt/KeiString，不用再转
+            elif isinstance(obj, KeiList):
                 idx = index.value if isinstance(index, KeiInt) else int(index)
                 if 0 <= idx < len(obj.items):
                     del obj.items[idx]
-
+                else:
+                    raise KeiError("IndexError", f"索引 {idx} 超出范围")
             elif isinstance(obj, KeiDict):
-                # ✅ 直接用 index 对象作为键，不要取 .value
                 key = index
                 if key in obj.items:
                     del obj.items[key]
-
+                else:
+                    raise KeiError("KeyError", f"键 '{key}' 不存在")
+            elif isinstance(obj, (list, dict)):
+                del obj[index]
             else:
                 raise KeiError("TypeError", f"不支持对 {type(obj)} 使用 del 索引删除")
-
-        elif target['type'] == 'attr':
-            obj, _ = runtoken(target['obj'], env)
-            attr = target['attr']
-
-            if isinstance(obj, KeiBase):
-                if attr in obj._props:
-                    del obj._props[attr]
-            elif isinstance(obj, KeiDict):
-                # ✅ 字典属性删除（虽然字典属性不常见）
-                if attr in obj.items:
-                    del obj.items[attr]
-            else:
-                raise KeiError("TypeError", f"不支持对 {type(obj)} 使用 del 属性删除")
 
     return None, False
 
@@ -2199,3 +2212,15 @@ def node_global(node, env) -> tuple: # if node['type'] == 'global':
 def node_typeassert(node, env) -> tuple: # if node['type'] == 'typeassert':
     val, flag = runtoken(node['expr'], env)
     return node_typeassert_typecheck(val, node['hint'], env)
+
+def node_nonlocal(node, env) -> tuple:
+    """处理 nonlocal 声明"""
+    for name_node in node['names']:
+        var_name = name_node['value']
+
+        if '__nonlocal__' not in env:
+            env['__nonlocal__'] = KeiList([])
+
+        (env['__nonlocal__'].append(var_name)) if var_name not in env['__nonlocal__'] else ...
+
+    return None, False
