@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.9"
+__version__ = "1.9-1"
 
 class KeiState:
     stack: List[Any]
@@ -273,8 +273,8 @@ def error(errtype: str | None, info: str, stack: list=[], code:str|None=None, li
 
     print(f"{space} ·")
 
-    import traceback
-    traceback.print_exc()
+    #import traceback
+    #traceback.print_exc()
 
     if not __kei__.repl:
         sys.exit(1)
@@ -4293,7 +4293,7 @@ def runtoken(node, env) -> tuple:
             TimeoutError: ("TimeoutError", f"操作超时: {e}"),
             OSError: ("OSError", f"操作系统错误: {e}"),
             RecursionError: ("RecursionError", f"递归深度超过限制"),
-            KeiError: (e.types, e.value) if isinstance(e, KeiError) else ()
+            KeiError: (e.types, e.value) if isinstance(e, KeiError) else (None, None)
         }
 
         for exc_type, (err_name, err_msg) in error_config.items():

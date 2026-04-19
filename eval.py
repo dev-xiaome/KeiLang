@@ -28,11 +28,11 @@ def _get_exported_dict(module_env, module_dict):
             all_names = [all_val]
 
     # 构建模块字典（所有变量，包括私有）
-    for k, v in module_env.items():
+    for k, v in module_env.items.items():
         module_dict[k] = v
 
     # 构建导出字典
-    exported_dict = {}
+    exported_dict = KeiDict({})
 
     if all_names is not None:
         # 有 __all__：导入 __all__ 里的（即使是 _ 开头）
@@ -83,7 +83,7 @@ def _load_kei_module(module_path, module_name, env, __path__):
                 exec(code, module_env)
 
                 # 获取导出字典
-                module_dict = {}
+                module_dict = KeiDict({})
                 exported_dict = _get_exported_dict(module_env, module_dict)
 
                 return exported_dict, module_env, True
@@ -103,7 +103,7 @@ def _load_py_module(module_path, __path__):
 
             module_env = {}.copy()
             __py_exec__(code, module_env)
-            return module_env, True
+            return KeiDict(module_env), True
 
     return None, False
 
@@ -1845,33 +1845,33 @@ def node_import(node, env) -> tuple:
             # 只有 .kei 模块才执行 __import__ 钩子
             _call_import_hook(exported_dict)
 
-        if exported_dict is not None:  # ← 添加检查
-            if is_wildcard:
-                for name, value in exported_dict.items():
-                    env[name] = value
+            if exported_dict is not None:  # ← 添加检查
+                if is_wildcard:
+                    for name, value in exported_dict.items.items():
+                        env[name] = value
+                else:
+                    name = alias or module_short_name
+                    env[name] = KeiNamespace(name, exported_dict)
             else:
-                name = alias or module_short_name
-                env[name] = KeiNamespace(name, exported_dict)
-        else:
-            # 处理 None 的情况
-            if is_wildcard:
-                pass  # 没有东西可以导入
-            else:
-                name = alias or module_short_name
-                env[name] = KeiNamespace(name, {})  # 空字典
+                # 处理 None 的情况
+                if is_wildcard:
+                    pass  # 没有东西可以导入
+                else:
+                    name = alias or module_short_name
+                    env[name] = KeiNamespace(name, KeiDict({}))  # 空字典
 
-            return None, False
+                return None, False
 
         # 2. 尝试加载 .py 模块
         module_env, is_py = _load_py_module(module_path, __path__)
 
         if is_py:
-            module_dict = {}
+            module_dict = KeiDict({}.copy())
             exported_dict = _get_exported_dict(module_env, module_dict)
             # Python 模块不执行 __import__ 钩子
 
             if is_wildcard:
-                for name, value in exported_dict.items():
+                for name, value in exported_dict.items.items():
                     env[name] = value
             else:
                 name = alias or module_short_name
@@ -1919,7 +1919,7 @@ def node_fromimport(node, env) -> tuple:
 
     for imp in imports:
         if imp['type'] == 'wildcard':
-            for name, value in full_exported.items():
+            for name, value in full_exported.items.items():
                 env[name] = value
         else:
             name = imp['name']

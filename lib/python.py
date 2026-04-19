@@ -1,6 +1,7 @@
 from object import *
 
 __py_exec__ = exec
+__py_eval__ = eval
 
 def topy(value):
     """KeiLang → Python 递归转换"""
@@ -31,7 +32,7 @@ def topy(value):
 
     # 命名空间
     if isinstance(value, KeiNamespace):
-        return {k: topy(v) for k, v in value.env.items()}
+        return {k: topy(v) for k, v in value.nsenv.items.items()}
 
     # 函数/方法（返回函数本身，调用时再转换参数）
     if callable(value):
@@ -177,6 +178,25 @@ def exec(code: str, *, convert=KeiBool(True)):
     elif not isinstance(convert, bool):
         raise KeiError("TypeError", "exec的convert参数应是字符串")
 
-    return to_kei(__py_exec__(code)) if convert else __py_exec__(code)
+    try:
+        return tokei(__py_exec__(code)) if convert else __py_exec__(code)
+    except Exception as e:
+        raise KeiError("PythonError", type(e).__name__ + ": " + str(e))
 
-__all__ = ['tokei', 'topy', 'pyimport', 'module', 'iskei', 'ispy', 'builtins']
+def eval(code: str, *, convert=KeiBool(True)):
+    if isinstance(code, KeiString):
+        code = code.value
+    elif not isinstance(code, str):
+        raise KeiError("TypeError", "eval的第一个参数应是字符串")
+
+    if isinstance(convert, KeiBool):
+        convert = convert.value
+    elif not isinstance(convert, bool):
+        raise KeiError("TypeError", "eval的convert参数应是字符串")
+
+    try:
+        return tokei(__py_eval__(code)) if convert else __py_eval__(code)
+    except Exception as e:
+        raise KeiError("PythonError", type(e).__name__ + ": " + str(e))
+
+__all__ = ['tokei', 'topy', 'pyimport', 'module', 'iskei', 'ispy', 'builtins', 'exec', 'eval']

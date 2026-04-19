@@ -15,4 +15,4 @@ def __getattr__(name):
     raise KeiError("AttributeError", f"sys没有属性: {name}")
 
 # 可选：导出常用名字
-__all__ = ['__getattr__', 'argv', 'stack', 'scriptfile']
+__all__ = ['__getattr__']
