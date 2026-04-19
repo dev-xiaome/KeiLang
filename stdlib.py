@@ -4,7 +4,7 @@ from object import *
 from lib.kei2py import *
 import lib.python as python
 
-env = {}
+env = KeiDict({}.copy())
 
 class kei:
     s = staticmethod
@@ -762,10 +762,6 @@ class kei:
         return null
 
     @s
-    def hasattr(obj, value):
-        return hasattr(obj, to_str(value))
-
-    @s
     def recursion(c=None):
         from kei import __kei__
 
@@ -924,8 +920,11 @@ class kei:
             h ^= hash(obj.__name__)
             if hasattr(obj, 'method_obj'):
                 h ^= kei.hash(obj.method_obj, depth + 1, seen)
-            if hasattr(obj, 'instance') and obj.instance:
-                h ^= kei.hash(obj.instance, depth + 1, seen)
+
+            # 安全获取 instance
+            instance = getattr(obj, 'instance', None)
+            if instance is not None and instance:  # 先检查不为 None，再检查布尔值
+                h ^= kei.hash(instance, depth + 1, seen)
             return h
 
         # 错误对象
@@ -978,7 +977,8 @@ class kei:
         if isinstance(cls, KeiClass):
             # 获取 KeiClass 对应的 Python 类型
             if hasattr(cls, 'py_parent'):
-                return kei.isinstance(obj, cls.py_parent)
+                py_parent = getattr(cls, 'py_parent')
+                return kei.isinstance(obj, py_parent)
             # 检查是否是 KeiClass 的实例
             if isinstance(obj, KeiInstance) and obj._class == cls:
                 return true
@@ -1001,7 +1001,8 @@ class kei:
             # 检查环境中的类
             from kei import __kei__
             if cls_name in __kei__.env:
-                return kei.isinstance(obj, __kei__.env[cls_name])
+                if __kei__.env is not None and cls_name in __kei__.env:
+                    return kei.isinstance(obj, __kei__.env[cls_name])
             return false
 
         return false

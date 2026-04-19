@@ -408,7 +408,7 @@ class KeiException(Exception, KeiBase):
 
 
 class KeiError(Exception, KeiBase):
-    def __init__(self, types="", value="", code=None, linenum=-1):
+    def __init__(self, types="", value="", code:object=None, linenum:object=-1):
         Exception.__init__(self, f"[{types}] {value}" if value else types)
         KeiBase.__init__(self, "error")
         if isinstance(types, KeiString):
@@ -1763,6 +1763,7 @@ class KeiList(KeiBase):
             "uniq": self._uniq,
             "append": self._append,
             "delete": self._delete,
+            "copy": self._copy,
         }
 
     def __call__(self, *_, **__):
@@ -1790,7 +1791,7 @@ class KeiList(KeiBase):
         return self
 
     def delete(self, *values):
-        return self.items._delete(*values)
+        return self._delete(*values)
 
     def _uniq(self):
         result = []
@@ -2166,6 +2167,13 @@ class KeiList(KeiBase):
     def __dir__(self):
         return list(self._methods.keys())
 
+    def _copy(self):
+        """返回 KeiList 的浅拷贝"""
+        return KeiList(self.items.copy())
+    def copy(self):
+        """返回 KeiList 的浅拷贝"""
+        return self._copy()
+
 # ========== 字典类型 ==========
 
 class KeiDict(KeiBase):
@@ -2185,6 +2193,8 @@ class KeiDict(KeiBase):
             "update": self._update,
             "map": self._map,
             "items": self._items,
+            "copy": self._copy,
+            "setdefault": self._setdefault,
         }
 
     def __call__(self, *_, **__):
@@ -2192,9 +2202,6 @@ class KeiDict(KeiBase):
 
     def _items(self):
         return KeiList([KeiList([k, v]) for k, v in self.items.items()])
-
-    def items(self):
-        return self._items()
 
     def __len__(self):
         return len(self.items)
@@ -2271,11 +2278,20 @@ class KeiDict(KeiBase):
     def map(self, func):
         return self._map(func)
 
+    def _setdefault(self, key, default=None):
+        """如果键不存在，设置默认值"""
+        if key not in self.items:
+            self.items[key] = default
+        return self.items[key]
+    def setdefault(self, key, default=None):
+        """如果键不存在，设置默认值"""
+        return self._setdefault(key, default)
+
     def __getitem__(self, key):
         # key 直接使用（应该是 KeiString）
         return self.items.get(key, undefined)
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: Any, value: Any):
         self.items[key] = value
 
     def __contains__(self, key):
@@ -2308,6 +2324,14 @@ class KeiDict(KeiBase):
         if key in self.items:
             del self.items[key]
 
+    def _copy(self):
+        """返回 KeiDict 的浅拷贝"""
+        return KeiDict(self.items.copy())
+
+    def copy(self):
+        """返回 KeiDict 的浅拷贝"""
+        return self._copy()
+
 # ========== 函数类型 ==========
 
 class KeiFunction(KeiBase):
@@ -2322,7 +2346,7 @@ class KeiFunction(KeiBase):
         self.is_static = False
 
     def __call__(self, *args, linecode=None, name=None, **kwargs):
-        from kei import runtoken, __kei__, yieldable
+        from kei import runtoken, __kei__
 
         oldfilename = __kei__.file
         if self.filename is not None:
@@ -2343,17 +2367,13 @@ class KeiFunction(KeiBase):
 
         # 使用 bind_arguments
         new_env = bind_arguments(self.func_obj, None, args, kwargs)
-        new_env['__caller__'] = self.__name__
-
-        yieldres = False
+        new_env['__caller__'] = KeiString(self.__name__)
 
         try:
             result = null
             for stmt in self.func_obj['body']:
                 val, is_return = runtoken(stmt, new_env)
                 if is_return:
-                    if is_return is yieldable:
-                        yieldres = True
                     result = val
                     break
 
@@ -2408,6 +2428,8 @@ class KeiClass(KeiBase):
         self._class_attrs = class_obj.get('attrs', {})
         self._methods_map = class_obj.get('methods_map', {})
 
+        self.decorated_methods = {}
+
     def _get_method(self, name: str) -> Optional[Callable]:
         """获取类方法"""
         if name in self._class_attrs:
@@ -2422,7 +2444,8 @@ class KeiClass(KeiBase):
         instance._class = self
 
         if hasattr(self, 'py_parent'):
-            parent_instance = self.py_parent(*args, **kwargs)
+            py_parent = getattr(self, 'py_parent')
+            parent_instance = py_parent(*args, **kwargs)
             instance._parent_instance = parent_instance
 
         init_method = self._methods_map.get('__init__')
@@ -2446,7 +2469,8 @@ class KeiClass(KeiBase):
             return method
 
         if hasattr(self, 'py_parent'):
-            parent_method = getattr(self.py_parent, key, None)
+            py_parent = getattr(self, 'py_parent')  # 先获取 py_parent
+            parent_method = getattr(py_parent, key, None)  # 再获取方法
             if parent_method is not None:
                 if isinstance(parent_method, property):
                     return parent_method
@@ -2700,7 +2724,7 @@ class KeiBoundMethod(KeiBase):
 # ========== 命名空间类型 ==========
 
 class KeiNamespace(KeiBase):
-    def __init__(self, name: str, env: dict, isns=False):
+    def __init__(self, name: str, env: KeiDict|dict, isns=False):
         if isinstance(env, NamespaceEnv):
             env = env.storage
 
@@ -2709,7 +2733,7 @@ class KeiNamespace(KeiBase):
         if isns:
             self.env = env
         else:
-            self.env = {}
+            self.env = KeiDict({}.copy())
             self.env[self.__name__] = env
 
         self.nsenv = self.env[self.__name__]
@@ -3034,11 +3058,11 @@ def content(obj, _seen=None, _depth=0, _in_container=False) -> str:
     finally:
         _seen.remove(obj_id)
 
-def bind_arguments(method_obj: dict, instance: KeiInstance | None, args: tuple, kwargs: dict) -> dict:
+def bind_arguments(method_obj: dict, instance: KeiInstance | None, args: tuple, kwargs: dict) -> KeiDict:
     """统一的参数绑定函数，完全复制 KeiFunction.__call__ 的逻辑"""
     from kei import runtoken
 
-    new_env = {'__parent__': method_obj.get('closure', {})}
+    new_env = KeiDict({'__parent__': KeiDict(method_obj.get('closure', {}))})
 
     if instance is not None:
         new_env['self'] = instance

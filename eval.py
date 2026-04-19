@@ -6,7 +6,7 @@ import os
 
 import stdlib
 from object import *
-from kei import __kei__, runtoken, get_from_env, process_fstring, find_method, paths, __py_exec__, exec, yieldable
+from kei import __kei__, runtoken, get_from_env, process_fstring, find_method, paths, __py_exec__, exec
 
 def _get_exported_dict(module_env, module_dict):
     """从模块环境中构建导出字典（统一规则）"""
@@ -70,13 +70,13 @@ def _load_kei_module(module_path, module_name, env, __path__):
                 with open(keifile, "r", encoding="utf-8") as f:
                     code = f.read()
 
-                module_env = {
+                module_env = KeiDict({
                     "__path__": KeiList(["."] + paths),
                     "__name__": KeiString(f"__{module_name}__"),
                     "__env__": KeiDict(env),
                     "__osname__": KeiString(platform.system().lower()),
                     "__file__": KeiString(os.path.abspath(__kei__.file))
-                }
+                })
                 module_env["__env__"] = module_env
 
                 exec(code, module_env)
@@ -115,7 +115,11 @@ def _call_import_hook(exported_dict):
 
 def unwrap_prop(obj):
     """递归展开 prop，直到不是 prop 为止"""
-    while hasattr(obj, 'is_property') and obj.is_property and callable(obj):
+    while True:
+        # 安全获取 is_property 属性
+        is_prop = getattr(obj, 'is_property', False)
+        if not is_prop or not callable(obj):
+            break
         obj = obj()
     return obj
 
@@ -347,6 +351,8 @@ def node_slice(node, env) -> tuple: # if node['type'] == 'slice':
         py_slice = slice(start, end, step)
         return obj[py_slice], False
 
+    return None, False
+
 def node_attr(node, env) -> tuple: # if node['type'] == 'attr':
     obj, _ = runtoken(node['obj'], env)
     attr = node['attr']
@@ -463,6 +469,8 @@ def node_postfix(node, env) -> tuple:
                 return KeiFloat(new_val), flag
         else:
             raise KeiError("TypeError", f"无法对 {type(val)} 进行 -- 运算")
+
+    return None, False
 
 def node_compoundassign(node, env) -> tuple:
     """复合赋值 += -= *= /= """
@@ -636,7 +644,10 @@ def node_compoundassign(node, env) -> tuple:
         attr = left['attr']
 
         if isinstance(obj, KeiBase):
-            current_val = obj.get(attr, undefined)
+            try:
+                current_val = obj[attr]
+            except (KeyError, AttributeError, TypeError):
+                current_val = undefined
         elif isinstance(obj, dict):
             current_val = obj.get(attr, undefined)
         else:
@@ -1037,6 +1048,8 @@ def node_unary(node, env) -> tuple: # if node['type'] == 'unary':
         else:
             raise KeiError("TypeError", f"无法对 {content(val)} 进行取负运算")
 
+    return None, False
+
 def node_listscope(node, env) -> tuple: # if node['type'] == 'listscope':
     start_val, _ = runtoken(node['start'], env)
     end_val, _ = runtoken(node['end'], env)
@@ -1122,7 +1135,7 @@ def node_call(node, env) -> tuple: # if node['type'] in {'call', 'methodcall'}:
                 instance = func_obj(*args, **kwargs)
                 init_method = find_method(func_obj.class_obj, '__init__', env)
                 if init_method:
-                    new_env = {'__parent__': init_method['closure'], 'self': instance}
+                    new_env = KeiDict({'__parent__': KeiDict(init_method['closure']), 'self': instance})
                     new_env.update({k: v for k, v in init_method['closure'].items() if k != '__parent__'})
                     for i, p in enumerate(init_method['params'][1:]):
                         if i < len(args):
@@ -1723,9 +1736,9 @@ def node_function(node, env) -> tuple:
 
         # 3. 最后设置标志
         if has_prop:
-            kei_func.is_property = True
+            setattr(kei_func, 'is_property', True)
         if has_static:
-            kei_func.is_static = True
+            setattr(kei_func, 'is_static', True)
 
     if node['name']:
         env[node['name']] = kei_func
@@ -1806,9 +1819,9 @@ def node_class(node, env) -> tuple:
 
                 # 最后设置标志
                 if has_prop:
-                    kei_func.is_property = True
+                    object.__setattr__(kei_func, 'is_property', True)
                 if has_static:
-                    kei_func.is_static = True
+                    object.__setattr__(kei_func, 'is_static', True)
 
             class_obj['methods_map'][stmt['name']] = original_method_obj
             class_obj['decorated_methods'][stmt['name']] = kei_func
@@ -1821,7 +1834,7 @@ def node_class(node, env) -> tuple:
 
     kei_class = KeiClass(class_obj, env)
     if py_parent:
-        kei_class.py_parent = py_parent
+        setattr(kei_class, 'py_parent', py_parent)
 
     env[node['name']] = kei_class
     return None, False
@@ -1845,12 +1858,20 @@ def node_import(node, env) -> tuple:
             # 只有 .kei 模块才执行 __import__ 钩子
             _call_import_hook(exported_dict)
 
+        if exported_dict is not None:  # ← 添加检查
             if is_wildcard:
                 for name, value in exported_dict.items():
                     env[name] = value
             else:
                 name = alias or module_short_name
                 env[name] = KeiNamespace(name, exported_dict)
+        else:
+            # 处理 None 的情况
+            if is_wildcard:
+                pass  # 没有东西可以导入
+            else:
+                name = alias or module_short_name
+                env[name] = KeiNamespace(name, {})  # 空字典
 
             return None, False
 
@@ -1921,7 +1942,11 @@ def node_fromimport(node, env) -> tuple:
             if name in exported_dict:
                 env[alias] = exported_dict[name]
             elif name in module_env:
-                env[alias] = module_env[name]
+                if module_env is not None and name in module_env:
+                    env[alias] = module_env[name]
+                else:
+                    # 处理找不到的情况
+                    raise KeiError("ImportError", f"无法从模块导入 '{name}'")
             else:
                 raise KeiError("ImportError", f"无法从 {module_name} 导入 {name}")
 
@@ -2017,40 +2042,11 @@ def node_use(node, env) -> tuple:
     return None, False
 
 def node_namespace(node, env) -> tuple:
-    ns_data = {}.copy()
+    ns_data = KeiDict({}.copy())
     ns_env = NamespaceEnv(env, ns_data)
 
     for stmt in node['body']:
-        if stmt['type'] == 'function':
-            # 创建 KeiFunction
-            func_obj = {
-                'type': 'user_function',
-                'name': stmt['name'],
-                'params': stmt['params'],
-                'body': stmt['body'],
-                'defaults': stmt.get('defaults', {}),
-                'decorators': stmt.get('decorators', []),
-                'closure': env
-            }
-
-            kei_func = KeiFunction(func_obj, env, filename=__kei__.file)
-
-            # 应用装饰器
-            if stmt.get('decorators'):
-                for decorator_node in reversed(stmt['decorators']):
-                    decorator, _ = runtoken(decorator_node, env)
-                    if callable(decorator):
-                        kei_func = decorator(kei_func)
-
-                # 重新检查是否被 prop 装饰
-                for decorator_node in stmt['decorators']:
-                    if decorator_node.get('value') == 'prop':
-                        kei_func.is_property = True
-
-            # 直接存储装饰后的版本
-            ns_data[stmt['name']] = kei_func
-        else:
-            runtoken(stmt, ns_env)
+        runtoken(stmt, ns_env)
 
     ns = env
     ns[node['name']] = ns_data.copy()
@@ -2194,8 +2190,10 @@ def node_global(node, env) -> tuple: # if node['type'] == 'global':
     for name_node in node['names']:
         var_name = name_node['value']
         if '__globals__' not in env:
-            env['__globals__'] = set()
-        env['__globals__'].add(var_name)
+            env['__globals__'] = KeiList([])
+
+        (env['__globals__'].append(var_name)) if var_name not in env['__globals__'] else ...
+
     return None, False
 
 def node_typeassert(node, env) -> tuple: # if node['type'] == 'typeassert':

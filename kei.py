@@ -12,13 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.8-12"
-
-class Yieldable:
-    def __bool__(self):
-        return True
-
-yieldable = Yieldable
+__version__ = "1.8-13"
 
 class KeiState:
     stack: List[Any]
@@ -29,7 +23,7 @@ class KeiState:
     step: object
     error: bool
     var: list
-    env: dict | None
+    env: KeiDict | dict | None
     recursion: int
     maxrecursion: int
     argv: list
@@ -184,7 +178,8 @@ def getname(node, env):
                         traverse(n["iterable"], current_depth)
                     return
 
-                if type(n.get("value")) is str and n.get("value").startswith("_"):
+                value = n.get("value")
+                if isinstance(value, str) and value.startswith("_"):
                     return
 
                 if n.get("type") == "name":
@@ -335,7 +330,7 @@ def dict_diff(d1, d2, path="", seen=None):
         if key not in d1:
             added.append(full_path)
 
-    return added, removed, None
+    return added, removed, []
 
 def gethash(obj, depth=0):
     """递归计算对象的哈希值"""
@@ -369,9 +364,11 @@ def gethash(obj, depth=0):
 
     # 字典：递归哈希键值对
     if isinstance(obj, KeiDict):
+        # 直接使用内部字典属性
+        inner_dict = obj.items  # 这是真正的字典
         return hash(frozenset(
             (gethash(k, depth+1), gethash(v, depth+1))
-            for k, v in obj.items.items()
+            for k, v in inner_dict.items()  # 调用字典的 items() 方法
         ))
 
     # 有 name 属性的对象
@@ -962,7 +959,18 @@ def token(original: str) -> list:
         return result
 
     except KeiError as e:
-        error(e.types, e.value, [], __kei__.code[e.linenum] if hasattr(e, 'linenum') and e.linenum < len(__kei__.code) else "未知行", getattr(e, 'linenum', i)+1, __kei__.file)
+        code_line = "未知行"
+        if hasattr(e, 'linenum') and __kei__.code is not None:
+            linenum = getattr(e, 'linenum')
+            if isinstance(linenum, int) and 0 <= linenum < len(__kei__.code):
+                code_line = __kei__.code[linenum]
+            else:
+                code_line = "未知行"
+
+        error(e.types, e.value, [],
+              code_line,
+              getattr(e, 'linenum', i)+1,
+              __kei__.file)
         sys.exit(1)
 
 def ast(tokenlines: list) -> list:
@@ -3246,22 +3254,6 @@ def parse_addsub(tokens, pos, in_call=False, allow_assign=False, in_comp=False, 
             break
     return left, pos, linepos
 
-def match_dict(value, pattern):
-    if not isinstance(value, KeiDict):
-        return False
-    for item in pattern['items']:
-        key = item['key']
-        pattern_val = item['value']
-        if key not in value:
-            return False
-        if pattern_val['type'] == 'capture':
-            # 捕获变量
-            env[pattern_val['name']] = value[key]
-        elif pattern_val['type'] == 'str':
-            if value[key] != pattern_val['value']:
-                return False
-    return True
-
 def parse_match_pattern(tokens: list, pos: int, all_lines=None, linepos=0) -> tuple:
     if pos >= len(tokens):
         raise KeiError("SyntaxError", "case 后面缺少 pattern")
@@ -3955,10 +3947,16 @@ def escape(s):
 def find_method(class_obj, method_name, env):
     # 如果是 KeiClass
     if isinstance(class_obj, KeiClass):
-        while class_obj:
-            if method_name in class_obj.class_obj.get('methods_map', {}):
-                return class_obj.class_obj['methods_map'][method_name]
-            class_obj = env.get(class_obj.class_obj.get('parent')) if class_obj.class_obj.get('parent') else None
+        current = class_obj
+        while current is not None:  # ← 显式检查 None，而不是依赖 __bool__
+            if method_name in current.class_obj.get('methods_map', {}):
+                return current.class_obj['methods_map'][method_name]
+            parent_name = current.class_obj.get('parent')
+            if parent_name is None:
+                break
+            current = env.get(parent_name)
+            if current is None:
+                break
         return None
 
     # ✅ 如果是 Python 类型（如 KeiString, KeiInt 等）
@@ -3969,7 +3967,7 @@ def find_method(class_obj, method_name, env):
         # 检查父类
         for base in class_obj.__bases__:
             result = find_method(base, method_name, env)
-            if result:
+            if result is not None:
                 return result
         return None
 
@@ -3981,7 +3979,7 @@ def get_from_env(name, env, default=undefined):
     while current is not None:
         if name in current:
             return current[name]
-        current = current.get('__parent__')
+        current = current.get('__parent__', None)
     return default
 
 def runtoken(node, env) -> tuple:
@@ -3990,9 +3988,8 @@ def runtoken(node, env) -> tuple:
     if node is None:
         raise KeiError("RuntimeError", "出现了未意料的None节点")
 
-    env["__env__"] = KeiDict(env)
-
-    __kei__.env = env
+    env["__env__"] = env
+    __kei__.env    = env
 
     if 'source' not in globals():
         globals()['source'] = None
@@ -4328,9 +4325,7 @@ def exec(code, env=None):
         code = code.value
 
     if env is None:
-        env = {}
-
-        env.update({
+        env = KeiDict({
             "__path__": KeiList(["."] + paths),
             "__name__": KeiString("__main__"),
             "__env__": KeiDict(env),
@@ -4357,10 +4352,10 @@ def exec(code, env=None):
 
 def execmain(code, env=None, step=False):
     cmd_args = []
-    for arg in sys.argv[1:]:
+    for arg in sys.argv:
         cmd_args.append(f"{arg}")
 
-    __kei__.argv = sys.argv[1:]
+    __kei__.argv = sys.argv
 
     code += f"\nmain({content(cmd_args)});"
 
@@ -4426,7 +4421,6 @@ def main():
 
         # 处理帮助
         if parsed is None:
-            # 原有的帮助显示代码，完全不变
             print("\033[1m" + r""" _  __    _ _
 | |/ /___(_) |    __ _ _ __   __ _
 | ' // _ \ | |   / _` | '_ \ / _` |
@@ -4486,20 +4480,6 @@ def main():
                 print(f"[Kei Debugger] \033[33;1m{os.path.abspath(parsed['filename'])}\033[0m")
 
             try:
-                ret = execmain(filecontent, step=parsed['step'])
-            except SystemExit as e:
-                if not parsed['step']:
-                    raise
-                ret = e.code
-
-            if parsed['step']:
-                print(f"[Kei Debugger] \033[33;1m程序返回: {ret}\033[0m")
-
-            return ret
-
-            try:
-                # 将剩余参数传递给脚本
-                sys.argv = [parsed['filename']] + parsed['rest_args']
                 ret = execmain(filecontent, step=parsed['step'])
             except SystemExit as e:
                 if not parsed['step']:
