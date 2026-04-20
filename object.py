@@ -2128,7 +2128,7 @@ class KeiList(KeiBase):
 class KeiDict(KeiBase):
     def __init__(self, pairs=None):
         super().__init__("dict")
-        self.items = pairs if pairs is not None else {}
+        self.items = pairs if pairs is not None else {}.copy()
 
         self._methods = {
             "keys": self._keys,
@@ -2315,6 +2315,7 @@ class KeiFunction(KeiBase):
             raise KeiError("RecursionError", "递归深度超过限制")
 
         # 使用 bind_arguments
+        from eval import bind_arguments
         new_env = bind_arguments(self.func_obj, None, args, kwargs)
         new_env['__caller__'] = KeiString(self.__name__)
 
@@ -2774,6 +2775,7 @@ class KeiBoundMethod(KeiBase):
         self.__name__ = method_obj['name']
 
     def __call__(self, *args, **kwargs):
+        from eval import bind_arguments
         new_env = bind_arguments(self.method_obj, self.instance, args, kwargs)
 
         result = None
@@ -3126,130 +3128,6 @@ def content(obj, _seen=None, _depth=0, _in_container=False) -> str:
     finally:
         _seen.remove(obj_id)
 
-def bind_arguments(method_obj: dict, instance: KeiInstance | None, args: tuple, kwargs: dict) -> KeiDict:
-    """统一的参数绑定函数，完全复制 KeiFunction.__call__ 的逻辑"""
-    from kei import runtoken
-
-    new_env = KeiDict({'__parent__': KeiDict(method_obj.get('closure', {}))})
-
-    if instance is not None:
-        new_env['self'] = instance
-
-    params = method_obj['params']
-    defaults = method_obj.get('defaults', {})
-    type_hints = method_obj.get('typehints', {})
-
-    # 处理 self 参数
-    if instance is not None and params and params[0] == 'self':
-        params_to_use = params[1:]
-    else:
-        params_to_use = params
-
-    # 找到 * 和 ** 参数的位置
-    star_pos = -1
-    star_param_name = None
-    starstar_param_name = None
-
-    for i, p in enumerate(params_to_use):
-        if p.startswith('**'):
-            starstar_param_name = p[2:]
-            star_pos = i
-        elif p.startswith('*') and star_pos == -1:
-            star_param_name = p[1:]
-            star_pos = i
-            break
-
-    if star_pos == -1:
-        before_star = params_to_use
-        after_star = []
-    else:
-        before_star = params_to_use[:star_pos]
-        after_star = params_to_use[star_pos + 1:]
-
-    all_args = list(args)
-    remaining_kwargs = kwargs.copy()
-
-    # 处理 before_star 参数
-    for i, param_name in enumerate(before_star):
-        if i < len(all_args):
-            val = all_args[i]
-        elif param_name in remaining_kwargs:
-            val = remaining_kwargs.pop(param_name)
-        elif param_name in defaults:
-            default_val_node = defaults[param_name]
-            default_val, _ = runtoken(default_val_node, method_obj.get('closure', {}))
-            val = default_val
-        else:
-            val = undefined
-
-        # 类型检查
-        if param_name in type_hints:
-            expected, _ = runtoken(type_hints[param_name], method_obj.get('closure', {}))
-            if isinstance(expected, KeiList):
-                matched = False
-                for et in expected.items:
-                    if not isinstance(et, type):
-                        et = type(et)
-                    if isinstance(val, et):
-                        matched = True
-                        break
-                if not matched:
-                    raise KeiError("TypeError", f"参数 '{param_name}' 期望 {content(expected)}, 得到 {content(type(val))}")
-            else:
-                if not isinstance(expected, type):
-                    expected = type(expected)
-                if not isinstance(val, expected):
-                    raise KeiError("TypeError", f"参数 '{param_name}' 期望 {content(expected)}, 得到 {content(type(val))}")
-
-        new_env[param_name] = val
-
-    # 处理 *args
-    if star_param_name:
-        star_args = all_args[len(before_star):]
-        new_env[star_param_name] = KeiList(star_args)
-
-    # 处理 after_star 参数
-    for param_name in after_star:
-        if param_name.startswith('**'):
-            starstar_param_name = param_name[2:]
-            new_env[starstar_param_name] = KeiDict(remaining_kwargs)
-            remaining_kwargs = {}
-        elif param_name in remaining_kwargs:
-            val = remaining_kwargs.pop(param_name)
-
-            # 类型检查
-            if param_name in type_hints:
-                expected, _ = runtoken(type_hints[param_name], method_obj.get('closure', {}))
-                if isinstance(expected, KeiList):
-                    matched = False
-                    for et in expected.items:
-                        if not isinstance(et, type):
-                            et = type(et)
-                        if isinstance(val, et):
-                            matched = True
-                            break
-                    if not matched:
-                        raise KeiError("TypeError", f"参数 '{param_name}' 期望 {content(expected)}, 得到 {content(type(val))}")
-                else:
-                    if not isinstance(expected, type):
-                        expected = type(expected)
-                    if not isinstance(val, expected):
-                        raise KeiError("TypeError", f"参数 '{param_name}' 期望 {content(expected)}, 得到 {content(type(val))}")
-
-            new_env[param_name] = val
-        elif param_name in defaults:
-            default_val_node = defaults[param_name]
-            default_val, _ = runtoken(default_val_node, method_obj.get('closure', {}))
-            new_env[param_name] = default_val
-        else:
-            new_env[param_name] = undefined
-
-    # 检查多余的关键字参数
-    if remaining_kwargs and not starstar_param_name:
-        raise KeiError("TypeError", f"未预料的关键字参数: {list(remaining_kwargs.keys())}")
-
-    return new_env
-
 # ========== 常量 ==========
 
 HASVALUE = (
@@ -3272,7 +3150,7 @@ __all__ = [
     'KeiList', 'KeiDict', 'KeiBool',
     'KeiFunction', 'KeiClass', 'KeiNamespace', 'NamespaceEnv',
     'KeiInstance', 'KeiMethod', 'KeiBoundMethod',
-    'content', 'bind_arguments',
+    'content',
     '_undefined', '_null',
     'KeiException', 'KeiError',
     'HASVALUE', 'HASITMES'
