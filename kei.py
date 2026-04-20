@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.9-4"
+__version__ = "1.9-5"
 
 class KeiState:
     stack: List[Any]
@@ -271,8 +271,8 @@ def error(errtype: str | None, info: str, stack: list=[], code:str|None=None, li
 
     print(f"{space} ·")
 
-    import traceback
-    traceback.print_exc()
+    #import traceback
+    #traceback.print_exc()
 
     if not __kei__.repl:
         sys.exit(1)
