@@ -1358,6 +1358,14 @@ class kei:
     super = decorator("super")
 
 keistdlib = """
+fn safecall(func, *args, **kwargs, default=undefined) {
+    try {
+        return func(*args, **kwargs);
+    } catch {
+        return default;
+    };
+};
+
 class gen {
     fn __init__(self, func) {
         self.func  = func;

@@ -1814,10 +1814,17 @@ def node_class(node, env) -> tuple:
             class_obj['decorated_methods'][stmt['name']] = kei_func
 
         elif stmt['type'] == 'assign':
-            if stmt['left']['type'] == 'name':
-                attr_name = stmt['left']['value']
-                attr_val, _ = runtoken(stmt['right'], env)
-                class_obj['attrs'][attr_name] = attr_val
+            # 创建一个新环境，把 class_obj['attrs'] 作为存储
+            attr_env = KeiDict({'__parent__': env} | class_obj['decorated_methods'])
+            attr_env.update(class_obj['attrs'])  # 把已有属性放进去
+
+            # 执行赋值（会修改 attr_env）
+            node_assign(stmt, attr_env)
+
+            # 把修改后的属性存回 class_obj['attrs']
+            for key, value in attr_env.items.items():
+                if not key.startswith('_'):
+                    class_obj['attrs'][key] = value
 
     kei_class = KeiClass(class_obj, env)
     if py_parent:

@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.9-1"
+__version__ = "1.9-3"
 
 class KeiState:
     stack: List[Any]
@@ -91,8 +91,6 @@ from object import *
 from lib.kei2py import *
 
 DEBUG = False
-
-mapping = {}
 
 keywords = {
    'class', 'namespace', 'if', 'while', 'fn', 'return', 'for',
@@ -273,8 +271,8 @@ def error(errtype: str | None, info: str, stack: list=[], code:str|None=None, li
 
     print(f"{space} ·")
 
-    #import traceback
-    #traceback.print_exc()
+    import traceback
+    traceback.print_exc()
 
     if not __kei__.repl:
         sys.exit(1)
@@ -975,8 +973,6 @@ def token(original: str) -> list:
         sys.exit(1)
 
 def ast(tokenlines: list) -> list:
-    global mapping
-
     result     = []
     linetokens = []
     line_num   = 0
@@ -1148,54 +1144,8 @@ def ast(tokenlines: list) -> list:
             continue
 
         if thetoken == "$":
-            try:
-                end = tokens.index(';', pos)
-                if "=" in tokens[pos+1: end]:
-                    new    = ""
-                    old    = ""
-                    sta    = False
-                    newpos = 1
-                    for t in tokens[pos+1:]:
-                        newpos += 1
-                        if t == ";":
-                            break
-                        if t == "=":
-                            sta = True
-                            continue
-                        if sta:
-                            old += t
-                        else:
-                            new += t
-
-                    pos += newpos
-
-                    mapping.update({new:old})
-                else:
-                    newpos = 1
-                    filename = ""
-                    for t in tokens[pos+1:]:
-                        newpos += 1
-                        if t == ";":
-                            break
-
-                        filename += t
-
-                    filename = filename.replace(".", "/")
-                    filename += ".json"
-
-                    if os.path.isfile(filename):
-                        with open(filename, "r", encoding="utf-8") as f:
-                            import json
-                            mapping.update(json.load(f))
-                    else:
-                        print(f"[ERROR] 映射文件 \033[33;1m{filename}\033[0m 不存在")
-                        sys.exit(1)
-
-                    pos += newpos
-
-            except Exception as e:
-                print(f"\033[31m[ERROR]\033[0m 无法加载映射 \033[33;1m{filename}\033[0m: {e}")
-                sys.exit(1)
+            result.append({"type":"symbol","value":"$", 'linenum':linetokens[pos][1]})
+            pos += 1
 
             continue
 
@@ -1218,28 +1168,6 @@ def ast(tokenlines: list) -> list:
 
         result.append({"type":"name", "value":thetoken, 'linenum':linetokens[pos][1]})
         pos += 1
-
-    new = []
-    if mapping is not None:
-        for i in result:
-            new_token = i.copy()
-
-            if new_token['type'] in {'name', 'op', 'symbol'}:
-                if new_token['value'] in mapping:
-                    map_val = mapping[new_token['value']]
-                    if type(map_val) is list:
-                        if len(map_val) == 2:
-                            new_token['type'] = map_val[0]
-                            new_token['value'] = map_val[1]
-                        else:
-                            print(f"\033[31m[ERROR]\033[0m 无法加载映射: 格式错误")
-                            sys.exit(1)
-                    else:
-                        new_token['value'] = map_val
-
-            new.append(new_token)
-
-        result = new
 
     new = [[]]
     pos = 0

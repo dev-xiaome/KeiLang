@@ -2376,16 +2376,17 @@ class KeiClass(KeiBase):
         self.__name__ = class_obj['name']
         self._class_attrs = class_obj.get('attrs', {})
         self._methods_map = class_obj.get('methods_map', {})
-
-        self.decorated_methods = {}
+        self.decorated_methods = class_obj.get('decorated_methods', {})
 
     def _get_method(self, name: str) -> Optional[Callable]:
         """获取类方法"""
         if name in self._class_attrs:
             return self._class_attrs[name]
-        if name in self._methods_map:
-            method_obj = self._methods_map[name]
-            return KeiMethod(method_obj, self)
+
+        if name in self.decorated_methods:
+            func_obj = self.decorated_methods[name]
+            return KeiMethod(func_obj.func_obj, self, is_static=func_obj.is_static, is_property=func_obj.is_property)
+
         return None
 
     def __call__(self, *args: Any, **kwargs: Any) -> 'KeiInstance':
@@ -2412,9 +2413,9 @@ class KeiClass(KeiBase):
             if hasattr(self, 'decorated_methods') and key in self.decorated_methods:
                 decorated = self.decorated_methods[key]
                 if hasattr(decorated, 'is_property') and decorated.is_property:
-                    return decorated
+                    return decorated()
                 if isinstance(decorated, KeiFunction):
-                    return KeiMethod(decorated.func_obj, self)
+                    return KeiMethod(decorated.func_obj, self, is_static=decorated.is_static, is_property=decorated.is_property)
             return method
 
         if hasattr(self, 'py_parent'):
@@ -2439,7 +2440,7 @@ class KeiClass(KeiBase):
         self._class_attrs[key] = value
 
     def __repr__(self) -> str:
-        return f"<class {self.__name__}>"
+        return f"<class '{self.__name__}'>"
 
     def __dir__(self):
         return list(self._class_attrs.keys()) + list(self._methods_map.keys())
@@ -2458,7 +2459,7 @@ class KeiProperty(KeiBase):
         return bound()
 
     def __repr__(self):
-        return f"<property {self.__name__}>"
+        return f"<property '{self.__name__}'>"
 
 
 # ========== 实例类型 ==========
@@ -2473,37 +2474,38 @@ class KeiInstance(KeiBase):
     def __content__(self):
         if self._parent_instance is not None:
             return self._parent_instance
-        return f"<instance {self._class.__name__}>"
+        return f"<instance of '{self._class.__name__}'>"
 
     def _get_method(self, name: str) -> Optional[Callable]:
-        """获取方法：先查实例属性，再查类方法"""
         if name in self._attrs:
             return self._attrs[name]
+
         if self._class is not None:
             return self._class._get_method(name)
         return None
 
     def __getitem__(self, key):
-        # 先查自己的方法
         if key in self._attrs:
             return self._attrs[key]
 
         method = self._get_method(key)
         if method:
             if hasattr(method, 'is_property') and method.is_property:
+                if hasattr(method, 'is_static') and method.is_static:
+                    return method()
                 return method(self)
             if isinstance(method, KeiMethod):
-                return method.bind(self)
-            # ✅ 对于普通函数（包括从父类继承的），也绑定 self
+                if method.is_static:
+                    return method
+                else:
+                    return method.bind(self)
             if callable(method):
                 return lambda *args, **kwargs: method(self, *args, **kwargs)
             return method
 
-        # 如果自己没有，尝试从父类实例找
         if hasattr(self, '_parent_instance') and self._parent_instance:
             parent_method = getattr(self._parent_instance, key, None)
             if parent_method and callable(parent_method):
-                # 绑定到父类实例
                 return lambda *args, **kwargs: parent_method(*args, **kwargs)
 
         return undefined
@@ -2515,22 +2517,7 @@ class KeiInstance(KeiBase):
             return
         self._attrs[key] = _value
 
-    def __repr__(self):
-        return f"<instance {self._class.__name__}>"
-
-    def __call__(self, *args, **kwargs):
-        # 查找 KeiLang 层面的 __call__ 方法
-        method = self._get_method('__call__')
-        if method:
-            if hasattr(method, 'is_property') and method.is_property:
-                return method(self)
-            if isinstance(method, KeiMethod):
-                return method.bind(self)(*args, **kwargs)
-            return method(*args, **kwargs)
-        raise KeiError("TypeError", f"{self} 实例不可调用")
-
     def __delitem__(self, key):
-        """del obj[key] 时转发到 KeiLang 的 __delitem__ 方法"""
         method = self._get_method('__delitem__')
         if method:
             if isinstance(method, KeiMethod):
@@ -2540,14 +2527,12 @@ class KeiInstance(KeiBase):
             else:
                 method(key)
         else:
-            # 默认行为：从 _attrs 删除（如果 key 是字符串）
             if isinstance(key, str) and key in self._attrs:
                 del self._attrs[key]
             else:
                 raise KeyError(f"键 '{key}' 不存在")
 
     def __delattr__(self, name):
-        """del obj.attr 时转发到 KeiLang 的 __delattr__ 方法"""
         method = self._get_method('__delattr__')
         if method:
             if isinstance(method, KeiMethod):
@@ -2557,26 +2542,130 @@ class KeiInstance(KeiBase):
             else:
                 method(name)
         else:
-            # 默认行为：从 _attrs 删除
             if name in self._attrs:
                 del self._attrs[name]
             else:
                 raise AttributeError(f"属性 '{name}' 不存在")
 
-    def __delete__(self):
-        """Python 的 __delete__ 转发到 KeiLang 的 __delete__ 方法"""
+    def __delete__(self, instance):
+        """描述符删除属性时调用（注意参数）"""
         method = self._get_method('__delete__')
         if method:
             if isinstance(method, KeiMethod):
-                method.bind(self)()
+                method.bind(self)(instance)
             elif callable(method):
-                method(self)
+                method(self, instance)
             else:
-                method()
+                method(instance)
 
-    # ========== 上下文管理器支持 ==========
+    # ========== 你要求补充的转发 ==========
+
+    def __len__(self):
+        """len(obj) 转发"""
+        method = self._get_method('__len__')
+        if method:
+            if isinstance(method, KeiMethod):
+                return method.bind(self)()
+            if callable(method):
+                return method(self)
+            return method()
+        return 0
+
+    def __bool__(self):
+        """if obj / bool(obj) 转发"""
+        method = self._get_method('__bool__')
+        if method:
+            if isinstance(method, KeiMethod):
+                return method.bind(self)()
+            if callable(method):
+                return method(self)
+            return method()
+        return True
+
+    def __contains__(self, item):
+        """item in obj 转发"""
+        method = self._get_method('__contains__')
+        if method:
+            if isinstance(method, KeiMethod):
+                return method.bind(self)(item)
+            if callable(method):
+                return method(self, item)
+            return method(item)
+        return False
+
+    def __iter__(self):
+        """for x in obj 转发"""
+        method = self._get_method('__iter__')
+        if method:
+            if isinstance(method, KeiMethod):
+                return method.bind(self)()
+            if callable(method):
+                return method(self)
+            return method()
+        raise TypeError(f"'{type(self).__name__}' object is not iterable")
+
+    def __next__(self):
+        """next(obj) 转发（用于迭代器）"""
+        method = self._get_method('__next__')
+        if method:
+            if isinstance(method, KeiMethod):
+                return method.bind(self)()
+            if callable(method):
+                return method(self)
+            return method()
+        raise StopIteration
+
+    # ========== 算术运算符（一键转发） ==========
+    def _forward_binary(self, name, other):
+        method = self._get_method(name)
+        if method:
+            if isinstance(method, KeiMethod):
+                return method.bind(self)(other)
+            if callable(method):
+                return method(self, other)
+            return method(other)
+        return NotImplemented
+
+    def __add__(self, other): return self._forward_binary('__add__', other)
+    def __sub__(self, other): return self._forward_binary('__sub__', other)
+    def __mul__(self, other): return self._forward_binary('__mul__', other)
+    def __truediv__(self, other): return self._forward_binary('__truediv__', other)
+    def __floordiv__(self, other): return self._forward_binary('__floordiv__', other)
+    def __mod__(self, other): return self._forward_binary('__mod__', other)
+    def __pow__(self, other): return self._forward_binary('__pow__', other)
+
+    def __radd__(self, other): return self._forward_binary('__radd__', other)
+    def __rsub__(self, other): return self._forward_binary('__rsub__', other)
+    def __rmul__(self, other): return self._forward_binary('__rmul__', other)
+    def __rtruediv__(self, other): return self._forward_binary('__rtruediv__', other)
+    def __rfloordiv__(self, other): return self._forward_binary('__rfloordiv__', other)
+    def __rmod__(self, other): return self._forward_binary('__rmod__', other)
+    def __rpow__(self, other): return self._forward_binary('__rpow__', other)
+
+    def __neg__(self): return self._forward_binary('__neg__', None)
+    def __pos__(self): return self._forward_binary('__pos__', None)
+    def __abs__(self): return self._forward_binary('__abs__', None)
+
+    # ========== 比较运算符 ==========
+    def _forward_compare(self, name, other):
+        method = self._get_method(name)
+        if method:
+            if isinstance(method, KeiMethod):
+                return method.bind(self)(other)
+            if callable(method):
+                return method(self, other)
+            return method(other)
+        return NotImplemented
+
+    def __eq__(self, other): return self._forward_compare('__eq__', other)
+    def __ne__(self, other): return self._forward_compare('__ne__', other)
+    def __lt__(self, other): return self._forward_compare('__lt__', other)
+    def __gt__(self, other): return self._forward_compare('__gt__', other)
+    def __le__(self, other): return self._forward_compare('__le__', other)
+    def __ge__(self, other): return self._forward_compare('__ge__', other)
+
+    # ========== 上下文管理器（你已经有了，保留） ==========
     def __enter__(self):
-        """进入 with 语句时调用"""
         method = self._get_method('__enter__')
         if method:
             if isinstance(method, KeiMethod):
@@ -2584,11 +2673,9 @@ class KeiInstance(KeiBase):
             if callable(method):
                 return method(self)
             return method()
-        # 如果没有 __enter__，返回 self（像普通对象一样）
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """退出 with 语句时调用"""
         method = self._get_method('__exit__')
         if method:
             if isinstance(method, KeiMethod):
@@ -2596,35 +2683,29 @@ class KeiInstance(KeiBase):
             if callable(method):
                 return method(self, exc_type, exc_val, exc_tb)
             return method(exc_type, exc_val, exc_tb)
-        # 如果没有 __exit__，默认不处理异常
         return False
 
     def __dir__(self):
         return list(self._attrs.keys())
 
     def __copy__(self):
-        """转发给实例的 __copy__ 方法"""
         method = self._get_method('__copy__')
         if method:
             return method()
-        # 默认浅拷贝
         new = KeiInstance(self._class)
         new._attrs = self._attrs.copy()
         return new
 
     def __deepcopy__(self, memo):
-        """转发给实例的 __deepcopy__ 方法"""
         method = self._get_method('__deepcopy__')
         if method:
             return method(memo)
-        # 默认深拷贝
         from copy import deepcopy
         new = KeiInstance(self._class)
         new._attrs = deepcopy(self._attrs, memo)
         return new
 
     def get(self, key, default=None):
-        """安全获取属性，不存在时返回 default"""
         if key in self._attrs:
             return self._attrs[key]
         if self._class is not None:
@@ -2637,10 +2718,8 @@ class KeiInstance(KeiBase):
         return default
 
     def __getattr__(self, name):
-        # 从 _attrs 里取任何属性
         if name in self._attrs:
             return self._attrs[name]
-        # 如果 _attrs 里没有，尝试从父类实例取
         if hasattr(self, '_parent_instance') and self._parent_instance:
             return getattr(self._parent_instance, name)
         raise AttributeError(name)
@@ -2648,13 +2727,13 @@ class KeiInstance(KeiBase):
 # ========== 方法类型 ==========
 
 class KeiMethod(KeiBase):
-    def __init__(self, method_obj: dict, klass: KeiClass):
+    def __init__(self, method_obj: dict, klass: KeiClass, is_static=False, is_property=False):
         super().__init__("method")
         self.method_obj = method_obj
         self.klass = klass
         self.__name__ = method_obj['name']
-        self.is_static = False
-        self.is_property = False
+        self.is_static = is_static
+        self.is_property = is_property
 
     def bind(self, instance: KeiInstance) -> 'KeiBoundMethod':
         # ✅ 修复：优先使用 decorated_methods 中的版本
@@ -2671,6 +2750,9 @@ class KeiMethod(KeiBase):
             bound = self.bind(obj)
             return bound()
         return self.bind(obj)
+
+    def __repr__(self):
+        return f"<method '{self.__name__}'>"
 
     def __call__(self, *args, **kwargs):
         if self.is_static:
@@ -2704,7 +2786,7 @@ class KeiBoundMethod(KeiBase):
         return result
 
     def __repr__(self):
-        return f"<method {self.__name__}>"
+        return f"<method '{self.__name__}'>"
 
 
 # ========== 命名空间类型 ==========
@@ -2780,7 +2862,7 @@ class KeiNamespace(KeiBase):
         return iter(self.nsenv.keys())
 
     def __repr__(self):
-        return f"<namespace {self.__name__}>"
+        return f"<namespace '{self.__name__}'>"
 
     def __dir__(self):
         return list(self.nsenv.keys())
@@ -2917,8 +2999,8 @@ def content(obj, _seen=None, _depth=0, _in_container=False) -> str:
             return "{" + ", ".join(items) + "}"
 
         # KeiLang 对象类型
-        if isinstance(obj, KeiFunction): return f"<function {obj.__name__}>"
-        if isinstance(obj, KeiClass): return f"<class {obj.__name__}>"
+        if isinstance(obj, KeiFunction): return f"<function '{obj.__name__}'>"
+        if isinstance(obj, KeiClass): return f"<class '{obj.__name__}'>"
 
         # KeiLang 实例
         if isinstance(obj, KeiInstance):
@@ -2931,35 +3013,35 @@ def content(obj, _seen=None, _depth=0, _in_container=False) -> str:
                 return str(result)
             return str(obj.__content__())
 
-        if isinstance(obj, KeiNamespace): return f"<namespace {obj.__name__}>"
-        if isinstance(obj, (KeiMethod, KeiBoundMethod)): return f"<method {obj.__name__}>"
+        if isinstance(obj, KeiNamespace): return f"<namespace '{obj.__name__}'>"
+        if isinstance(obj, (KeiMethod, KeiBoundMethod)): return f"<method '{obj.__name__}'>"
         if isinstance(obj, KeiError): return f"{obj.value}"
 
         # KeiLang 类型对象
         if isinstance(obj, type):
-            if obj == KeiBase: return "<class any>"
-            elif obj == KeiInt: return "<class int>"
-            elif obj == KeiFloat: return "<class float>"
-            elif obj == KeiString: return "<class string>"
-            elif obj == KeiBool: return "<class bool>"
-            elif obj == KeiList: return "<class list>"
-            elif obj == KeiDict: return "<class dict>"
-            elif obj == KeiFunction: return "<class function>"
-            elif obj == KeiClass: return "<class class>"
-            elif obj == KeiInstance: return "<class instance>"
-            elif obj == KeiNamespace: return "<class namespace>"
-            elif obj == _undefined: return "<class undefined>"
-            elif obj == _null: return "<class null>"
-            else: return f"<class {obj.__name__}>" if hasattr(obj, '__name__') else "<class>"
+            if obj == KeiBase: return "<class 'any'>"
+            elif obj == KeiInt: return "<class 'int'>"
+            elif obj == KeiFloat: return "<class 'float'>"
+            elif obj == KeiString: return "<class 'string'>"
+            elif obj == KeiBool: return "<class 'bool'>"
+            elif obj == KeiList: return "<class 'list'>"
+            elif obj == KeiDict: return "<class 'dict'>"
+            elif obj == KeiFunction: return "<class 'function'>"
+            elif obj == KeiClass: return "<class 'class'>"
+            elif obj == KeiInstance: return "<class 'instance'>"
+            elif obj == KeiNamespace: return "<class 'namespace'>"
+            elif obj == _undefined: return "<class 'undefined'>"
+            elif obj == _null: return "<class 'null'>"
+            else: return f"<class '{obj.__name__}'>" if hasattr(obj, '__name__') else "<class>"
 
         # Python 模块
         if isinstance(obj, type(__import__('sys'))):
             name = getattr(obj, '__name__', 'unknown')
-            return f"<module {name}>"
+            return f"<module '{name}'>"
 
         # Python 类型
         if isinstance(obj, type):
-            return f"<type {obj.__name__}>"
+            return f"<type '{obj.__name__}'>"
 
         # Python 原生容器
         if isinstance(obj, list):
@@ -3002,7 +3084,7 @@ def content(obj, _seen=None, _depth=0, _in_container=False) -> str:
         # Python 可调用对象
         if callable(obj):
             if hasattr(obj, '__name__'):
-                return f"<function {obj.__name__}>"
+                return f"<function '{obj.__name__}'>"
             return "<function>"
 
         # ========== Python 自定义对象（与 KeiInstance 行为一致）==========
@@ -3022,7 +3104,7 @@ def content(obj, _seen=None, _depth=0, _in_container=False) -> str:
                 repr_str = obj.__repr__()
                 if repr_str.startswith('<') and repr_str.endswith('>'):
                     return repr_str
-                return f"<object {repr_str}>"
+                return f"<object '{repr_str}'>"
             except:
                 pass
 
@@ -3035,11 +3117,11 @@ def content(obj, _seen=None, _depth=0, _in_container=False) -> str:
 
         # 有 __name__ 属性的对象
         if hasattr(obj, '__name__'):
-            return f"<object {obj.__name__}>"
+            return f"<object '{obj.__name__}'>"
 
         # 默认：显示类名（和 KeiInstance 格式一致）
         class_name = obj.__class__.__name__
-        return f"<instance {class_name}>"
+        return f"<instance of '{class_name}'>"
 
     finally:
         _seen.remove(obj_id)
