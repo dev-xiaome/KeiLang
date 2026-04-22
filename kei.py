@@ -12,7 +12,7 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.9-5"
+__version__ = "1.9-6"
 
 class KeiState:
     stack: List[Any]
@@ -4252,14 +4252,14 @@ def runtoken(node, env) -> tuple:
             else:
                 raise
 
-def exec(code, env=None):
+def exec(code, env=None, name="__main__"):
     if isinstance(code, KeiString):
         code = code.value
 
     if env is None:
         env = KeiDict({
             "__path__": KeiList(["."] + paths),
-            "__name__": KeiString("__main__"),
+            "__name__": KeiString(name),
             "__env__": KeiDict(env),
             "__osname__": KeiString(platform.system().lower()),
             "__file__": KeiString(os.path.abspath(__kei__.file))

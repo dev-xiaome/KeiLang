@@ -1,0 +1,174 @@
+class mem {
+    fn __init__(self, memsize=64, pagesize=8) {
+        import numkei;
+        self.page_size = pagesize;
+        self.page_count = memsize;
+        self.value = numkei.zeros([memsize, pagesize]);
+        self.pages = [];
+        self.datapos = [];
+
+        for i in 0..memsize {
+            self.pages.push(false);
+        };
+    };
+
+    fn alloc_page(self) {
+        for i in 0..len(self.pages) {
+            if self.pages[i] == false {
+                self.pages[i] = true;
+                return i;
+            };
+        };
+        raise "MemoryError", "没有空闲页";
+    };
+
+    fn free_page(self, page) {
+        if page >= 0 and page < len(self.pages) {
+            self.pages[page] = false;
+        };
+    };
+
+    fn write(self, **datas) {
+        for name, content in datas {
+            if content isa float or content isa string {
+                c = bin(content);
+                pages_needed = (len(c) + self.page_size - 1) // self.page_size;
+                pages = [];
+
+                for i in 0..(pages_needed-1) {
+                    pages.push(self.alloc_page());
+                };
+
+                for i in 0..(len(c)-1) {
+                    page = pages[i // self.page_size];
+                    offset = i % self.page_size;
+                    if self.value[page] is undefined {
+                        raise "MemoryError", "没有空闲页";
+                    };
+                    self.value[page][offset] = int(c[i]);
+                };
+
+                self.datapos.push({
+                    "name": name,
+                    "pages": pages,
+                    "length": len(c),
+                    "type": string(type(content))
+                });
+            } else {
+                raise "TypeError", "只支持存储 int/float/string";
+            };
+        };
+    };
+
+    fn get(self, name, default=undefined) {
+        for data in self.datapos {
+            if data["name"] == name {
+                bits = "";
+                for page in data["pages"] {
+                    for offset in 0..(self.page_size-1) {
+                        if len(bits) < data["length"] {
+                            val = self.value[page][offset];
+                            if val == undefined {
+                                val = 0;
+                            };
+                            bits = bits + string(val);
+                        };
+                    };
+                };
+                if data["type"] == "int" {
+                    return frombin(bits, "int");
+                } elif data["type"] == "float" {
+                    return frombin(bits, "float");
+                } elif data["type"] == "str" {
+                    return frombin(bits, "str");
+                };
+            };
+        };
+        return undefined;
+    };
+
+    fn delete(self, name) {
+        for i in 0..(len(self.datapos)-1) {
+            if self.datapos[i]["name"] == name {
+                data = self.datapos[i];
+                for page in data["pages"] {
+                    self.free_page(page);
+                };
+                del self.datapos[i];
+                return data;
+            };
+        };
+        raise "NameError", "未找到 " + name;
+    };
+
+    fn __getitem__(self, name) {
+        return self.get(name);
+    };
+
+    fn defrag(self) {
+        # 收集所有还在使用的页
+        used_pages = [];
+        for data in self.datapos {
+            for page in data["pages"] {
+                if not page in used_pages {
+                    used_pages.push(page);
+                };
+            };
+        };
+        used_pages.sort();
+
+        # 如果没有空洞，直接返回
+        if len(used_pages) == 0 {
+            return;
+        };
+
+        # 检查是否有空洞（页号不连续）
+        has_hole = false;
+        for i in 0..len(used_pages)-1 {
+            if used_pages[i+1] != used_pages[i] + 1 {
+                has_hole = true;
+                break;
+            };
+        };
+        if not has_hole {
+            return;
+        };
+
+        # 构建新的页映射
+        new_pages = [];
+        for i in 0..len(used_pages)-1 {
+            new_pages.push(i);
+        };
+
+        # 创建新的 value 数组
+        new_value = [];
+        for i in 0..len(used_pages)-1 {
+            new_value.push(self.value[used_pages[i]]);
+        };
+
+        # 更新 datapos 中的页号
+        for data in self.datapos {
+            new_data_pages = [];
+            for old_page in data["pages"] {
+                # 找到 old_page 在 used_pages 中的新索引
+                for j in 0..len(used_pages)-1 {
+                    if used_pages[j] == old_page {
+                        new_data_pages.push(j);
+                        break;
+                    };
+                };
+            };
+            data["pages"] = new_data_pages;
+        };
+
+        # 替换 value 和更新 pages 标记
+        self.value = new_value;
+        self.pages = [];
+        for i in 0..len(used_pages)-1 {
+            self.pages.push(true);
+        };
+        for i in len(used_pages)..self.page_count-1 {
+            self.pages.push(false);
+        };
+    };
+};

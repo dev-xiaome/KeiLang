@@ -328,7 +328,10 @@ class kei:
         elif type(string) is KeiDict:
             return KeiInt(len(string.items))
         else:
-            raise KeiError("TypeError", "len 需要字符串/列表/字典")
+            size = 0
+            for _ in string:
+                size += 1
+            return KeiInt(size)
 
     @s
     def check(text, *obj, name=''):
@@ -1008,6 +1011,90 @@ class kei:
         return false
 
     @s
+    def issubclass(clas, parent):
+        """判断 cls 是否是 parent 的子类（或相同）"""
+        # 处理 KeiList（多个父类）
+        if isinstance(parent, KeiList):
+            for p in parent.items:
+                if kei.issubclass(clas, p):
+                    return true
+            return false
+
+        # 处理 Python 类型（int, float, str 等）
+        if isinstance(clas, type) and isinstance(parent, type):
+            return true if issubclass(clas, parent) else false
+
+        # 处理 KeiLang 的 KeiClass
+        if isinstance(clas, KeiClass) and isinstance(parent, KeiClass):
+            # 相同类
+            if clas is parent:
+                return true
+            # 沿着继承链向上找
+            current = clas.class_obj.get('parent')
+            while current is not None:
+                if current is parent:
+                    return true
+                # 继续向上
+                if isinstance(current, KeiClass):
+                    current = current.class_obj.get('parent')
+                else:
+                    break
+            return false
+
+        # 处理 KeiClass 和 Python 类型的混合（如 KeiClass 继承自 Python 类）
+        if isinstance(clas, KeiClass) and isinstance(parent, type):
+            # 检查 cls 是否有 py_parent
+            if hasattr(clas, 'py_parent'):
+                py_parent = getattr(clas, 'py_parent', None)
+                if py_parent is not None:
+                    return kei.issubclass(py_parent, parent)
+            return false
+
+        # 处理 Python 类型和 KeiClass 的混合（反向）
+        if isinstance(clas, type) and isinstance(parent, KeiClass):
+            return false  # Python 类型不会继承 KeiClass
+
+        # 如果是 KeiString（类名）
+        if isinstance(clas, KeiString):
+            cls_name = clas.value
+            # 检查 KeiLang 内置类型
+            builtin_types = {
+                'int': KeiInt,
+                'float': KeiFloat,
+                'string': KeiString,
+                'bool': KeiBool,
+                'list': KeiList,
+                'dict': KeiDict,
+            }
+            if cls_name in builtin_types:
+                return kei.issubclass(builtin_types[cls_name], parent)
+            # 检查环境中的类
+            from kei import __kei__
+            if __kei__.env is not None and cls_name in __kei__.env:
+                return kei.issubclass(__kei__.env[cls_name], parent)
+            return false
+
+        # 处理 parent 是 KeiString
+        if isinstance(parent, KeiString):
+            parent_name = parent.value
+            builtin_parents = {
+                'int': KeiInt,
+                'float': KeiFloat,
+                'string': KeiString,
+                'bool': KeiBool,
+                'list': KeiList,
+                'dict': KeiDict,
+            }
+            if parent_name in builtin_parents:
+                return kei.issubclass(clas, builtin_parents[parent_name])
+            from kei import __kei__
+            if __kei__.env is not None and parent_name in __kei__.env:
+                return kei.issubclass(clas, __kei__.env[parent_name])
+            return false
+
+        return false
+
+    @s
     def getattr(obj, name, default=undefined):
         """获取对象的属性"""
         name = to_str(name)
@@ -1064,6 +1151,10 @@ class kei:
         return true if isinstance(obj, KeiClass) else false
 
     @s
+    def isfunc(obj):
+        return true if isinstance(obj, KeiFunction) else false
+
+    @s
     def delattr(obj, name):
         name = to_str(name)
 
@@ -1087,19 +1178,16 @@ class kei:
         obj = undefined
 
     @s
-    def bin(obj, bits=None):
+    def bin(obj, bits=None) -> KeiString:
         """将任何 KeiLang 对象转换为二进制字符串"""
-
-        # 转换 bits 参数
         if bits is not None:
             if isinstance(bits, KeiInt):
                 bits = bits.value
             else:
                 bits = int(bits)
 
-        # None / null / undefined
         if obj is None or obj is null or obj is undefined:
-            return "0"
+            return KeiString("0")
 
         # 整数
         if isinstance(obj, KeiInt):
@@ -1110,7 +1198,7 @@ class kei:
                 s = bin(val & 0xFFFFFFFFFFFFFFFF)[2:]
             if bits is not None:
                 s = s.zfill(bits)
-            return s
+            return KeiString(s)
 
         # 浮点数
         if isinstance(obj, KeiFloat):
@@ -1121,11 +1209,11 @@ class kei:
             s = bin(i)[2:].zfill(64)
             if bits is not None:
                 s = s[-bits:] if bits < 64 else s.zfill(bits)
-            return s
+            return KeiString(s)
 
         # 布尔值
         if isinstance(obj, KeiBool):
-            return "1" if obj.value else "0"
+            return KeiString("1") if obj.value else KeiString("0")
 
         # 字符串
         if isinstance(obj, KeiString):
@@ -1135,44 +1223,42 @@ class kei:
                 result.append(bin(code)[2:].zfill(16))
             if bits is not None:
                 full = ''.join(result)
-                return full[-bits:] if bits < len(full) else full.zfill(bits)
-            return ' '.join(result)
+                s = full[-bits:] if bits < len(full) else full.zfill(bits)
+                return KeiString(s)
+            return KeiString(' '.join(result))
 
         # 列表
         if isinstance(obj, KeiList):
-            result = [kei.bin(item, bits) for item in obj.items]
-            return '[' + ', '.join(result) + ']'
+            result = [kei.bin(item, bits).value for item in obj.items]
+            return KeiString('[' + ', '.join(result) + ']')
 
         # 字典
         if isinstance(obj, KeiDict):
             result = []
             for k, v in obj.items.items():
-                k_bin = kei.bin(k, bits)
-                v_bin = kei.bin(v, bits)
+                k_bin = kei.bin(k, bits).value
+                v_bin = kei.bin(v, bits).value
                 result.append(f"{k_bin}: {v_bin}")
-            return '{' + ', '.join(result) + '}'
+            return KeiString('{' + ', '.join(result) + '}')
 
         # 其他类型
         s = str(obj)
         result = []
         for ch in s:
             result.append(bin(ord(ch))[2:].zfill(16))
-        return ' '.join(result)
+        return KeiString(' '.join(result))
 
     @s
-    def hex(obj, bits=None):
+    def hex(obj, bits=None) -> KeiString:
         """将任何 KeiLang 对象转换为十六进制字符串"""
-
-        # 转换 bits 参数
         if bits is not None:
             if isinstance(bits, KeiInt):
                 bits = bits.value
             else:
                 bits = int(bits)
 
-        # None / null / undefined
         if obj is None or obj is null or obj is undefined:
-            return "0"
+            return KeiString("0")
 
         # 整数
         if isinstance(obj, KeiInt):
@@ -1180,15 +1266,13 @@ class kei:
             if val >= 0:
                 s = hex(val)[2:]
             else:
-                # 负数用补码表示
                 s = hex(val & 0xFFFFFFFFFFFFFFFF)[2:]
             if bits is not None:
-                # bits 是二进制位数，转成十六进制需要 (bits + 3) // 4 个字符
                 hex_len = (bits + 3) // 4
                 s = s.zfill(hex_len)
-            return s
+            return KeiString(s)
 
-        # 浮点数（转 IEEE 754 双精度 64 位 → 十六进制）
+        # 浮点数
         if isinstance(obj, KeiFloat):
             import struct
             val = float(obj.value)
@@ -1198,45 +1282,201 @@ class kei:
             if bits is not None:
                 hex_len = (bits + 3) // 4
                 s = s[-hex_len:] if hex_len < 16 else s.zfill(hex_len)
-            return s
+            return KeiString(s)
 
         # 布尔值
         if isinstance(obj, KeiBool):
-            return "1" if obj.value else "0"
+            return KeiString("1") if obj.value else KeiString("0")
 
-        # 字符串（转每个字符的 Unicode 十六进制）
+        # 字符串
         if isinstance(obj, KeiString):
             result = []
             for ch in obj.value:
                 code = ord(ch)
                 result.append(hex(code)[2:].zfill(4))
             if bits is not None:
-                # 如果指定位数，拼接后截断或填充
                 full = ''.join(result)
                 hex_len = (bits + 3) // 4
-                return full[-hex_len:] if hex_len < len(full) else full.zfill(hex_len)
-            return ' '.join(result)
+                s = full[-hex_len:] if hex_len < len(full) else full.zfill(hex_len)
+                return KeiString(s)
+            return KeiString(' '.join(result))
 
         # 列表
         if isinstance(obj, KeiList):
-            result = [kei.hex(item, bits) for item in obj.items]
-            return '[' + ', '.join(result) + ']'
+            result = [kei.hex(item, bits).value for item in obj.items]
+            return KeiString('[' + ', '.join(result) + ']')
 
         # 字典
         if isinstance(obj, KeiDict):
             result = []
             for k, v in obj.items.items():
-                k_hex = kei.hex(k, bits)
-                v_hex = kei.hex(v, bits)
+                k_hex = kei.hex(k, bits).value
+                v_hex = kei.hex(v, bits).value
                 result.append(f"{k_hex}: {v_hex}")
-            return '{' + ', '.join(result) + '}'
+            return KeiString('{' + ', '.join(result) + '}')
 
-        # 其他类型：先转字符串再转十六进制
+        # 其他类型
         s = str(obj)
         result = []
         for ch in s:
             result.append(hex(ord(ch))[2:].zfill(4))
-        return ' '.join(result)
+        return KeiString(' '.join(result))
+
+    @s
+    def frombin(bin_str, target_type="int") -> KeiFloat | KeiInt | KeiString | KeiList | KeiDict:
+        """从二进制字符串转回 KeiLang 对象
+
+        Args:
+            bin_str: 二进制字符串（支持空格分隔）
+            target_type: 目标类型 ("int", "float", "str", "list", "dict")
+        """
+        import struct
+
+        target_type = to_str(target_type)
+
+        # 移除空格
+        if isinstance(bin_str, KeiString):
+            bin_str = bin_str.value
+        clean = bin_str.replace(' ', '')
+
+        # 整数
+        if target_type == "int":
+            return KeiInt(int(clean, 2))
+
+        # 浮点数（64 位 IEEE 754）
+        if target_type == "float":
+            if len(clean) != 64:
+                raise KeiError("ValueError", f"浮点数二进制需要 64 位，得到 {len(clean)} 位")
+            i = int(clean, 2)
+            packed = struct.pack('>Q', i)
+            val = struct.unpack('>d', packed)[0]
+            return KeiFloat(val)
+
+        # 字符串（每个字符 16 位 Unicode）
+        if target_type == "str":
+            # 按 16 位分组
+            chars = [clean[i:i+16] for i in range(0, len(clean), 16)]
+            result = []
+            for ch in chars:
+                if len(ch) == 16:
+                    result.append(chr(int(ch, 2)))
+            return KeiString(''.join(result))
+
+        # 列表（解析 "[...]" 格式）
+        if target_type == "list":
+            if not (bin_str.startswith('[') and bin_str.endswith(']')):
+                raise KeiError("ValueError", "列表格式错误，需要 [ ... ]")
+            inner = bin_str[1:-1].strip()
+            if not inner:
+                return KeiList([])
+            items = []
+            for item_str in inner.split(','):
+                item_str = item_str.strip()
+                if item_str.startswith('['):
+                    items.append(kei.frombin(item_str, "list"))
+                elif item_str.startswith('{'):
+                    items.append(kei.frombin(item_str, "dict"))
+                else:
+                    items.append(kei.frombin(item_str, "int"))
+            return KeiList(items)
+
+        # 字典（解析 "{key: value}" 格式）
+        if target_type == "dict":
+            if not (bin_str.startswith('{') and bin_str.endswith('}')):
+                raise KeiError("ValueError", "字典格式错误，需要 { ... }")
+            inner = bin_str[1:-1].strip()
+            if not inner:
+                return KeiDict({})
+            result = {}
+            pairs = inner.split(',')
+            for pair in pairs:
+                if ':' not in pair:
+                    continue
+                k_str, v_str = pair.split(':', 1)
+                key = kei.frombin(k_str.strip(), "int")
+                value = kei.frombin(v_str.strip(), "int")
+                result[key] = value
+            return KeiDict(result)
+
+        raise KeiError("TypeError", f"不支持的目标类型: {target_type}")
+
+    @s
+    def fromhex(hex_str, target_type="int") -> KeiFloat | KeiInt | KeiString | KeiList | KeiDict:
+        """从十六进制字符串转回 KeiLang 对象
+
+        Args:
+            hex_str: 十六进制字符串（支持空格分隔）
+            target_type: 目标类型 ("int", "float", "str", "list", "dict")
+        """
+        import struct
+
+        target_type = to_str(target_type)
+
+        # 移除空格
+        if isinstance(hex_str, KeiString):
+            hex_str = hex_str.value
+        clean = hex_str.replace(' ', '')
+
+        # 整数
+        if target_type == "int":
+            return KeiInt(int(clean, 16))
+
+        # 浮点数（16 位十六进制 = 64 位）
+        if target_type == "float":
+            if len(clean) != 16:
+                raise KeiError("ValueError", f"浮点数十六进制需要 16 个字符，得到 {len(clean)} 个")
+            i = int(clean, 16)
+            packed = struct.pack('>Q', i)
+            val = struct.unpack('>d', packed)[0]
+            return KeiFloat(val)
+
+        # 字符串（每个字符 4 位十六进制 = 16 位 Unicode）
+        if target_type == "str":
+            # 按 4 位分组
+            chars = [clean[i:i+4] for i in range(0, len(clean), 4)]
+            result = []
+            for ch in chars:
+                if len(ch) == 4:
+                    result.append(chr(int(ch, 16)))
+            return KeiString(''.join(result))
+
+        # 列表
+        if target_type == "list":
+            if not (hex_str.startswith('[') and hex_str.endswith(']')):
+                raise KeiError("ValueError", "列表格式错误，需要 [ ... ]")
+            inner = hex_str[1:-1].strip()
+            if not inner:
+                return KeiList([])
+            items = []
+            for item_str in inner.split(','):
+                item_str = item_str.strip()
+                if item_str.startswith('['):
+                    items.append(kei.fromhex(item_str, "list"))
+                elif item_str.startswith('{'):
+                    items.append(kei.fromhex(item_str, "dict"))
+                else:
+                    items.append(kei.fromhex(item_str, "int"))
+            return KeiList(items)
+
+        # 字典
+        if target_type == "dict":
+            if not (hex_str.startswith('{') and hex_str.endswith('}')):
+                raise KeiError("ValueError", "字典格式错误，需要 { ... }")
+            inner = hex_str[1:-1].strip()
+            if not inner:
+                return KeiDict({})
+            result = {}
+            pairs = inner.split(',')
+            for pair in pairs:
+                if ':' not in pair:
+                    continue
+                k_str, v_str = pair.split(':', 1)
+                key = kei.fromhex(k_str.strip(), "int")
+                value = kei.fromhex(v_str.strip(), "int")
+                result[key] = value
+            return KeiDict(result)
+
+        raise KeiError("TypeError", f"不支持的目标类型: {target_type}")
 
     class File(KeiBase):
         """KeiLang 文件对象类"""
@@ -1386,6 +1626,7 @@ class funcattr {
 
 func = {
     "type": type,
+    "issubclass": kei.issubclass,
     "isinstance": kei.isinstance,
     "getattr": kei.getattr,
     "hasattr": kei.hasattr,
@@ -1411,6 +1652,7 @@ func = {
     "system": kei.system,
     "random": kei.random,
     "cnlen": kei.cnlen,
+    "isfunc": kei.isfunc,
     "isclass": kei.isclass,
     "exit": kei.exit,
     "loop": kei.loop,
@@ -1429,10 +1671,13 @@ func = {
     "importlib": kei.importlib,
     "precision": kei.precision,
     "recursion": kei.recursion,
+    "frombin": kei.frombin,
+    "frmohex": kei.fromhex,
     "super": kei.super,
     "static": kei.static,
     "prop": kei.prop,
     "File": kei.File,
+    "object": KeiBase,
     "int": KeiInt,
     "float": KeiFloat,
     "string": KeiString,

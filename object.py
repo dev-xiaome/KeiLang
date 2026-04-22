@@ -1295,8 +1295,20 @@ false = KeiBool(False)
 class KeiString(KeiBase):
     def __init__(self, _value):
         super().__init__("string")
+
+        import stdlib
         try:
-            if isinstance(_value, HASVALUE):
+            if isinstance(_value, type) and _value in [v for _, v in stdlib.func.items()]:
+                self.value = str([k for k, v in stdlib.func.items() if v == _value][0])
+            elif _value is true:
+                self.value = "true"
+            elif _value is false:
+                self.value = "false"
+            elif _value is null:
+                self.value = "null"
+            elif _value is undefined:
+                self.value = "undefined"
+            elif isinstance(_value, HASVALUE):
                 self.value = str(_value.value)
             else:
                 self.value = str(_value)
@@ -2123,11 +2135,25 @@ class KeiList(KeiBase):
         """返回 KeiList 的浅拷贝"""
         return self._copy()
 
+    def __delitem__(self, index):
+        if isinstance(index, KeiInt):
+            index = index.value
+        elif not isinstance(index, int):
+            raise KeiError("TypeError", f"list.__delitem__的index参数期望int, 得到 '{content(type(index))}' ")
+
+        if index <= len(self.items):
+            del self.items[index]
+        else:
+            raise KeiError("NameError", "找不到第{index}个项")
+
 # ========== 字典类型 ==========
 
 class KeiDict(KeiBase):
     def __init__(self, pairs=None):
         super().__init__("dict")
+        if isinstance(pairs, KeiDict):
+            pairs = pairs.items
+
         self.items = pairs if pairs is not None else {}.copy()
 
         self._methods = {
@@ -2272,6 +2298,8 @@ class KeiDict(KeiBase):
     def __delitem__(self, key):
         if key in self.items:
             del self.items[key]
+        else:
+            raise KeiError("NameError", f"找不到{content(key, _in_container=True)}")
 
     def _copy(self):
         """返回 KeiDict 的浅拷贝"""
@@ -2300,8 +2328,7 @@ class KeiFunction(KeiBase):
         oldfilename = __kei__.file
         if self.filename is not None:
             __kei__.file = self.filename
-
-        pushed = False
+            pushed = False
 
         if self.__name__ != "main" or name != "<global>" or len(__kei__.stack) != 0:
             if linecode is not None:
@@ -2386,7 +2413,7 @@ class KeiClass(KeiBase):
 
         if name in self.decorated_methods:
             func_obj = self.decorated_methods[name]
-            return KeiMethod(func_obj.func_obj, self, is_static=func_obj.is_static, is_property=func_obj.is_property)
+            return KeiMethod(func_obj, self, is_static=func_obj.is_static, is_property=func_obj.is_property)
 
         return None
 
@@ -2399,11 +2426,11 @@ class KeiClass(KeiBase):
             parent_instance = py_parent(*args, **kwargs)
             instance._parent_instance = parent_instance
 
-        init_method = self._methods_map.get('__init__')
+        init_method = self.decorated_methods.get('__init__')
         if init_method:
             bound_init = KeiBoundMethod(init_method, instance)
             result = bound_init(*args, **kwargs)
-            if result is not None:
+            if result is not null:
                 return result
 
         return instance
@@ -2416,7 +2443,7 @@ class KeiClass(KeiBase):
                 if hasattr(decorated, 'is_property') and decorated.is_property:
                     return decorated()
                 if isinstance(decorated, KeiFunction):
-                    return KeiMethod(decorated.func_obj, self, is_static=decorated.is_static, is_property=decorated.is_property)
+                    return KeiMethod(decorated, self, is_static=decorated.is_static, is_property=decorated.is_property)
             return method
 
         if hasattr(self, 'py_parent'):
@@ -2445,23 +2472,6 @@ class KeiClass(KeiBase):
 
     def __dir__(self):
         return list(self._class_attrs.keys()) + list(self._methods_map.keys())
-
-
-class KeiProperty(KeiBase):
-    def __init__(self, method_obj: dict):
-        super().__init__("property")
-        self.method_obj = method_obj
-        self.__name__ = method_obj['name']
-
-    def __get__(self, obj, objtype=None):
-        if obj is None:
-            return self
-        bound = KeiBoundMethod(self.method_obj, obj)
-        return bound()
-
-    def __repr__(self):
-        return f"<property '{self.__name__}'>"
-
 
 # ========== 实例类型 ==========
 
@@ -2728,20 +2738,15 @@ class KeiInstance(KeiBase):
 # ========== 方法类型 ==========
 
 class KeiMethod(KeiBase):
-    def __init__(self, method_obj: dict, klass: KeiClass, is_static=False, is_property=False):
+    def __init__(self, func: KeiFunction, klass: KeiClass, is_static=False, is_property=False):
         super().__init__("method")
-        self.method_obj = method_obj
+        self.method_obj = func               # ← 存 KeiFunction，但属性名不变
         self.klass = klass
-        self.__name__ = method_obj['name']
+        self.__name__ = func.__name__
         self.is_static = is_static
         self.is_property = is_property
 
     def bind(self, instance: KeiInstance) -> 'KeiBoundMethod':
-        # ✅ 修复：优先使用 decorated_methods 中的版本
-        decorated = self.klass.class_obj.get('decorated_methods', {}).get(self.__name__)
-        if decorated:
-            # 使用装饰后的版本创建 BoundMethod
-            return KeiBoundMethod(decorated.func_obj, instance)
         return KeiBoundMethod(self.method_obj, instance)
 
     def __get__(self, obj, objtype=None):
@@ -2755,41 +2760,31 @@ class KeiMethod(KeiBase):
     def __repr__(self):
         return f"<method '{self.__name__}'>"
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args, linecode=None, name=None, **kwargs):
         if self.is_static:
-            bound = KeiBoundMethod(self.method_obj, None)
-            return bound(*args, **kwargs)
+            return self.method_obj(*args, linecode=linecode, name=name or self.__name__, **kwargs)
         else:
             if not args or not isinstance(args[0], KeiInstance):
                 raise KeiError("NameError", f"未绑定方法 {self.__name__} 需要 self 参数")
             instance = args[0]
-            bound = self.bind(instance)
-            return bound(*args[1:], **kwargs)
+            full_name = f"{self.klass.__name__}.{self.__name__}"
+            return self.method_obj(instance, *args[1:], linecode=linecode, name=full_name, **kwargs)
 
 
 class KeiBoundMethod(KeiBase):
-    def __init__(self, method_obj: dict, instance: KeiInstance | None):
+    def __init__(self, func: KeiFunction, instance: KeiInstance | None):
         super().__init__("bound_method")
-        self.method_obj = method_obj
+        self.method_obj = func               # ← 同样，存 KeiFunction
         self.instance = instance
-        self.__name__ = method_obj['name']
+        self.__name__ = func.__name__
 
-    def __call__(self, *args, **kwargs):
-        from eval import bind_arguments
-        new_env = bind_arguments(self.method_obj, self.instance, args, kwargs)
-
-        result = None
-        for stmt in self.method_obj['body']:
-            from kei import runtoken
-            val, is_return = runtoken(stmt, new_env)
-            if is_return:
-                result = val
-                break
-        return result
+    def __call__(self, *args, linecode=None, name=None, **kwargs):
+        if self.instance is not None:
+            args = (self.instance,) + args
+        return self.method_obj(*args, linecode=linecode, name=name or self.__name__, **kwargs)
 
     def __repr__(self):
         return f"<method '{self.__name__}'>"
-
 
 # ========== 命名空间类型 ==========
 
@@ -2867,7 +2862,7 @@ class KeiNamespace(KeiBase):
         return f"<namespace '{self.__name__}'>"
 
     def __dir__(self):
-        return list(self.nsenv.keys())
+        return self.nsenv.items
 
     def __add__(self, other):
         """namespace + namespace = 合并，后者覆盖前者"""
@@ -3021,7 +3016,7 @@ def content(obj, _seen=None, _depth=0, _in_container=False) -> str:
 
         # KeiLang 类型对象
         if isinstance(obj, type):
-            if obj == KeiBase: return "<class 'any'>"
+            if obj == KeiBase: return "<class 'object'>"
             elif obj == KeiInt: return "<class 'int'>"
             elif obj == KeiFloat: return "<class 'float'>"
             elif obj == KeiString: return "<class 'string'>"
@@ -3083,12 +3078,6 @@ def content(obj, _seen=None, _depth=0, _in_container=False) -> str:
         if isinstance(obj, (int, float)):
             return str(obj)
 
-        # Python 可调用对象
-        if callable(obj):
-            if hasattr(obj, '__name__'):
-                return f"<function '{obj.__name__}'>"
-            return "<function>"
-
         # ========== Python 自定义对象（与 KeiInstance 行为一致）==========
         # 检查是否有 __content__ 方法
         if hasattr(obj, '__content__') and callable(obj.__content__):
@@ -3120,6 +3109,12 @@ def content(obj, _seen=None, _depth=0, _in_container=False) -> str:
         # 有 __name__ 属性的对象
         if hasattr(obj, '__name__'):
             return f"<object '{obj.__name__}'>"
+
+        # Python 可调用对象
+        if callable(obj):
+            if hasattr(obj, '__name__'):
+                return f"<function '{obj.__name__}'>"
+            return "<function>"
 
         # 默认：显示类名（和 KeiInstance 格式一致）
         class_name = obj.__class__.__name__

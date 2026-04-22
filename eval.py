@@ -50,7 +50,7 @@ def _get_exported_dict(module_env, module_dict):
                 exported_dict[name] = module_env[name]
     else:
         # 没有 __all__：导出非 _ 开头的 + ALLOWED_PRIVATE
-        for k, v in module_dict.items():
+        for k, v in module_dict.items.items():
             if not k.startswith('_') or k in ALLOWED_PRIVATE:
                 exported_dict[k] = v
 
@@ -71,16 +71,7 @@ def _load_kei_module(module_path, module_name, env, __path__):
                 with open(keifile, "r", encoding="utf-8") as f:
                     code = f.read()
 
-                module_env = KeiDict({
-                    "__path__": KeiList(["."] + paths),
-                    "__name__": KeiString(f"__{module_name}__"),
-                    "__env__": KeiDict(env),
-                    "__osname__": KeiString(platform.system().lower()),
-                    "__file__": KeiString(os.path.abspath(__kei__.file))
-                })
-                module_env["__env__"] = module_env
-
-                exec(code, module_env)
+                module_env = exec(code, None, f"__{module_name}__")[0]
 
                 # 获取导出字典
                 module_dict = KeiDict({})
@@ -168,7 +159,9 @@ def bind_arguments(method_obj: dict, instance: KeiInstance | None, args: tuple, 
             default_val, _ = runtoken(default_val_node, method_obj.get('closure', {}))
             val = default_val
         else:
-            val = undefined
+            # ❌ 没有传值，也没有默认值 → 报错
+            raise KeiError("TypeError",
+                f"函数 {method_obj.get('name', 'unknown')} 缺少参数 '{param_name}'")
 
         # 类型检查
         if param_name in type_hints:
@@ -231,6 +224,11 @@ def bind_arguments(method_obj: dict, instance: KeiInstance | None, args: tuple, 
             new_env[param_name] = default_val
         else:
             new_env[param_name] = undefined
+
+    # 处理 **kwargs（无论它在参数列表的哪个位置）
+    if starstar_param_name:
+        new_env[starstar_param_name] = KeiDict({KeiString(k): v for k, v in remaining_kwargs.items()})
+        remaining_kwargs = {}
 
     # 检查多余的关键字参数
     if remaining_kwargs and not starstar_param_name:
@@ -405,7 +403,7 @@ def node_index(node, env) -> tuple: # if node['type'] == 'index':
     # 检查是否是 KeiInstance 且有 __getitem__ 方法
     if isinstance(obj, KeiInstance):
         # 直接从类的方法表拿，不触发 __getitem__
-        method_info = obj._class._methods_map.get('__getitem__')
+        method_info = obj._class.decorated_methods.get('__getitem__')
         if method_info:
             # 绑定实例并调用
             method = KeiMethod(method_info, obj._class)
@@ -1174,8 +1172,11 @@ def node_listscope(node, env) -> tuple: # if node['type'] == 'listscope':
     start_val, _ = runtoken(node['start'], env)
     end_val, _ = runtoken(node['end'], env)
 
-    start = start_val.value if isinstance(start_val, KeiInt) else int(start_val)
-    end = end_val.value if isinstance(end_val, KeiInt) else int(end_val)
+    try:
+        start = start_val.value if isinstance(start_val, KeiInt) else int(start_val)
+        end = end_val.value if isinstance(end_val, KeiInt) else int(end_val)
+    except (ValueError, TypeError):
+        raise KeiError("TypeError", f"范围边界必须是数字，得到 {content(start_val)} 和 {content(end_val)}")
 
     result = []
     if start <= end:
@@ -1305,14 +1306,14 @@ def node_call(node, env) -> tuple: # if node['type'] in {'call', 'methodcall'}:
             raise KeiError("NameError", "对象未定义")
         if method_name is None:
             if callable(obj):
-                if isinstance(obj, KeiFunction):
+                if isinstance(obj, (KeiFunction, KeiMethod, KeiBoundMethod)):
                     result = obj(linecode=call_source, name=get_from_env('__caller__', env, '<global>'), *args, **kwargs)
                 else:
                     result = obj(*args, **kwargs)
                 return result, False
             else:
                 if obj is undefined:
-                    raise KeiError("AttributeError", f"{content(type(runtoken(node['obj']['obj'], env)[0]))}对象没有属性{node['obj']['attr']}")
+                    raise KeiError("AttributeError", f"'{content(node['obj']['obj']['value'])}' (类型 {content(type(runtoken(node['obj']['obj'], env)[0]))}) 没有属性 '{node['obj']['attr']}'")
                 raise KeiError("TypeError", f"{obj} 不可调用")
 
         method = obj[method_name] if isinstance(obj, KeiBase) else getattr(obj, method_name, None)
@@ -1884,57 +1885,18 @@ def node_class(node, env) -> tuple:
 
     for stmt in node['body']:
         if stmt['type'] == 'function':
-            original_method_obj = {
-                'type': 'user_function',
-                'name': stmt['name'],
-                'params': stmt['params'],
-                'body': stmt['body'],
-                'defaults': stmt.get('defaults', {}),
-                'decorators': stmt.get('decorators', []),
-                'closure': env
-            }
+            newenv = KeiDict({'__parent__': env} | class_obj['decorated_methods'] |  class_obj['attrs'])
 
-            exec_method_obj = {
-                'type': 'user_function',
-                'name': stmt['name'],
-                'params': stmt['params'],
-                'body': stmt['body'],
-                'defaults': stmt.get('defaults', {}),
-                'decorators': stmt.get('decorators', []),
-                'closure': env
-            }
+            node_function(stmt, newenv)
 
-            kei_func = KeiFunction(exec_method_obj, env, filename=__kei__.file)
+            kei_func = newenv[stmt['name']]
 
-            if stmt.get('decorators'):
-                has_prop = False
-                has_static = False
-                decorators = []
-                for decorator_node in stmt['decorators']:
-                    decorator, _ = runtoken(decorator_node, env)
-                    decorators.append(decorator)
-                    if decorator is stdlib.kei.prop:
-                        has_prop = True
-                    elif decorator is stdlib.kei.static:
-                        has_static = True
-
-                # 执行所有装饰器（prop 和 static 也会执行，但它们的 __call__ 返回原函数）
-                for decorator in decorators:
-                    if callable(decorator):
-                        kei_func = decorator(kei_func)
-
-                # 最后设置标志
-                if has_prop:
-                    object.__setattr__(kei_func, 'is_property', True)
-                if has_static:
-                    object.__setattr__(kei_func, 'is_static', True)
-
-            class_obj['methods_map'][stmt['name']] = original_method_obj
+            class_obj['methods_map'][stmt['name']] = stmt['name']
             class_obj['decorated_methods'][stmt['name']] = kei_func
 
         elif stmt['type'] == 'assign':
             # 创建一个新环境，把 class_obj['attrs'] 作为存储
-            attr_env = KeiDict({'__parent__': env} | class_obj['decorated_methods'])
+            attr_env = KeiDict({'__parent__': env} | class_obj['decorated_methods'] |  class_obj['attrs'])
             attr_env.update(class_obj['attrs'])  # 把已有属性放进去
 
             # 执行赋值（会修改 attr_env）
@@ -1944,6 +1906,9 @@ def node_class(node, env) -> tuple:
             for key, value in attr_env.items.items():
                 if not key.startswith('_'):
                     class_obj['attrs'][key] = value
+
+        else:
+            raise KeiError("TypeError", f"class内无法使用{stmt['type']}")
 
     kei_class = KeiClass(class_obj, env)
     if py_parent:
@@ -1986,7 +1951,7 @@ def node_import(node, env) -> tuple:
                     name = alias or module_short_name
                     env[name] = KeiNamespace(name, KeiDict({}))  # 空字典
 
-                return None, False
+            return None, False
 
         # 2. 尝试加载 .py 模块
         module_env, is_py = _load_py_module(module_path, __path__)

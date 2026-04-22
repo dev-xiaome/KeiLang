@@ -112,8 +112,20 @@ class module(KeiBase):
         self._methods = {}
 
     def __getattr__(self, name):
-        """获取模块属性，自动包装函数"""
+        """获取模块属性，返回一个可调用对象，调用时自动转换参数"""
         attr = getattr(self._py_module, name)
+
+        # 如果是可调用对象（函数、类），返回一个包装函数
+        if callable(attr):
+            def wrapper(*args, **kwargs):
+                # 转换 Kei 参数为 Python 原生类型
+                py_args = [topy(arg) for arg in args]
+                py_kwargs = {k: topy(v) for k, v in kwargs.items()}
+                result = attr(*py_args, **py_kwargs)
+                return tokei(result)
+            return wrapper
+
+        # 非可调用对象，直接转换
         return tokei(attr)
 
     def __getitem__(self, key):
@@ -125,7 +137,7 @@ class module(KeiBase):
         return [d for d in dir(self._py_module) if not d.startswith('_')]
 
     def __repr__(self):
-        return f"<python_module {self.__name__}>"
+        return f"<python module '{self.__name__}'>"
 
     def __call__(self, *args, **kwargs):
         """如果 module 实例被调用，尝试调用它包装的 Python 对象"""
