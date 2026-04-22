@@ -1693,12 +1693,18 @@ class KeiString(KeiBase):
     def __call__(self, *_, **__):
         raise KeiError("TypeError", f"{self._type} 不可调用")
 
+    def __fspath__(self):
+        return self.value
+
 
 # ========== 列表类型 ==========
 
 class KeiList(KeiBase):
     def __init__(self, _items=None):
         super().__init__("list")
+        if isinstance(_items, KeiList):
+            _items = _items.items
+
         self.items = _items if _items is not None else []
 
         self._methods = {

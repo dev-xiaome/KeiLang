@@ -3,6 +3,7 @@
 
 from decimal import getcontext
 from typing import List, Any, Optional
+from lib.python import tokei
 import platform
 import inspect
 import copy
@@ -12,14 +13,15 @@ import os
 if __name__ == '__main__':
     sys.modules['kei'] = sys.modules['__main__']
 
-__version__ = "1.9-6"
+__version__ = "1.9-7"
 
 class KeiState:
-    stack: List[Any]
+    stack: List[tuple[str, str] | str]
     catch: list
     code: Optional[List[str]]
     repl: bool
     file: str
+    enterfilepath: str | None
     step: object
     error: bool
     var: list
@@ -38,6 +40,7 @@ class KeiState:
             cls._instance.code = None
             cls._instance.repl = False
             cls._instance.file = "未知文件"
+            cls._instance.enterfilepath = None
             cls._instance.step = False
             cls._instance.error = True
             cls._instance.var = []
@@ -71,6 +74,7 @@ except:
     pass
 
 keidir = os.path.dirname(os.path.abspath(__file__))
+
 path = os.environ.get('PATH', '')
 paths = path.split(os.pathsep)
 
@@ -4012,7 +4016,15 @@ def runtoken(node, env) -> tuple:
 
                 maxline = int(str(stdlib.kei.cnlen(max([i.strip() for i in __kei__.code], key=stdlib.kei.cnlen) if __kei__.code is not None else None).value))
 
-                first = __kei__.stack[0] if __kei__.stack else None
+                stack = __kei__.stack + [get_from_env('__caller__', env, '<global>')]
+                tmp = []
+                for s in stack:
+                    if s is tuple:
+                        tmp.append(str(s[0]))
+                    else:
+                        tmp.append(str(s))
+
+                stack = tmp
 
                 prompt = f"--> \033[94m{node.get('source').strip()}\033[0m"
                 prompt = (prompt +
@@ -4020,8 +4032,7 @@ def runtoken(node, env) -> tuple:
                           (f"[{node.get('linenum', -1)+1}]"
                           if type(__kei__.step) is not str and __kei__.step is not stdlib.kei.breakpoint else
                           f"{{{node.get('linenum', -1)+1}}}") +
-                          (" \033[95m" + (" \033[95m" + (' / '.join(str(item) if type(first) is not tuple
-                           else str(s[0]) for s in __kei__.stack) or '<global>') + "\033[0m") + "\033[0m") +
+                          (" \033[95m" + (" \033[95m" + (' / '.join(stack) or '<global>') + "\033[0m") + "\033[0m") +
                           ' \033[34;2m' +
                           ('; '.join([f"{n} = {content(v, _in_container=True)}" for n, v in names])) +
                           '\033[0m' +
@@ -4252,25 +4263,37 @@ def runtoken(node, env) -> tuple:
             else:
                 raise
 
-def exec(code, env=None, name="__main__"):
+def exec(code, env=None, name="__main__", usestdlib=True):
     if isinstance(code, KeiString):
         code = code.value
+    if isinstance(name, KeiString):
+        name = name.value
+    if isinstance(usestdlib, KeiBool):
+        usestdlib = usestdlib.value
+
+    if type(code) is not str:
+        raise KeiError("TypeError", "exec的code参数需要string")
+    if type(name) is not str:
+        raise KeiError("TypeError", "exec的name参数需要string")
+    if type(usestdlib) is not bool:
+        raise KeiError("TypeError", "exec的usestdlib参数需要bool")
 
     if env is None:
         env = KeiDict({
-            "__path__": KeiList(["."] + paths),
+            "__path__": KeiList(tokei(["."] + paths + ([__kei__.enterfilepath] if __kei__.enterfilepath is not None else []))),
             "__name__": KeiString(name),
             "__env__": KeiDict(env),
             "__osname__": KeiString(platform.system().lower()),
             "__file__": KeiString(os.path.abspath(__kei__.file))
         })
 
-        for name, func in stdlib.func.items():
-            env[name] = func
-            step = __kei__.step
-            __kei__.step = False
-            exec(stdlib.keistdlib, env)
-            __kei__.step = step
+        if usestdlib:
+            for name, func in stdlib.func.items():
+                env[name] = func
+                step = __kei__.step
+                __kei__.step = False
+                exec(stdlib.keistdlib, env)
+                __kei__.step = step
 
     tokens = token(code)
     tokens = ast(tokens)
@@ -4282,7 +4305,7 @@ def exec(code, env=None, name="__main__"):
 
     return env, ret
 
-def execmain(code, env=None, step=False):
+def execmain(code, env=None, step=False, usestdlib=True):
     cmd_args = []
     for arg in sys.argv:
         cmd_args.append(f"{arg}")
@@ -4293,7 +4316,7 @@ def execmain(code, env=None, step=False):
 
     __kei__.step = step
 
-    env, ret = exec(code, env)
+    env, ret = exec(code, env, usestdlib=usestdlib)
 
     if isinstance(ret, KeiInt):
         return ret.value
@@ -4307,6 +4330,7 @@ def parse_args():
     singlecode = None
     compile_flag = False
     more_recursion = False  # ← 新增 -m 选项
+    nostdlib = False
     filename = None
     rest_args = []
 
@@ -4326,6 +4350,9 @@ def parse_args():
         elif arg == "-m":
             more_recursion = True
             i += 1
+        elif arg == "--nostdlib":
+            nostdlib = True
+            i += 1
         elif arg in ("-h", "--help"):
             return None  # 触发帮助
         elif arg.startswith("-"):
@@ -4343,6 +4370,7 @@ def parse_args():
         'singlecode': singlecode,
         'compile': compile_flag,
         'more_recursion': more_recursion,  # ← 新增
+        'nostdlib': nostdlib,
         'filename': filename,
         'rest_args': rest_args
     }
@@ -4362,14 +4390,14 @@ def main():
             print(" " * 35 + __version__)
             print()
             print("\033[1m命令:\033[0m")
-            print("  \033[33m<啥都木有>\033[0m - \033[36m进入REPL\033[0m")
             print("  \033[33m<文件名>\033[0m   - \033[36m运行Kei脚本\033[0m")
             print()
             print("\033[1m参数:\033[0m")
             print("  \033[33m-h/--help\033[0m  - \033[36m显示此帮助\033[0m")
             print("  \033[33m-d/--debug\033[0m - \033[36mDebug代码\033[0m")
             print("  \033[33m-c/--code\033[0m  - \033[36m执行代码\033[0m")
-            print("  \033[33m-m       \033[0m  - \033[36m更高的Python递归上限(65536->1048576)\033[0m")
+            print("  \033[33m-m\033[0m         - \033[36m更高的Python递归上限(65536->1048576)\033[0m")
+            print("  \033[33m--nostdlib\033[0m - \033[36m运行时不注入stdlib\033[0m")
             print("  \033[33m--compile\033[0m  - \033[36m打印AST\033[0m")
             print()
             sys.exit(0)
@@ -4402,6 +4430,8 @@ def main():
 
             # 设置 __kei__.file
             __kei__.file = parsed['filename']
+            if __kei__.enterfilepath is None:
+                __kei__.enterfilepath = os.path.dirname(os.path.abspath(parsed['filename']))
 
             # 设置 sys.argv 供脚本使用
             sys.argv = [parsed['filename']] + parsed['rest_args']
@@ -4413,7 +4443,7 @@ def main():
                 print(f"[Kei Debugger] \033[33;1m{os.path.abspath(parsed['filename'])}\033[0m")
 
             try:
-                ret = execmain(filecontent, step=parsed['step'])
+                ret = execmain(filecontent, step=parsed['step'], usestdlib=(not parsed['nostdlib']))
             except SystemExit as e:
                 if not parsed['step']:
                     raise

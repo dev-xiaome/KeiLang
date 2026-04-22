@@ -56,7 +56,7 @@ def _get_exported_dict(module_env, module_dict):
 
     return exported_dict
 
-def _load_kei_module(module_path, module_name, env, __path__):
+def _load_kei_module(module_path, module_name, __path__):
     """加载 .kei 模块，返回模块字典和是否成功"""
 
     try:
@@ -1929,7 +1929,7 @@ def node_import(node, env) -> tuple:
 
         # 1. 尝试加载 .kei 模块
         exported_dict, module_env, is_kei = _load_kei_module(
-            module_path, module_short_name, env, __path__
+            module_path, module_short_name, __path__
         )
 
         if is_kei:
@@ -1982,53 +1982,63 @@ def node_fromimport(node, env) -> tuple:
     module_path = module_name.replace('.', '/')
     module_short_name = module_path.split("/")[-1]
 
-    exported_dict = None
-    is_kei = False
-
     # 1. 尝试加载 .kei 模块
     exported_dict, module_env, is_kei = _load_kei_module(
-        module_path, module_short_name, env, __path__
+        module_path, module_short_name, __path__
     )
 
-    # 2. 如果不是 .kei，尝试加载 .py 模块
-    if not is_kei:
-        module_env, is_py = _load_py_module(module_path, __path__)
-        if is_py:
-            module_dict = {}
-            exported_dict = _get_exported_dict(module_env, module_dict)
-
-    if exported_dict is None:
-        raise KeiError("ImportError", f"找不到模块: {module_name}")
-
-    # 只有 .kei 模块才执行 __import__ 钩子
     if is_kei:
         _call_import_hook(exported_dict)
 
-    # 获取模块的完整导出（包括内置变量）
-    module_dict = {}
-    full_exported = _get_exported_dict(module_env, module_dict)
-
-    for imp in imports:
-        if imp['type'] == 'wildcard':
-            for name, value in full_exported.items.items():
-                env[name] = value
+        if exported_dict is not None:
+            # 处理 from ... import ...
+            for imp in imports:
+                if imp['type'] == 'wildcard':
+                    for name, value in exported_dict.items.items():
+                        env[name] = value
+                else:
+                    name = imp['name']
+                    alias = imp.get('alias') or name
+                    if name in exported_dict:
+                        env[alias] = exported_dict[name]
+                    else:
+                        raise KeiError("ImportError", f"无法从 {module_name} 导入 {name}")
         else:
-            name = imp['name']
-            alias = imp.get('alias') or name
+            # 处理 None 的情况
+            for imp in imports:
+                if imp['type'] == 'wildcard':
+                    pass
+                else:
+                    name = imp['name']
+                    alias = imp.get('alias') or name
+                    raise KeiError("ImportError", f"无法从 {module_name} 导入 {name}")
 
-            # 优先从 exported_dict（公开导出），再从 module_env（内置）
-            if name in exported_dict:
-                env[alias] = exported_dict[name]
-            elif name in module_env:
-                if module_env is not None and name in module_env:
+        return None, False
+
+    # 2. 尝试加载 .py 模块
+    module_env, is_py = _load_py_module(module_path, __path__)
+
+    if is_py:
+        module_dict = KeiDict({}.copy())
+        exported_dict = _get_exported_dict(module_env, module_dict)
+
+        for imp in imports:
+            if imp['type'] == 'wildcard':
+                for name, value in exported_dict.items.items():
+                    env[name] = value
+            else:
+                name = imp['name']
+                alias = imp.get('alias') or name
+                if name in exported_dict:
+                    env[alias] = exported_dict[name]
+                elif module_env is not None and name in module_env:
                     env[alias] = module_env[name]
                 else:
-                    # 处理找不到的情况
-                    raise KeiError("ImportError", f"无法从模块导入 '{name}'")
-            else:
-                raise KeiError("ImportError", f"无法从 {module_name} 导入 {name}")
+                    raise KeiError("ImportError", f"无法从 {module_name} 导入 {name}")
 
-    return None, False
+        return None, False
+
+    raise KeiError("ImportError", f"找不到模块: {module_name}")
 
 def node_del(node, env) -> tuple:
     for target in node['names']:

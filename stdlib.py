@@ -615,8 +615,8 @@ class kei:
         while True: pass
 
     @s
-    def sort(obj):
-        """递归排序所有类型，但类型必须全部相同"""
+    def sort(obj, key=None, reverse=False):
+        """递归排序所有类型，支持 key 函数和 reverse 参数"""
 
         # 基本类型直接返回
         if isinstance(obj, (KeiInt, KeiFloat, KeiString, KeiBool)):
@@ -634,10 +634,16 @@ class kei:
                     raise KeiError("TypeError", f"列表元素类型不一致: 有 {first_type.__name__} 和 {type(item).__name__}")
 
             # 递归排序每个元素
-            sorted_items = [kei.sort(item) for item in obj.items]
+            sorted_items = [kei.sort(item, key, reverse) for item in obj.items]
 
-            # 对列表本身排序（根据元素值）
-            sorted_items.sort(key=lambda x: x.value if hasattr(x, 'value') else x)
+            # 构建排序键
+            if key is not None:
+                sort_key = lambda x: key(x) if hasattr(key, '__call__') else key
+            else:
+                sort_key = lambda x: x.value if hasattr(x, 'value') else x
+
+            # 排序
+            sorted_items.sort(key=sort_key, reverse=reverse)
 
             return KeiList(sorted_items)
 
@@ -647,25 +653,31 @@ class kei:
                 return KeiDict({})
 
             # 检查所有键的类型是否一致
-            if obj.items:
-                keys = list(obj.items.keys())
-                first_key_type = type(keys[0])
-                for key in keys[1:]:
-                    if type(key) is not first_key_type:
-                        raise KeiError("TypeError", f"字典键类型不一致: 有 {first_key_type.__name__} 和 {type(key).__name__}")
+            keys = list(obj.items.keys())
+            first_key_type = type(keys[0])
+            for key in keys[1:]:
+                if type(key) is not first_key_type:
+                    raise KeiError("TypeError", f"字典键类型不一致: 有 {first_key_type.__name__} 和 {type(key).__name__}")
 
-                # 检查所有值的类型是否一致
-                values = list(obj.items.values())
-                if values:
-                    first_val_type = type(values[0])
-                    for val in values[1:]:
-                        if type(val) is not first_val_type:
-                            raise KeiError("TypeError", f"字典值类型不一致: 有 {first_val_type.__name__} 和 {type(val).__name__}")
+            # 检查所有值的类型是否一致
+            values = list(obj.items.values())
+            if values:
+                first_val_type = type(values[0])
+                for val in values[1:]:
+                    if type(val) is not first_val_type:
+                        raise KeiError("TypeError", f"字典值类型不一致: 有 {first_val_type.__name__} 和 {type(val).__name__}")
+
+            # 构建排序键
+            if key is not None:
+                sort_key = lambda k: key(obj.items[k]) if hasattr(key, '__call__') else key
+            else:
+                sort_key = lambda k: k.value if hasattr(k, 'value') else k
 
             # 按键排序（递归处理值）
+            sorted_keys = sorted(keys, key=sort_key, reverse=reverse)
             sorted_dict = {}
-            for key in sorted(keys, key=lambda k: k.value if hasattr(k, 'value') else k):
-                sorted_dict[key] = kei.sort(obj.items[key])
+            for k in sorted_keys:
+                sorted_dict[k] = kei.sort(obj.items[k], key, reverse)
 
             return KeiDict(sorted_dict)
 
@@ -674,22 +686,43 @@ class kei:
             return obj
 
     @s
-    def copy(obj):
+    def copy(obj, deep=null):
         import copy
 
-        try:
-            if hasattr(obj, "__deepcopy__"):
-                return obj.__deepcopy__()
+        deep = to_bool(deep)
 
-            return copy.deepcopy(obj)
-        except:
+        if deep is None:
+            try:
+                if hasattr(obj, "__deepcopy__"):
+                    return obj.__deepcopy__()
+
+                return copy.deepcopy(obj)
+            except:
+                try:
+                    if hasattr(obj, "__copy__"):
+                        return obj.__copy__()
+
+                    return copy.copy(obj)
+                except:
+                    raise KeiError("CopyError", "深拷贝和浅拷贝失败")
+
+        if deep is True:
+            try:
+                if hasattr(obj, "__deepcopy__"):
+                    return obj.__deepcopy__()
+
+                return copy.deepcopy(obj)
+            except:
+                raise KeiError("CopyError", "深拷贝失败")
+
+        if deep is False:
             try:
                 if hasattr(obj, "__copy__"):
                     return obj.__copy__()
 
                 return copy.copy(obj)
             except:
-                raise KeiError("CopyError", "深复制和浅复制失败")
+                raise KeiError("CopyError", "浅拷贝失败")
 
     @s
     def exec(codes, env=None, copy=KeiBool(False)):
@@ -1597,32 +1630,7 @@ class kei:
     prop = decorator("prop")
     super = decorator("super")
 
-keistdlib = """
-class gen {
-    fn __init__(self, func) {
-        self.func  = func;
-        self.value = -1;
-    };
-
-    fn __call__(self, *args, **kwargs) {
-        return self.func(yield=self.value++, *args, **kwargs);
-    };
-
-    @static
-    fn yield(num, values) {
-        return (values[num] ?? null);
-    };
-};
-
-class funcattr {
-    fn __init__(self, func) {
-        self.func = func;
-    };
-    fn __call__(self, *args, **kwargs) {
-        return self.func(*args, **kwargs);
-    };
-};
-"""
+keistdlib = """"""
 
 func = {
     "type": type,

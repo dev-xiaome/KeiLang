@@ -35,12 +35,16 @@ def to_str(x):
 
 def to_bool(x):
     """将 Kei 类型转换为 Python bool"""
-    from object import KeiBool, KeiError
+    from object import KeiBool, KeiError, null
 
     if isinstance(x, KeiBool):
         return bool(x.value)
     elif isinstance(x, bool):
         return x
+    elif x is null:
+        return None
+    elif x is None:
+        return None
     else:
         raise KeiError("TypeError", "需要bool")
 
