@@ -46,7 +46,7 @@ class KeiREPL:
         if '.' in before_cursor:
             last_dot = before_cursor.rfind('.')
             obj_name = before_cursor[:last_dot].strip()
-            if self.env and obj_name in self.env:
+            if isinstance(self.env, KeiDict) and obj_name in self.env:
                 obj = self.env[obj_name]
                 if hasattr(obj, '_methods'):
                     attrs = list(obj._methods.keys())
@@ -91,7 +91,7 @@ class KeiREPL:
         user_vars = []
         if self.env and isinstance(self.env, dict):
             user_vars = [k for k in self.env.keys() if not k.startswith('__') and k != 'env']
-        all_completions = (kei.keywords if hasattr(kei, 'keywords') else []) + \
+        all_completions = (list(kei.keywords) if hasattr(kei, 'keywords') else []) + \
                           [f for f, _ in stdlib.func.items()] + user_vars
         if text:
             matches = [c for c in all_completions if c.startswith(text)]
